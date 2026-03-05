@@ -1,0 +1,13 @@
+{
+  "name": "storybound",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "generate": "tsx scripts/generate-story.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "dotenv": "^17.3.1",
+    "tsx": "^4.21.0"
+  }
+}
