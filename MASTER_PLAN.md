@@ -19,13 +19,29 @@
 
 ## Pricing
 
-| Tier | Price | What's Included |
-|------|-------|-----------------|
-| Physical + Digital | $109/year (billed annually) | 4 printed books + digital access |
-| Digital Only | $39/year | 4 digital books (not actively marketed) |
-| Per-quarter equivalent | ~$27/book physical | Competitive with premium children's books |
+| Product              | Physical  | Digital   |
+|----------------------|-----------|-----------|
+| Founding subscription| $89/year  | $39/year  |
+| Gift subscription    | $89       | $39       |
+| One-time book        | $29       | $15       |
+| Standard subscription| $109/year | $49/year  |
 
-**Founding member rate (validation phase):** $89/year — reward early believers, create urgency.
+### One-Time Book ($29)
+
+One-time books use a standalone adventure — no story bible, no callbacks, no continuity. The parent completes a simplified child profile (name, age, interests, one photo) and receives a single illustrated book.
+
+On the confirmation page, show upsell: *"Love it? Subscribe to continue their story from here — your one-time book becomes Chapter 1."*
+
+If the parent converts to a subscription, the one-time book retroactively becomes Episode 1 of their first season, and a story bible is generated to continue the arc.
+
+### Gift Subscription ($89/year)
+
+Buyer pays $89 → receives a claim link → forwards to recipient → recipient completes child profile → story begins. Buyer does not fill in child details.
+
+- Claim link expires after 90 days
+- Recipient creates their own family account on claim
+- Gift shows as "founding" pricing if purchased during founding window
+- If unclaimed after 90 days, buyer is notified and offered a refund or extension
 
 ---
 

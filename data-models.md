@@ -11,8 +11,9 @@ families {
   created_at          timestamp
   stripe_customer_id  string UNIQUE
   subscription_status enum (trialing, active, past_due, canceled, paused)
+  subscription_type   enum (founding, standard, one_time, gift)
   subscription_tier   enum (physical_digital, digital_only)
-  subscription_price  decimal  // 109.00 or 39.00 (or 89.00 founding)
+  subscription_price  decimal  // 109.00 or 39.00 (or 89.00 founding, or 29.00 one-time)
   is_founding_member  boolean
   billing_cycle_start date     // Anniversary date for annual renewal
   referral_code       string UNIQUE
@@ -50,6 +51,8 @@ children {
   favorites           jsonb   // {color: "purple", food: "pasta", animal: "penguin"}
   avoidances          text[]  // ["spiders", "loud noises", "getting lost"] — HARD LIMITS
   family_notes        text    // free-form context: "single mom", "new baby sibling", etc.
+  default_archetype   string  // parent free text, can change each quarter (e.g. "Elsa", "Dinosaur", "Fairy")
+  is_one_time         boolean // true = standalone book, no story bible, no continuity
   current_year        integer // which year of Storybound they're on
   active              boolean
   created_at          timestamp
@@ -95,6 +98,8 @@ harvests {
   photo_count         integer
   photo_paths         text[]   // temp paths, deleted after processing
   current_interests   text[]   // updated interests this quarter
+  milestone_description text   // "lost first tooth, rode bike"
+  character_archetype string   // parent free text, overrides child.default_archetype for this quarter
   notable_notes       text
   
   // Processing
@@ -170,6 +175,20 @@ delivery_calendar {
 }
 ```
 
+### Gift Claim
+```
+gift_claims {
+  id                uuid PRIMARY KEY
+  family_id         uuid FK families  // buyer's family
+  claim_token       string UNIQUE     // random, used in claim URL
+  recipient_email   string            // optional — buyer may not know it
+  claimed_at        timestamp
+  claimed_by        uuid FK families  // recipient's family, set on claim
+  expires_at        timestamp         // 90 days to claim
+  status            enum (pending, claimed, expired)
+}
+```
+
 ---
 
 ## Key Computed Fields
@@ -206,13 +225,18 @@ families
       └── story_bibles (1:many — one per year)
       └── harvests (1:many — four per year)
           └── episodes (1:1 — one book per harvest)
+  └── gift_claims (1:many — as buyer)
+
+gift_claims
+  └── family_id  → families (buyer)
+  └── claimed_by → families (recipient, set on claim)
 ```
 
 ---
 
 ## Privacy Notes
 
-- `photo_paths` in harvests: temp storage only. Set `photos_deleted_at` within 72 hours of `face_ref_generated = true`
+- `photo_paths` in harvests: temp storage only. Set `photos_deleted_at` within 2 hours of `face_ref_generated = true`. Hard ceiling: 24 hours for failure cases only.
 - `face_ref_path`: retained for duration of subscription (needed for illustration consistency)
 - `family_notes` in children: sensitive free-text. Encrypt at rest. Never logged.
 - `avoidances`: sensitive. Never exposed in any API response without authentication.

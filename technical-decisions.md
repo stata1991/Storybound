@@ -21,9 +21,9 @@
 ---
 
 ### 3. Session-Based Face Processing
-**Decision:** Extract face embeddings, generate reference images, delete source photos within 72 hours.
-**Rationale:** COPPA compliance, parent trust, and liability reduction. Parents are rightly concerned about storing children's photos. 72-hour deletion is a strong privacy signal.
-**Implementation:** Replicate or custom Dreambooth session → generate 20 reference images → store only references → delete originals.
+**Decision:** Extract face embeddings, generate reference images, delete source photos within 2 hours. Hard ceiling: 24 hours for failure cases only.
+**Rationale:** COPPA compliance, parent trust, and liability reduction. Parents are rightly concerned about storing children's photos. 2-hour deletion is a strong privacy signal. No face data or photos are ever sent to any third party.
+**Implementation:** Self-hosted Stable Diffusion + LoRA pipeline on Modal.com → generate reference images → store only references → delete originals within 2 hours.
 **Trade-off:** Can't re-use source photos if reference quality is poor. Mitigation: quality check before deletion, offer re-upload if needed.
 
 ---
@@ -66,7 +66,24 @@
 
 ---
 
-### 9. Distributed Operational Load
+### 9. Self-Hosted Illustration Pipeline via Modal.com
+**Decision:** Run our own Stable Diffusion + LoRA pipeline on Modal.com (serverless GPU compute) for all face-accurate illustration generation. No child photos or face data ever leave founder-controlled infrastructure.
+**Rationale:** Photo-accurate likeness requires sending face data to an image model. To avoid sending child photos to third parties (OpenAI, Replicate, Midjourney, etc.), we own every line of code. Photos never leave our controlled infrastructure.
+**Phase 1 (50 families):** Manual Modal runs triggered by founder.
+- Parent uploads → Supabase encrypted storage
+- Founder triggers LoRA training on Modal manually
+- Face reference generated → source photos deleted within 2 hours
+- Hard ceiling: 24 hours max (failure case only)
+**Phase 2 (200 families):** Automated Modal pipeline.
+- Upload triggers automated job queue
+- No manual intervention needed
+**Cost:** ~$3–5 per child per year at any scale.
+**Privacy disclosure to parents (exact copy):**
+> "Your photos are processed entirely on our private servers. They are never shared with any third party — not OpenAI, not illustration services, not print partners. Your original photos are permanently deleted within 2 hours of your child's illustration reference being created. The reference itself is an artistic model that cannot be reverse-engineered back to a photograph."
+
+---
+
+### 10. Distributed Operational Load
 **Decision:** Q1–Q3 have fixed seasonal windows. Q4 is birthday-relative.
 **Rationale:** If all families had the same delivery window, operational load would spike quarterly. Birthday-relative Q4 spreads ~8% of families into each month, creating steady workload.
 **Result:** No operational "season" where everything happens at once. Predictable monthly volume.
@@ -85,6 +102,7 @@
 | Payments | Stripe (manual) | Stripe Subscriptions API |
 | Story generation | Claude API (manual trigger) | Claude API (automated) |
 | Illustration | GPT-4o via ChatGPT (manual) | GPT-4o API or Astria |
+| Face processing | Modal.com SD + LoRA (manual trigger) | Modal.com (automated pipeline) |
 | Print | Blurb/Lulu | Mixam API |
 | Hosting | Vercel | Vercel |
 | Analytics | Posthog | Posthog |

@@ -32,9 +32,11 @@
 
 ## Privacy Constraints (Non-Negotiable)
 
-**Session-based face processing only.** Child photos are processed to extract face embeddings, then deleted within 72 hours. No permanent storage of biometric data.
+**Session-based face processing only.** Child photos are processed to extract face embeddings, then deleted within 2 hours of face reference generation. Hard ceiling: 24 hours for failure cases only. No permanent storage of biometric data.
 
 **No photo storage after processing.** Parents' uploaded photos are deleted after face model generation. Only the generated face reference (non-photographic) is retained.
+
+**No face data or photos sent to any third party — ever.** The illustration pipeline runs exclusively on founder-controlled Modal.com infrastructure. Photos are never sent to OpenAI, Replicate, Midjourney, print partners, or any other third-party service.
 
 **Children's data.** Full COPPA compliance required. No marketing to children. No behavioral tracking of minors. Parental consent required for all data collection.
 

@@ -128,6 +128,7 @@ Episode rules:
 - Episode is self-contained (new reader can follow it)
 - Episode threads the seasonal arc (existing reader feels continuity)
 - Episode 4 must reference specific moments from Episodes 1, 2, and 3
+- The character archetype appears as the child's adventure companion — never the hero, always the loyal ally. Transform the parent's archetype input into an ORIGINAL character — never use trademarked names, character names, or identifiable IP in the story text or illustration prompts. Examples: "Elsa" → a princess with ice magic and a flowing silver cape; "Superman" → a caped hero who soars through clouds and protects the valley; "Dinosaur" → a friendly young T-Rex who loves exploring.
 
 Content safety:
 - No violence, blood, death, or injury
@@ -150,6 +151,8 @@ This quarter's harvest data:
 - Key memory 2: {{memory_2}}
 - Photo descriptions: {{photo_descriptions}}
 - Current interests (updated): {{current_interests}}
+- Milestone this quarter: {{milestone_description}}
+- Character archetype (companion): {{character_archetype}}
 - Anything new or notable: {{notable_notes}}
 
 {{#if episode_4}}

@@ -16,6 +16,8 @@ Build on Framer or Webflow. No custom code.
 - [ ] Headline: "Most personalized storybooks change the name. We change the story."
 - [ ] Sub-headline: "Storybound delivers 4 quarterly illustrated chapter books where your child is the actual hero — built from their photos and memories. $109/year."
 - [ ] Primary CTA: "Join as a Founding Member — $89/year"
+- [ ] Secondary CTA: "Give as a Gift — $89"
+- [ ] Tertiary CTA: "Try a single book — $29"
 - [ ] Social proof placeholder (will add testimonials after Phase 2)
 
 **How it works section (3 steps):**
@@ -28,15 +30,17 @@ Build on Framer or Webflow. No custom code.
 - [ ] Real likeness: "Your child actually looks like the hero"
 - [ ] Four chapters: "Not one book. A growing saga."
 
-**Pricing section:**
-- [ ] Founding Member: $89/year (limited spots)
-- [ ] Standard: $109/year (after founding closes)
-- [ ] What's included: 4 quarterly books, digital access, birthday anchor
+**Pricing section (3 products):**
+- [ ] Founding subscription: $89/year (limited spots, price locks forever)
+- [ ] One-time book: $29 (single standalone book, no continuity)
+- [ ] Gift subscription: $89/year (buyer pays, recipient claims via link)
+- [ ] Standard: $109/year (shown as "after founding closes", not active yet)
+- [ ] What's included per subscription: 4 quarterly books, digital access, birthday book
 
 **FAQ section:**
 - [ ] "What if we miss a memory drop?" — we continue the story with what we know
 - [ ] "What ages is this for?" — 3–10 years old
-- [ ] "What happens to our photos?" — deleted within 72 hours of processing
+- [ ] "What happens to our photos?" — deleted within 2 hours of processing, never shared with third parties
 - [ ] "Can I cancel?" — yes, annual subscription, cancel before renewal
 - [ ] "When does the first book arrive?" — within 10 weeks of subscribing
 
@@ -48,8 +52,23 @@ Build on Framer or Webflow. No custom code.
 ### Checkout Flow
 - [ ] Set up Stripe product: $89 founding member annual subscription
 - [ ] Set up Stripe product: $109 standard annual subscription
-- [ ] Post-checkout: redirect to onboarding form (Typeform)
-- [ ] Typeform collects: child name, DOB, pronouns, interests, avoidances, delivery address
+- [ ] Set up Stripe product: $29 one-time book (one-time payment)
+- [ ] Set up Stripe product: $89 gift subscription (one-time payment, generates claim link)
+- [ ] Post-checkout (subscription): redirect to onboarding form (Typeform)
+- [ ] Post-checkout (one-time): redirect to simplified profile form (name, age, interests, one photo)
+- [ ] Post-checkout (gift): redirect to confirmation page with shareable claim link, no child profile collected from buyer
+- [ ] Typeform collects:
+  - Child's name and preferred name (nickname)
+  - Child's birthday (date — used for Q4 birthday book timing)
+  - Pronouns (she/her, he/him, they/them, other)
+  - Interests (multi-select + free text)
+  - Favorite things (color, food, animal)
+  - Avoidances / fears (free text — these become hard limits)
+  - Milestone description (free text — "lost first tooth, learned to swim")
+  - Character archetype (free text — "What character does your child love? e.g. a princess, a dinosaur, a superhero. We'll create an original companion inspired by it.")
+  - Family notes (free text — family structure, anything we should know)
+  - Reading level (pre-reader / early reader / independent / chapter book)
+  - Delivery address
 
 ### Email Sequences (ConvertKit)
 
