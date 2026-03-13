@@ -139,21 +139,46 @@ export async function saveChildProfile(data: ChildProfileData) {
   // Insert child record
   const isOneTime = (data.subscriptionType || "founding") === "one_time";
 
-  const { error: childError } = await admin.from("children").insert({
-    family_id: familyId,
-    name: data.name,
-    date_of_birth: data.dateOfBirth,
-    pronouns: data.pronouns,
-    reading_level: data.readingLevel,
-    interests: parseCommaSeparated(data.interests),
-    avoidances: parseCommaSeparated(data.avoidances),
-    default_archetype: data.defaultArchetype || null,
-    is_one_time: isOneTime,
-    current_year: 1,
+  const { data: child, error: childError } = await admin
+    .from("children")
+    .insert({
+      family_id: familyId,
+      name: data.name,
+      date_of_birth: data.dateOfBirth,
+      pronouns: data.pronouns,
+      reading_level: data.readingLevel,
+      interests: parseCommaSeparated(data.interests),
+      avoidances: parseCommaSeparated(data.avoidances),
+      default_archetype: data.defaultArchetype || null,
+      is_one_time: isOneTime,
+      current_year: 1,
+    })
+    .select("id")
+    .single();
+
+  if (childError || !child) {
+    return { error: "Failed to save child profile. Please try again." };
+  }
+
+  // Create first harvest for the current quarter
+  const SEASONS: Record<number, string> = { 1: "spring", 2: "summer", 3: "autumn", 4: "birthday" };
+  const month = new Date().getMonth(); // 0-indexed
+  const quarter = month <= 2 ? 1 : month <= 5 ? 2 : month <= 8 ? 3 : 4;
+  const now = new Date();
+  const fourWeeksLater = new Date(now.getTime() + 28 * 24 * 60 * 60 * 1000);
+
+  const { error: harvestError } = await admin.from("harvests").insert({
+    child_id: child.id,
+    quarter,
+    year: now.getFullYear(),
+    season: SEASONS[quarter],
+    window_opens_at: now.toISOString(),
+    window_closes_at: fourWeeksLater.toISOString(),
+    status: "pending",
   });
 
-  if (childError) {
-    return { error: "Failed to save child profile. Please try again." };
+  if (harvestError) {
+    console.error("Failed to create initial harvest (non-blocking):", harvestError.message);
   }
 
   redirect("/dashboard");

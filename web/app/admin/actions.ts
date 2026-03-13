@@ -716,7 +716,8 @@ function pronounLabel(p: string): string {
 
 async function callClaude(
   system: string,
-  userMessage: string
+  userMessage: string,
+  attempt: number = 1
 ): Promise<Record<string, unknown>> {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY is not set.");
@@ -735,12 +736,29 @@ async function callClaude(
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
+  console.log(
+    `[callClaude] attempt=${attempt} raw response (first 500 chars):`,
+    text.slice(0, 500)
+  );
+
   const cleaned = text
     .replace(/^```json?\s*/, "")
     .replace(/\s*```$/, "")
+    .replace(/,\s*([}\]])/g, "$1")
     .trim();
 
-  return JSON.parse(cleaned) as Record<string, unknown>;
+  try {
+    return JSON.parse(cleaned) as Record<string, unknown>;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[callClaude] JSON parse failed (attempt ${attempt}):`, msg);
+    console.error(`[callClaude] Raw text:`, cleaned.slice(0, 1000));
+
+    if (attempt < 2) {
+      return callClaude(system, userMessage, attempt + 1);
+    }
+    throw new Error(`Claude returned invalid JSON after 2 attempts: ${msg}`);
+  }
 }
 
 function buildStoryBiblePrompt(
@@ -765,7 +783,7 @@ Rules:
 - Include: the child's actual interests, age-appropriate challenges, humor, wonder.
 - Tone: warm, adventurous, imaginative. Think Studio Ghibli, not Disney action.
 
-Output format: JSON only. No preamble, no markdown fences.`,
+Output format: valid JSON only. No preamble, no markdown fences, no trailing commas, no comments. Every string value must be properly escaped.`,
     user: `Generate a Story Bible for this child:
 
 Child profile:
@@ -975,7 +993,7 @@ Content safety:
 - Respect all parent-specified avoidances: ${child.avoidances.length > 0 ? child.avoidances.join(", ") : "none specified"}
 - Positive resolution required. Challenge is emotional, not dangerous.
 
-Output format: JSON only. No preamble, no markdown fences.`,
+Output format: valid JSON only. No preamble, no markdown fences, no trailing commas, no comments. Every string value must be properly escaped.`,
     user: `Generate Episode ${episodeNumber} for ${child.name}.
 ${characterBlock}
 Story Bible:

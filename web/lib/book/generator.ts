@@ -8,12 +8,12 @@ import type { BookParams } from "./template";
 interface EpisodeRow {
   id: string;
   child_id: string;
+  harvest_id: string;
   title: string;
   dedication: string;
   scenes: { number: number; text: string; illustration_prompt: string }[];
   final_page: string;
   illustration_paths: string[];
-  season: string;
   year: number;
 }
 
@@ -67,7 +67,7 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
   const { data: episodeRaw, error: epErr } = await admin
     .from("episodes")
     .select(
-      "id, child_id, title, dedication, scenes, final_page, illustration_paths, season, year"
+      "id, child_id, harvest_id, title, dedication, scenes, final_page, illustration_paths, year"
     )
     .eq("id", episodeId)
     .single();
@@ -97,6 +97,18 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
   }
 
   const child = childRaw as unknown as ChildRow;
+
+  const { data: harvestRaw } = await admin
+    .from("harvests")
+    .select("season")
+    .eq("id", episode.harvest_id)
+    .single();
+
+  if (!harvestRaw) {
+    throw new Error("Harvest not found.");
+  }
+
+  const harvest = harvestRaw as unknown as { season: string };
 
   // ── (b+c) Download illustrations as base64 ────────────────────────────
 
@@ -131,7 +143,7 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
 
   const bookParams: BookParams = {
     childName: child.name,
-    season: episode.season,
+    season: harvest.season,
     year: episode.year,
     title: episode.title,
     dedication: episode.dedication,

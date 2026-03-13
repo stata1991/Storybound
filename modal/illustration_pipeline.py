@@ -23,6 +23,7 @@ import uuid
 from pathlib import Path
 
 import modal
+from fastapi import Request
 
 # ─── Modal app ───────────────────────────────────────────────────────────────
 
@@ -47,6 +48,7 @@ pipeline_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "torch>=2.0.0",
+        "torchvision>=0.15.0",
         "diffusers>=0.25.0",
         "transformers>=4.35.0",
         "accelerate>=0.25.0",
@@ -76,31 +78,27 @@ STYLE_SUFFIX = (
 # ─── Auth helper ─────────────────────────────────────────────────────────────
 
 
-def verify_auth(headers: dict) -> bool:
+def verify_auth(req) -> bool:
     """Check Bearer token against MODAL_AUTH_TOKEN secret."""
     expected = os.environ.get("MODAL_AUTH_TOKEN", "")
     if not expected:
         return False
-    auth_header = headers.get("authorization", "")
+    auth_header = req.headers.get("authorization", "")
     return auth_header == f"Bearer {expected}"
 
 
 def auth_error():
     """Return a 401 JSON response."""
-    return web_response({"error": "Unauthorized"}, status=401)
+    import fastapi
+
+    raise fastapi.HTTPException(status_code=401, detail={"error": "Unauthorized"})
 
 
-def web_response(body: dict, status: int = 200) -> modal.functions.FunctionCall:
-    """Build a simple JSON response for web endpoints."""
-    from modal import web_endpoint  # noqa: F811 — used only for typing context
+def web_error(body: dict, status: int = 400):
+    """Raise an HTTP error response."""
+    import fastapi
 
-    # Modal web endpoints return dicts directly — they're JSON-serialized.
-    # For error status codes, we raise an exception that Modal handles.
-    if status != 200:
-        import fastapi
-
-        raise fastapi.HTTPException(status_code=status, detail=body)
-    return body
+    raise fastapi.HTTPException(status_code=status, detail=body)
 
 
 # ─── 1. Train face model ────────────────────────────────────────────────────
@@ -114,7 +112,7 @@ def web_response(body: dict, status: int = 200) -> modal.functions.FunctionCall:
     secrets=[secrets],
 )
 @modal.fastapi_endpoint(method="POST")
-def train_face_model(request: dict, headers: dict = modal.parameter()):
+async def train_face_model(req: Request):
     """
     Receive base64-encoded photos, run DreamBooth LoRA training on SDXL,
     save only the LoRA adapter weights. Source photos never touch disk.
@@ -125,8 +123,10 @@ def train_face_model(request: dict, headers: dict = modal.parameter()):
     Response:
       { "face_model_id": "uuid", "steps": 150, "status": "ok" }
     """
-    if not verify_auth(headers):
-        return auth_error()
+    if not verify_auth(req):
+        auth_error()
+
+    body = await req.json()
 
     import torch
     from diffusers import StableDiffusionXLPipeline
@@ -137,12 +137,12 @@ def train_face_model(request: dict, headers: dict = modal.parameter()):
 
     # ── Parse photos from base64 (memory only) ─────────────────────────────
 
-    photos_b64 = request.get("photos", [])
+    photos_b64 = body.get("photos", [])
     if not photos_b64 or len(photos_b64) < 1:
-        return web_response({"error": "At least 1 photo required"}, status=400)
+        web_error({"error": "At least 1 photo required"})
 
     if len(photos_b64) > 10:
-        return web_response({"error": "Maximum 10 photos allowed"}, status=400)
+        web_error({"error": "Maximum 10 photos allowed"})
 
     face_model_id = str(uuid.uuid4())
 
@@ -223,9 +223,15 @@ def train_face_model(request: dict, headers: dict = modal.parameter()):
     # Encode text once (frozen encoders)
     with torch.no_grad():
         encoder_hidden_states = text_encoder(tokens_1)[0]
-        pooled_output_2 = text_encoder_2(tokens_2)
-        encoder_hidden_states_2 = pooled_output_2[0]
-        pooled_prompt_embeds = pooled_output_2[1]
+        pooled_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
+        encoder_hidden_states_2 = pooled_output_2.hidden_states[-1]
+        pooled_prompt_embeds = pooled_output_2.text_embeds
+
+        # Ensure both have batch dimension (3D) before concatenating
+        if encoder_hidden_states.dim() == 2:
+            encoder_hidden_states = encoder_hidden_states.unsqueeze(0)
+        if encoder_hidden_states_2.dim() == 2:
+            encoder_hidden_states_2 = encoder_hidden_states_2.unsqueeze(0)
 
         # Concatenate text encoder outputs
         prompt_embeds = torch.cat(
@@ -342,7 +348,7 @@ def train_face_model(request: dict, headers: dict = modal.parameter()):
     secrets=[secrets],
 )
 @modal.fastapi_endpoint(method="POST")
-def generate_illustrations(request: dict, headers: dict = modal.parameter()):
+async def generate_illustrations(req: Request):
     """
     Load LoRA weights and generate illustrations from prompts.
 
@@ -361,29 +367,27 @@ def generate_illustrations(request: dict, headers: dict = modal.parameter()):
         ]
       }
     """
-    if not verify_auth(headers):
-        return auth_error()
+    if not verify_auth(req):
+        auth_error()
+
+    body = await req.json()
 
     import torch
     from diffusers import StableDiffusionXLPipeline
 
-    face_model_id = request.get("face_model_id", "")
-    prompts = request.get("prompts", [])
+    face_model_id = body.get("face_model_id", "")
+    prompts = body.get("prompts", [])
 
     if not face_model_id:
-        return web_response({"error": "face_model_id required"}, status=400)
+        web_error({"error": "face_model_id required"})
 
     if not prompts or len(prompts) > 8:
-        return web_response(
-            {"error": "Between 1 and 8 prompts required"}, status=400
-        )
+        web_error({"error": "Between 1 and 8 prompts required"})
 
     # Verify LoRA weights exist
     lora_dir = Path(LORA_VOLUME_PATH) / face_model_id
     if not lora_dir.exists():
-        return web_response(
-            {"error": f"Face model {face_model_id} not found"}, status=404
-        )
+        web_error({"error": f"Face model {face_model_id} not found"}, status=404)
 
     # ── Load pipeline + LoRA ────────────────────────────────────────────────
 
@@ -446,7 +450,7 @@ def generate_illustrations(request: dict, headers: dict = modal.parameter()):
     secrets=[secrets],
 )
 @modal.fastapi_endpoint(method="POST")
-def delete_face_model(request: dict, headers: dict = modal.parameter()):
+async def delete_face_model(req: Request):
     """
     Delete LoRA weights from Modal Volume after book generation is complete.
     Maps to constraint step 5: "Book generation complete → LoRA weights deleted"
@@ -457,12 +461,14 @@ def delete_face_model(request: dict, headers: dict = modal.parameter()):
     Response:
       { "deleted": true, "face_model_id": "uuid" }
     """
-    if not verify_auth(headers):
-        return auth_error()
+    if not verify_auth(req):
+        auth_error()
 
-    face_model_id = request.get("face_model_id", "")
+    body = await req.json()
+
+    face_model_id = body.get("face_model_id", "")
     if not face_model_id:
-        return web_response({"error": "face_model_id required"}, status=400)
+        web_error({"error": "face_model_id required"})
 
     lora_dir = Path(LORA_VOLUME_PATH) / face_model_id
 
@@ -490,15 +496,15 @@ def delete_face_model(request: dict, headers: dict = modal.parameter()):
     secrets=[secrets],
 )
 @modal.fastapi_endpoint(method="POST")
-def health_check(request: dict = {}, headers: dict = modal.parameter()):
+async def health_check(req: Request):
     """
     Lightweight health check — no model loading.
 
     Response:
       { "status": "ok", "gpu": "A10G", "volume_available": true }
     """
-    if not verify_auth(headers):
-        return auth_error()
+    if not verify_auth(req):
+        auth_error()
 
     volume_ok = Path(LORA_VOLUME_PATH).exists() if LORA_VOLUME_PATH else False
 

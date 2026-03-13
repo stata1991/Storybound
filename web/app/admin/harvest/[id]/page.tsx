@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
-import { generateStory } from "@/app/admin/actions";
+import GenerateStoryButton, { GenerateBookButton, RunIllustrationsButton } from "./GenerateStoryButton";
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
 
@@ -119,10 +119,8 @@ function StatusBadge({ status }: { status: string }) {
 
 export default async function HarvestDetailPage({
   params,
-  searchParams,
 }: {
   params: { id: string };
-  searchParams: { [key: string]: string | string[] | undefined };
 }) {
   // Auth + admin guard
   const supabase = await createClient();
@@ -137,34 +135,6 @@ export default async function HarvestDetailPage({
 
   const admin = getAdmin();
   const harvestId = params.id;
-
-  const storyError =
-    typeof searchParams.storyError === "string"
-      ? searchParams.storyError
-      : null;
-  const storyWarnings =
-    typeof searchParams.storyWarnings === "string"
-      ? searchParams.storyWarnings.split("|").filter(Boolean)
-      : [];
-
-  async function handleGenerateStory() {
-    "use server";
-    const result = await generateStory(harvestId);
-
-    if ("error" in result) {
-      redirect(
-        `/admin/harvest/${harvestId}?storyError=${encodeURIComponent(result.error)}`
-      );
-    }
-
-    if (result.qualityWarnings.length > 0) {
-      redirect(
-        `/admin/harvest/${harvestId}?storyWarnings=${encodeURIComponent(result.qualityWarnings.join("|"))}`
-      );
-    }
-
-    redirect(`/admin/harvest/${harvestId}`);
-  }
 
   // ── Fetch harvest ──────────────────────────────────────────────────────
 
@@ -445,38 +415,8 @@ export default async function HarvestDetailPage({
               Episode
             </h3>
             <div className="rounded-lg border border-gray-200 bg-white px-6 py-6">
-              {storyError && (
-                <div className="mb-4 rounded bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {storyError}
-                </div>
-              )}
-              {storyWarnings.length > 0 && (
-                <div className="mb-4 rounded bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                  <p className="font-medium">
-                    Story generated with quality warnings:
-                  </p>
-                  <ul className="mt-1 list-inside list-disc">
-                    {storyWarnings.map((w) => (
-                      <li key={w}>{w}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
               {harvest.status === "processing" ? (
-                <form action={handleGenerateStory} className="text-center">
-                  <p className="mb-4 text-sm text-gray-400">
-                    No episode generated yet.
-                  </p>
-                  <button
-                    type="submit"
-                    className="rounded-md bg-teal-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-600"
-                  >
-                    Generate story
-                  </button>
-                  <p className="mt-2 text-xs text-gray-400">
-                    Takes 30-60 seconds (2 Claude API calls)
-                  </p>
-                </form>
+                <GenerateStoryButton harvestId={harvestId} />
               ) : (
                 <p className="text-center text-sm text-gray-400">
                   No episode generated yet. Set harvest status to
@@ -518,10 +458,16 @@ export default async function HarvestDetailPage({
               ))}
             </div>
           ) : (
-            <div className="rounded-lg border border-gray-200 bg-white px-6 py-6 text-center">
-              <p className="text-sm text-gray-400">
-                No illustrations generated yet.
-              </p>
+            <div className="rounded-lg border border-gray-200 bg-white px-6 py-6">
+              {episode &&
+              (!episode.illustration_status ||
+                episode.illustration_status === "pending") ? (
+                <RunIllustrationsButton harvestId={harvestId} />
+              ) : (
+                <p className="text-center text-sm text-gray-400">
+                  No illustrations generated yet.
+                </p>
+              )}
             </div>
           )}
         </section>
@@ -547,6 +493,13 @@ export default async function HarvestDetailPage({
                   Link expires in 1 hour
                 </span>
               </div>
+            </div>
+          ) : episode &&
+            (episode.illustration_status === "review" ||
+              episode.illustration_status === "approved") &&
+            !episode.print_file_path ? (
+            <div className="rounded-lg border border-gray-200 bg-white px-6 py-6">
+              <GenerateBookButton harvestId={harvestId} />
             </div>
           ) : (
             <div className="rounded-lg border border-gray-200 bg-white px-6 py-6 text-center">
