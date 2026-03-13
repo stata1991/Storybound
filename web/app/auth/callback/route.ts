@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { claimGift } from "@/app/gift/claim/actions";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
@@ -15,6 +17,28 @@ export async function GET(request: Request) {
 
   if (error) {
     return NextResponse.redirect(`${origin}/auth?error=true`);
+  }
+
+  // Check for gift claim cookie
+  const cookieStore = await cookies();
+  const giftToken = cookieStore.get("sb-gift-token")?.value;
+
+  if (giftToken) {
+    cookieStore.delete("sb-gift-token");
+
+    const result = await claimGift(
+      giftToken,
+      data.user.id,
+      data.user.email ?? ""
+    );
+
+    if (result.success) {
+      return NextResponse.redirect(
+        `${origin}/onboarding?type=gift&gift=claimed`
+      );
+    }
+
+    // Claim failed (expired, already claimed) — fall through to normal flow
   }
 
   // Service role client bypasses RLS for new user check

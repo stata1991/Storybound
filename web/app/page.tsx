@@ -504,6 +504,19 @@ function Footer() {
 export default function Home() {
   return (
     <main>
+      <nav className="bg-cream px-6 py-4">
+        <div className="mx-auto flex max-w-6xl items-center justify-between">
+          <span className="font-serif text-lg font-bold text-navy">
+            Storybound
+          </span>
+          <a
+            href="/auth"
+            className="font-sans text-sm font-medium text-navy/60 transition-colors hover:text-gold"
+          >
+            Sign in
+          </a>
+        </div>
+      </nav>
       <Hero />
       <HowItWorks />
       <WhyDifferent />

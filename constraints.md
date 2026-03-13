@@ -32,9 +32,13 @@
 
 ## Privacy Constraints (Non-Negotiable)
 
-**Session-based face processing only.** Child photos are processed to extract face embeddings, then deleted within 2 hours of face reference generation. Hard ceiling: 24 hours for failure cases only. No permanent storage of biometric data.
-
-**No photo storage after processing.** Parents' uploaded photos are deleted after face model generation. Only the generated face reference (non-photographic) is retained.
+**Photo deletion sequence (non-negotiable):**
+1. Photos uploaded → Supabase Storage private bucket
+2. Processing triggered → photos downloaded to Modal memory only (never written to disk)
+3. LoRA training completes → source photos deleted from Modal memory immediately
+4. Face reference saved → source photos deleted from Supabase Storage (target: immediate, hard ceiling: 2 hours)
+5. Book generation complete → LoRA weights deleted
+6. Nothing reversible to original photo is ever retained after step 4
 
 **No face data or photos sent to any third party — ever.** The illustration pipeline runs exclusively on founder-controlled Modal.com infrastructure. Photos are never sent to OpenAI, Replicate, Midjourney, print partners, or any other third-party service.
 

@@ -9,12 +9,12 @@ import {
 import { signOut } from "../auth/actions";
 import ChildCard from "./components/ChildCard";
 import StoryTimeline from "./components/StoryTimeline";
-import SubmittedToast from "./components/SubmittedToast";
+import DashboardToast from "./components/SubmittedToast";
 
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: { submitted?: string };
+  searchParams: { submitted?: string; updated?: string };
 }) {
   // Auth guard
   const supabase = await createClient();
@@ -67,11 +67,6 @@ export default async function DashboardPage({
         </form>
       </header>
 
-      {/* Submitted toast */}
-      {searchParams.submitted === "true" && children.length > 0 && (
-        <SubmittedToast childName={children[0].name} />
-      )}
-
       <main className="mx-auto max-w-4xl px-6 pb-16">
         {/* Welcome */}
         <div className="py-8 md:py-12">
@@ -82,6 +77,16 @@ export default async function DashboardPage({
             <p className="mt-2 font-sans text-base text-navy/50">{subtitle}</p>
           )}
         </div>
+
+        {/* Success toasts */}
+        {searchParams.submitted === "true" && children.length > 0 && (
+          <DashboardToast
+            message={`Memory submitted \u2713 \u2014 we'll get to work on ${children[0].name.charAt(0).toUpperCase() + children[0].name.slice(1).toLowerCase()}'s story.`}
+          />
+        )}
+        {searchParams.updated === "true" && (
+          <DashboardToast message="Profile updated \u2713" />
+        )}
 
         {/* Empty state */}
         {children.length === 0 && (
