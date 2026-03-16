@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
+import { logEvent } from "@/lib/audit";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -64,6 +65,7 @@ interface ChildFullDbRow {
   name: string;
   interests: string[];
   reading_level: string;
+  character_photos_deleted_at: string | null;
 }
 
 interface EpisodeDbRow {
@@ -129,7 +131,10 @@ async function verifyAdmin(): Promise<{ userId: string } | { error: string }> {
 
 /* ─── Stats ────────────────────────────────────────────────────────────────── */
 
-export async function getAdminStats(): Promise<AdminStats> {
+export async function getAdminStats(): Promise<AdminStats | { error: string }> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
   const admin = getAdmin();
 
   const [
@@ -175,7 +180,10 @@ export async function getAdminStats(): Promise<AdminStats> {
 
 /* ─── Harvests ─────────────────────────────────────────────────────────────── */
 
-export async function getAllHarvests(): Promise<HarvestRow[]> {
+export async function getAllHarvests(): Promise<HarvestRow[] | { error: string }> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
   const admin = getAdmin();
 
   // Fetch harvests with child name, family_id, and episode info
@@ -228,7 +236,10 @@ export async function getAllHarvests(): Promise<HarvestRow[]> {
 
 /* ─── Families ─────────────────────────────────────────────────────────────── */
 
-export async function getAllFamilies(): Promise<FamilyRow[]> {
+export async function getAllFamilies(): Promise<FamilyRow[] | { error: string }> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
   const admin = getAdmin();
 
   // Fetch families
@@ -327,6 +338,13 @@ export async function updateHarvestStatus(
     return { error: "Failed to update status." };
   }
 
+  logEvent({
+    event_type: "harvest.status_update",
+    status: "success",
+    harvest_id: harvestId,
+    metadata: { old_status: harvest.status, new_status: newStatus },
+  });
+
   return { success: true };
 }
 
@@ -384,6 +402,13 @@ export async function triggerIllustrationPipeline(
   const auth = await verifyAdmin();
   if ("error" in auth) return { error: auth.error };
 
+  logEvent({
+    event_type: "illustration.pipeline",
+    status: "started",
+    harvest_id: harvestId,
+    message: "Illustration pipeline started",
+  });
+
   const supa = getAdmin();
 
   // ── Fetch harvest ────────────────────────────────────────────────────────
@@ -404,21 +429,21 @@ export async function triggerIllustrationPipeline(
     return { error: `Harvest status is '${harvest.status}', expected 'processing'.` };
   }
 
-  if (!harvest.photo_paths || harvest.photo_paths.length === 0) {
-    return { error: "No photos on this harvest." };
-  }
-
   // ── Fetch child ──────────────────────────────────────────────────────────
 
   const { data: childRaw } = await supa
     .from("children")
-    .select("id, name, interests, reading_level")
+    .select("id, name, interests, reading_level, character_photos_deleted_at")
     .eq("id", harvest.child_id)
     .single();
 
   if (!childRaw) return { error: "Child not found." };
 
   const child = childRaw as unknown as ChildFullDbRow;
+
+  if (child.character_photos_deleted_at) {
+    return { error: "Character photos already used and deleted for this child." };
+  }
 
   // ── Fetch episode (optional) ─────────────────────────────────────────────
 
@@ -430,17 +455,34 @@ export async function triggerIllustrationPipeline(
 
   const episode = episodeRaw as unknown as EpisodeDbRow | null;
 
-  // ── Download photos to Buffer (never disk) ───────────────────────────────
+  // ── Download character photos to Buffer (never disk) ─────────────────────
+
+  const childId = harvest.child_id;
+
+  const { data: photoFiles, error: listErr } = await supa.storage
+    .from("character-photos")
+    .list(childId, { limit: 100 });
+
+  if (listErr) {
+    return { error: `Failed to list character photos: ${listErr.message}` };
+  }
+
+  const validFiles = (photoFiles ?? []).filter((f) => f.name !== ".emptyFolderPlaceholder");
+
+  if (validFiles.length === 0) {
+    return { error: "No character photos found for this child." };
+  }
 
   const photosBase64: string[] = [];
 
-  for (const path of harvest.photo_paths) {
+  for (const file of validFiles) {
+    const filePath = `${childId}/${file.name}`;
     const { data: blob, error: dlErr } = await supa.storage
-      .from("harvest-photos")
-      .download(path);
+      .from("character-photos")
+      .download(filePath);
 
     if (dlErr || !blob) {
-      return { error: `Failed to download photo: ${dlErr?.message ?? path}` };
+      return { error: `Failed to download photo: ${dlErr?.message ?? filePath}` };
     }
 
     const arrayBuf = await blob.arrayBuffer();
@@ -457,6 +499,12 @@ export async function triggerIllustrationPipeline(
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
+    logEvent({
+      event_type: "illustration.pipeline",
+      status: "error",
+      harvest_id: harvestId,
+      message: `Face training failed: ${msg}`,
+    });
     return { error: `Face training failed: ${msg}` };
   }
 
@@ -500,6 +548,12 @@ export async function triggerIllustrationPipeline(
       face_model_id: trainResult.face_model_id,
     }).catch(() => {});
     const msg = e instanceof Error ? e.message : "Unknown error";
+    logEvent({
+      event_type: "illustration.pipeline",
+      status: "error",
+      harvest_id: harvestId,
+      message: `Illustration generation failed: ${msg}`,
+    });
     return { error: `Illustration generation failed: ${msg}` };
   }
 
@@ -549,14 +603,28 @@ export async function triggerIllustrationPipeline(
     face_model_id: trainResult.face_model_id,
   }).catch(() => {});
 
-  // ── Delete source photos (constraint step 4) ─────────────────────────────
+  // ── Delete character photos from bucket & mark child ─────────────────────
 
-  await supa.storage.from("harvest-photos").remove(harvest.photo_paths);
+  try {
+    const pathsToDelete = validFiles.map((f) => `${childId}/${f.name}`);
+    await supa.storage.from("character-photos").remove(pathsToDelete);
 
-  await supa
-    .from("harvests")
-    .update({ photos_deleted_at: new Date().toISOString() })
-    .eq("id", harvestId);
+    await supa
+      .from("children")
+      .update({ character_photos_deleted_at: new Date().toISOString() })
+      .eq("id", childId);
+  } catch (cleanupErr) {
+    console.error("Character photo cleanup failed (non-blocking):", cleanupErr);
+  }
+
+  logEvent({
+    event_type: "illustration.pipeline",
+    status: "success",
+    harvest_id: harvestId,
+    child_id: childId,
+    message: "Illustration pipeline completed",
+    metadata: { illustration_count: illustrationPaths.length },
+  });
 
   return { success: true };
 }
@@ -568,6 +636,13 @@ export async function generateBook(
 ): Promise<{ success: true; downloadUrl: string } | { error: string }> {
   const auth = await verifyAdmin();
   if ("error" in auth) return { error: auth.error };
+
+  logEvent({
+    event_type: "book.generate",
+    status: "started",
+    harvest_id: harvestId,
+    message: "Book generation started",
+  });
 
   const supa = getAdmin();
 
@@ -602,6 +677,13 @@ export async function generateBook(
     pdfBuffer = await generateBookPDF(ep.id);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
+    logEvent({
+      event_type: "book.generate",
+      status: "error",
+      harvest_id: harvestId,
+      child_id: ep.child_id,
+      message: `PDF generation failed: ${msg}`,
+    });
     return { error: `PDF generation failed: ${msg}` };
   }
 
@@ -644,6 +726,14 @@ export async function generateBook(
       status: "approved",
     })
     .eq("id", ep.id);
+
+  logEvent({
+    event_type: "book.generate",
+    status: "success",
+    harvest_id: harvestId,
+    child_id: ep.child_id,
+    message: "Book generated and uploaded",
+  });
 
   return { success: true, downloadUrl: urlData.signedUrl };
 }
@@ -1125,6 +1215,13 @@ export async function generateStory(
   const auth = await verifyAdmin();
   if ("error" in auth) return { error: auth.error };
 
+  logEvent({
+    event_type: "story.generate",
+    status: "started",
+    harvest_id: harvestId,
+    message: "Story generation started",
+  });
+
   const supa = getAdmin();
 
   // ── Fetch harvest ────────────────────────────────────────────────────────
@@ -1201,6 +1298,12 @@ export async function generateStory(
       bibleResult = await callClaude(biblePrompt.system, biblePrompt.user);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error";
+      logEvent({
+        event_type: "story.generate",
+        status: "error",
+        harvest_id: harvestId,
+        message: `Story bible generation failed: ${msg}`,
+      });
       return { error: `Story bible generation failed: ${msg}` };
     }
 
@@ -1259,6 +1362,12 @@ export async function generateStory(
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
+    logEvent({
+      event_type: "story.generate",
+      status: "error",
+      harvest_id: harvestId,
+      message: `Episode generation failed: ${msg}`,
+    });
     return { error: `Episode generation failed: ${msg}` };
   }
 
@@ -1288,8 +1397,22 @@ export async function generateStory(
   });
 
   if (epInsertErr) {
+    logEvent({
+      event_type: "story.generate",
+      status: "error",
+      harvest_id: harvestId,
+      message: `Failed to save episode: ${epInsertErr.message}`,
+    });
     return { error: `Failed to save episode: ${epInsertErr.message}` };
   }
+
+  logEvent({
+    event_type: "story.generate",
+    status: "success",
+    harvest_id: harvestId,
+    message: "Story generated",
+    metadata: { quality_warnings: qualityWarnings },
+  });
 
   return { success: true, qualityWarnings };
 }

@@ -137,6 +137,19 @@ export default function ChildCard({
         </Link>
       </div>
 
+      {/* Character photos nudge */}
+      {!child.character_photos_deleted_at && !child.hasCharacterPhotos && (
+        <Link
+          href={`/onboarding/character-photos/${child.id}`}
+          className="mt-4 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-5 py-3 transition-colors hover:bg-amber-100"
+        >
+          <span className="font-sans text-sm font-medium text-amber-700">
+            Complete {child.name}&rsquo;s character setup
+          </span>
+          <span className="font-sans text-sm text-amber-500">&rarr;</span>
+        </Link>
+      )}
+
       {/* Status */}
       <div className="mt-6">
         <StatusDisplay status={status} />

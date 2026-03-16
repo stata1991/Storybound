@@ -33,6 +33,8 @@ export interface ChildWithHarvests {
   interests: string[];
   default_archetype: string | null;
   current_year: number;
+  character_photos_deleted_at: string | null;
+  hasCharacterPhotos: boolean;
   harvests: HarvestData[];
   episodes: EpisodeData[];
 }
@@ -70,7 +72,7 @@ export async function getChildrenWithHarvests(): Promise<ChildWithHarvests[]> {
   const { data: children, error: childErr } = await supabase
     .from("children")
     .select(
-      "id, name, date_of_birth, pronouns, reading_level, interests, default_archetype, current_year"
+      "id, name, date_of_birth, pronouns, reading_level, interests, default_archetype, current_year, character_photos_deleted_at"
     )
     .eq("active", true)
     .is("deleted_at", null)
@@ -99,8 +101,20 @@ export async function getChildrenWithHarvests(): Promise<ChildWithHarvests[]> {
     .eq("year", currentYear)
     .order("quarter", { ascending: true });
 
+  // Check character photos for each child
+  const photoChecks = await Promise.all(
+    children.map(async (c) => {
+      const { data: photos } = await supabase.storage
+        .from("character-photos")
+        .list(c.id, { limit: 1 });
+      return { id: c.id, has: Boolean(photos && photos.length > 0) };
+    })
+  );
+  const photoMap = new Map(photoChecks.map((p) => [p.id, p.has]));
+
   return children.map((child) => ({
     ...child,
+    hasCharacterPhotos: photoMap.get(child.id) ?? false,
     harvests: (harvests ?? []).filter((h) => h.child_id === child.id),
     episodes: (episodes ?? []).filter((e) => e.child_id === child.id),
   }));

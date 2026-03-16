@@ -10,6 +10,7 @@ import { signOut } from "../auth/actions";
 import ChildCard from "./components/ChildCard";
 import StoryTimeline from "./components/StoryTimeline";
 import DashboardToast from "./components/SubmittedToast";
+import PaymentWall from "./PaymentWall";
 
 export default async function DashboardPage({
   searchParams,
@@ -26,12 +27,42 @@ export default async function DashboardPage({
     redirect("/auth");
   }
 
-  const [parent, children] = await Promise.all([
-    getParentData(),
-    getChildrenWithHarvests(),
-  ]);
+  const parent = await getParentData();
 
-  const { quarter: currentQuarter } = await getCurrentQuarter();
+  // Check subscription status — show payment wall if not active
+  if (parent?.family_id) {
+    const { data: family } = await supabase
+      .from("families")
+      .select("subscription_status")
+      .eq("id", parent.family_id)
+      .single();
+
+    if (family?.subscription_status !== "active") {
+      return (
+        <div className="min-h-screen bg-cream">
+          <header className="flex items-center justify-between px-6 py-5">
+            <span className="font-serif text-xl font-bold text-navy">
+              Storybound
+            </span>
+            <form action={signOut}>
+              <button
+                type="submit"
+                className="font-sans text-sm text-navy/40 underline decoration-navy/20 underline-offset-2 transition-colors hover:text-gold hover:decoration-gold"
+              >
+                Sign out
+              </button>
+            </form>
+          </header>
+          <PaymentWall />
+        </div>
+      );
+    }
+  }
+
+  const [children, { quarter: currentQuarter }] = await Promise.all([
+    getChildrenWithHarvests(),
+    getCurrentQuarter(),
+  ]);
 
   // Welcome name
   const firstName = parent?.first_name;

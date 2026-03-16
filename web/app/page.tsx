@@ -2,12 +2,6 @@
 
 import { useState } from "react";
 
-const STRIPE_FOUNDING_LINK = "{STRIPE_FOUNDING_LINK}";
-const STRIPE_GIFT_LINK = "{STRIPE_GIFT_LINK}";
-const STRIPE_ONETIME_LINK = "{STRIPE_ONETIME_LINK}";
-const STRIPE_FOUNDING_DIGITAL_LINK = "{STRIPE_FOUNDING_DIGITAL_LINK}";
-const STRIPE_GIFT_DIGITAL_LINK = "{STRIPE_GIFT_DIGITAL_LINK}";
-const STRIPE_ONETIME_DIGITAL_LINK = "{STRIPE_ONETIME_DIGITAL_LINK}";
 
 /* ─── Hero ─────────────────────────────────────────────────────────────────── */
 
@@ -28,20 +22,20 @@ function Hero() {
         </p>
         <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
           <a
-            href={STRIPE_FOUNDING_LINK}
+            href="/auth"
             className="w-full rounded-full bg-gold px-8 py-4 text-center font-sans text-base font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg sm:w-auto"
           >
-            Join as a Founding Member — $89/year
+            Get started — $89/year
           </a>
           <a
-            href={STRIPE_GIFT_LINK}
+            href="/auth"
             className="w-full rounded-full border-2 border-gold px-8 py-4 text-center font-sans text-base font-semibold text-gold transition-all hover:bg-gold hover:text-white sm:w-auto"
           >
             Give as a Gift — $89
           </a>
         </div>
         <a
-          href={STRIPE_ONETIME_LINK}
+          href="/auth"
           className="mt-4 inline-block font-sans text-sm text-navy/50 underline decoration-navy/20 underline-offset-2 transition-colors hover:text-gold hover:decoration-gold"
         >
           Just want one book? Try a single story — $29
@@ -191,10 +185,10 @@ function Pricing() {
                 Price locks in forever. Never increases.
               </p>
               <a
-                href={STRIPE_FOUNDING_LINK}
+                href="/auth"
                 className="mt-8 block rounded-full bg-gold py-3.5 text-center font-sans text-base font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg"
               >
-                Join as Founding Member
+                Get started
               </a>
               <ul className="mt-8 space-y-3">
                 {[
@@ -230,10 +224,10 @@ function Pricing() {
                 No shipping anywhere in the world.
               </p>
               <a
-                href={STRIPE_FOUNDING_DIGITAL_LINK}
+                href="/auth"
                 className="mt-4 block rounded-full border border-gold/40 py-2.5 text-center font-sans text-sm font-semibold text-gold transition-all hover:border-gold hover:bg-gold hover:text-white"
               >
-                Join digitally
+                Get started
               </a>
             </div>
           </div>
@@ -256,10 +250,10 @@ function Pricing() {
                 Give a full year of stories.
               </p>
               <a
-                href={STRIPE_GIFT_LINK}
+                href="/auth"
                 className="mt-8 block rounded-full bg-forest py-3.5 text-center font-sans text-base font-semibold text-white shadow-warm transition-all hover:bg-forest/90 hover:shadow-warm-lg"
               >
-                Give as a Gift
+                Get started
               </a>
               <ul className="mt-8 space-y-3">
                 {[
@@ -293,10 +287,10 @@ function Pricing() {
                 digital. Same stories, no shipping.
               </p>
               <a
-                href={STRIPE_GIFT_DIGITAL_LINK}
+                href="/auth"
                 className="mt-4 block rounded-full border border-forest/40 py-2.5 text-center font-sans text-sm font-semibold text-forest transition-all hover:border-forest hover:bg-forest hover:text-white"
               >
-                Give digitally
+                Get started
               </a>
             </div>
           </div>
@@ -317,10 +311,10 @@ function Pricing() {
                 No subscription required.
               </p>
               <a
-                href={STRIPE_ONETIME_LINK}
+                href="/auth"
                 className="mt-8 block rounded-full border-2 border-navy/15 py-3.5 text-center font-sans text-base font-semibold text-navy transition-all hover:border-gold hover:text-gold"
               >
-                Try a Single Book
+                Get started
               </a>
               <ul className="mt-8 space-y-3">
                 {[
@@ -354,10 +348,10 @@ function Pricing() {
                 One story, delivered instantly as a digital book.
               </p>
               <a
-                href={STRIPE_ONETIME_DIGITAL_LINK}
+                href="/auth"
                 className="mt-4 block rounded-full border border-navy/15 py-2.5 text-center font-sans text-sm font-semibold text-navy transition-all hover:border-gold hover:text-gold"
               >
-                Try digitally
+                Get started
               </a>
             </div>
           </div>

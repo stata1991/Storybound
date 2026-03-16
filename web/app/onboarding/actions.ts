@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
+import { logEvent } from "@/lib/audit";
 
 interface ChildProfileData {
   // Step 1
@@ -44,6 +45,32 @@ export async function saveChildProfile(data: ChildProfileData) {
 
   if (authError || !user) {
     return { error: "Not authenticated. Please sign in." };
+  }
+
+  // ── Input validation ──────────────────────────────────────────────────────
+  if (!data.name || data.name.length > 50) {
+    return { error: "Child name must be between 1 and 50 characters." };
+  }
+  if (!/^[a-zA-Z\s\-]+$/.test(data.name)) {
+    return { error: "Child name can only contain letters, spaces, and hyphens." };
+  }
+  const interestsList = parseCommaSeparated(data.interests);
+  if (interestsList.length > 10) {
+    return { error: "Maximum 10 interests allowed." };
+  }
+  if (interestsList.some((i) => i.length > 100)) {
+    return { error: "Each interest must be 100 characters or less." };
+  }
+  const avoidancesList = parseCommaSeparated(data.avoidances);
+  if (avoidancesList.length > 10) {
+    return { error: "Maximum 10 avoidances allowed." };
+  }
+  if (avoidancesList.some((a) => a.length > 100)) {
+    return { error: "Each avoidance must be 100 characters or less." };
+  }
+  const VALID_SUB_TYPES = ["founding", "gift", "one_time"];
+  if (data.subscriptionType && !VALID_SUB_TYPES.includes(data.subscriptionType)) {
+    return { error: "Invalid subscription type." };
   }
 
   // Service role client bypasses RLS for record creation
@@ -147,8 +174,8 @@ export async function saveChildProfile(data: ChildProfileData) {
       date_of_birth: data.dateOfBirth,
       pronouns: data.pronouns,
       reading_level: data.readingLevel,
-      interests: parseCommaSeparated(data.interests),
-      avoidances: parseCommaSeparated(data.avoidances),
+      interests: interestsList,
+      avoidances: avoidancesList,
       default_archetype: data.defaultArchetype || null,
       is_one_time: isOneTime,
       current_year: 1,
@@ -181,9 +208,130 @@ export async function saveChildProfile(data: ChildProfileData) {
     console.error("Failed to create initial harvest (non-blocking):", harvestError.message);
   }
 
-  redirect("/dashboard");
+  logEvent({
+    event_type: "onboarding.child_profile",
+    status: "success",
+    family_id: familyId,
+    child_id: child.id,
+    message: "Child profile created",
+  });
+
+  return { childId: child.id };
 }
 
 export async function addAnotherChild() {
   redirect("/onboarding?additional=true");
+}
+
+export async function uploadCharacterPhotos(childId: string, formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return { error: "Not authenticated. Please sign in." };
+  }
+
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  // Verify child belongs to user's family
+  const { data: parent } = await admin
+    .from("parents")
+    .select("family_id")
+    .eq("id", user.id)
+    .single();
+
+  if (!parent) return { error: "Parent record not found." };
+
+  const { data: child } = await admin
+    .from("children")
+    .select("id")
+    .eq("id", childId)
+    .eq("family_id", parent.family_id)
+    .single();
+
+  if (!child) return { error: "Child not found." };
+
+  // Ensure bucket exists (idempotent)
+  await admin.storage.createBucket("character-photos", {
+    public: false,
+    fileSizeLimit: 10 * 1024 * 1024,
+    allowedMimeTypes: ["image/jpeg", "image/png"],
+  });
+
+  const photos = formData.getAll("photos") as File[];
+  if (photos.length < 8) return { error: "At least 8 photos required." };
+  if (photos.length > 15) return { error: "Maximum 15 photos allowed." };
+
+  for (const photo of photos) {
+    if (!photo.size) continue;
+
+    const ext = photo.name.split(".").pop()?.toLowerCase() || "jpg";
+    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const storagePath = `${childId}/${fileName}`;
+
+    const { error: uploadError } = await admin.storage
+      .from("character-photos")
+      .upload(storagePath, photo, { contentType: photo.type, upsert: false });
+
+    if (uploadError) {
+      logEvent({
+        event_type: "onboarding.character_photos",
+        status: "error",
+        child_id: childId,
+        message: `Failed to upload photo: ${uploadError.message}`,
+      });
+      return { error: `Failed to upload photo: ${uploadError.message}` };
+    }
+  }
+
+  logEvent({
+    event_type: "onboarding.character_photos",
+    status: "success",
+    child_id: childId,
+    message: "Character photos uploaded",
+    metadata: { photo_count: photos.length },
+  });
+
+  redirect("/dashboard");
+}
+
+export async function getChildForCharacterPhotos(
+  childId: string
+): Promise<{ id: string; name: string } | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return null;
+
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  const { data: parent } = await admin
+    .from("parents")
+    .select("family_id")
+    .eq("id", user.id)
+    .single();
+
+  if (!parent) return null;
+
+  const { data: child } = await admin
+    .from("children")
+    .select("id, name")
+    .eq("id", childId)
+    .eq("family_id", parent.family_id)
+    .single();
+
+  return child as { id: string; name: string } | null;
 }

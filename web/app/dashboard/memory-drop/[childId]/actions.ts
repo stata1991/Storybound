@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
+import { logEvent } from "@/lib/audit";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -179,15 +180,38 @@ export async function submitMemoryDrop(
   const notes = formData.get("notes") as string;
   const captions = formData.getAll("captions") as string[];
 
+  // ── Input validation ────────────────────────────────────────────────────
+  if (milestone && milestone.length > 500) {
+    return { error: "Milestone description must be 500 characters or less." };
+  }
+  if (notes && notes.length > 500) {
+    return { error: "Notes must be 500 characters or less." };
+  }
+  if (archetype && archetype.length > 100) {
+    return { error: "Archetype must be 100 characters or less." };
+  }
+  const parsedInterests = interests
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parsedInterests.length > 10) {
+    return { error: "Maximum 10 interests allowed." };
+  }
+  if (parsedInterests.some((i) => i.length > 100)) {
+    return { error: "Each interest must be 100 characters or less." };
+  }
+  for (const cap of captions) {
+    if (cap.length > 200) {
+      return { error: "Each photo caption must be 200 characters or less." };
+    }
+  }
+
   // Update harvest record
   const { error: updateError } = await admin
     .from("harvests")
     .update({
       milestone_description: milestone,
-      current_interests: interests
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
+      current_interests: parsedInterests,
       character_archetype: archetype || child.default_archetype || null,
       notable_notes: notes || null,
       photo_paths: photoPaths,
@@ -199,8 +223,24 @@ export async function submitMemoryDrop(
     .eq("id", harvest.id);
 
   if (updateError) {
+    logEvent({
+      event_type: "memory_drop.submit",
+      status: "error",
+      harvest_id: harvest.id,
+      child_id: childId,
+      message: "Failed to save memory drop",
+    });
     return { error: "Failed to save memory. Please try again." };
   }
+
+  logEvent({
+    event_type: "memory_drop.submit",
+    status: "success",
+    harvest_id: harvest.id,
+    child_id: childId,
+    message: "Memory drop submitted",
+    metadata: { photo_count: photoPaths.length },
+  });
 
   redirect("/dashboard?submitted=true");
 }

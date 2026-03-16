@@ -3,6 +3,7 @@
 import { useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { saveChildProfile } from "./actions";
+import StepPhotos from "./StepPhotos";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -70,32 +71,13 @@ function calculateAge(dob: string): number {
   return age;
 }
 
-function getFirstMemoryDropDate(dob: string): string {
-  const today = new Date();
-  const birth = new Date(dob);
-
-  // Calculate next birthday
-  const nextBirthday = new Date(
-    today.getFullYear(),
-    birth.getMonth(),
-    birth.getDate()
-  );
-  if (nextBirthday <= today) {
-    nextBirthday.setFullYear(nextBirthday.getFullYear() + 1);
-  }
-
-  // If birthday is within 8 weeks, Q4 window opens now
-  const eightWeeksMs = 8 * 7 * 24 * 60 * 60 * 1000;
-  if (nextBirthday.getTime() - today.getTime() <= eightWeeksMs) {
-    return "Now — your birthday book window is open!";
-  }
-
-  // Otherwise, next Q1 window opens Jan 15
-  const nextYear =
-    today.getMonth() === 0 && today.getDate() < 15
-      ? today.getFullYear()
-      : today.getFullYear() + 1;
-  return `January 15, ${nextYear}`;
+function getMemoryDropWindow(): string {
+  const closes = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000);
+  const formatted = closes.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+  });
+  return `Open now — window closes ${formatted}`;
 }
 
 function formatDate(dateStr: string): string {
@@ -478,9 +460,7 @@ function StepConfirm({
   isAdditional: boolean;
 }) {
   const age = form.dateOfBirth ? calculateAge(form.dateOfBirth) : null;
-  const memoryDropDate = form.dateOfBirth
-    ? getFirstMemoryDropDate(form.dateOfBirth)
-    : "—";
+  const memoryDropDate = getMemoryDropWindow();
 
   const pronounLabel =
     PRONOUNS.find((p) => p.value === form.pronouns)?.label ?? "—";
@@ -549,17 +529,17 @@ function StepConfirm({
         </div>
       )}
 
-      {/* First memory drop */}
+      {/* Memory drop window */}
       <div className="rounded-2xl border border-gold/20 bg-gold/5 p-6">
         <p className="font-sans text-sm font-medium text-gold">
-          First memory drop
+          Memory drop window
         </p>
         <p className="mt-1 font-serif text-lg font-semibold text-navy">
           {memoryDropDate}
         </p>
         <p className="mt-3 font-sans text-sm leading-relaxed text-navy/60">
-          We&rsquo;ll send you an email when it&rsquo;s time to share{" "}
-          {form.name || "your child"}&rsquo;s first memory.
+          Share {form.name || "your child"}&rsquo;s photos and milestones
+          to start crafting their first story.
         </p>
       </div>
     </div>
@@ -578,20 +558,26 @@ function OnboardingWizard() {
   const [form, setForm] = useState<FormState>(INITIAL_STATE);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [childId, setChildId] = useState<string | null>(null);
 
   const onChange = (updates: Partial<FormState>) => {
     setForm((prev) => ({ ...prev, ...updates }));
   };
 
-  // If additional child, steps are: About → World → Confirm (skip address)
+  // Steps: About → World → [Address] → Confirm → Photos
   const steps = isAdditional
-    ? ["About", "Their world", "Confirm"]
-    : ["About", "Their world", "Address", "Confirm"];
+    ? ["About", "Their world", "Confirm", "Photos"]
+    : ["About", "Their world", "Address", "Confirm", "Photos"];
   const totalSteps = steps.length;
-  const isLastStep = step === totalSteps;
+  const confirmStep = isAdditional ? 3 : 4;
+  const isPhotosStep = step === totalSteps;
 
   // Map logical step to content
   function getStepContent() {
+    if (isPhotosStep && childId) {
+      return <StepPhotos childName={form.name} childId={childId} />;
+    }
+
     if (isAdditional) {
       switch (step) {
         case 1:
@@ -616,6 +602,13 @@ function OnboardingWizard() {
   }
 
   function getStepTitle(): string {
+    if (isPhotosStep) {
+      const name = form.name
+        ? form.name.charAt(0).toUpperCase() + form.name.slice(1)
+        : "your child";
+      return `Bring ${name} to life`;
+    }
+
     if (isAdditional) {
       switch (step) {
         case 1:
@@ -673,26 +666,30 @@ function OnboardingWizard() {
     }
   }
 
-  const handleNext = () => {
+  const handleNext = async () => {
+    // On the Confirm step, save the child profile before advancing to Photos
+    if (step === confirmStep && !childId) {
+      setError(null);
+      setLoading(true);
+      const result = await saveChildProfile({
+        ...form,
+        subscriptionType,
+      });
+      if (result && "error" in result) {
+        setError(result.error as string);
+        setLoading(false);
+        return;
+      }
+      if (result && "childId" in result) {
+        setChildId(result.childId as string);
+      }
+      setLoading(false);
+    }
     if (step < totalSteps) setStep(step + 1);
   };
 
   const handleBack = () => {
     if (step > 1) setStep(step - 1);
-  };
-
-  const handleSubmit = async () => {
-    setError(null);
-    setLoading(true);
-    const result = await saveChildProfile({
-      ...form,
-      subscriptionType,
-    });
-    if (result?.error) {
-      setError(result.error);
-      setLoading(false);
-    }
-    // On success, saveChildProfile redirects to /dashboard
   };
 
   return (
@@ -732,23 +729,23 @@ function OnboardingWizard() {
 
         {getStepContent()}
 
-        {/* Navigation buttons */}
-        <div className="mt-8 flex items-center gap-4">
-          {step > 1 && (
+        {/* Navigation buttons — hidden on Photos step (StepPhotos has its own) */}
+        {!isPhotosStep && (
+          <div className="mt-8 flex items-center gap-4">
+            {step > 1 && (
+              <button
+                type="button"
+                onClick={handleBack}
+                className="rounded-full border border-navy/15 px-6 py-3 font-sans text-sm font-medium text-navy/60 transition-all hover:border-gold/40 hover:text-gold"
+              >
+                Back
+              </button>
+            )}
+            <div className="flex-1" />
             <button
               type="button"
-              onClick={handleBack}
-              className="rounded-full border border-navy/15 px-6 py-3 font-sans text-sm font-medium text-navy/60 transition-all hover:border-gold/40 hover:text-gold"
-            >
-              Back
-            </button>
-          )}
-          <div className="flex-1" />
-          {isLastStep ? (
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={loading}
+              onClick={handleNext}
+              disabled={!canProceed() || loading}
               className="rounded-full bg-gold px-8 py-3.5 font-sans text-base font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? (
@@ -757,23 +754,14 @@ function OnboardingWizard() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Setting up your story...
+                  Saving...
                 </span>
               ) : (
-                "Begin our story \u2192"
+                "Next"
               )}
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleNext}
-              disabled={!canProceed()}
-              className="rounded-full bg-gold px-8 py-3.5 font-sans text-base font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
