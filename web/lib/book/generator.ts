@@ -138,19 +138,9 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
     illustrationBase64.push(b64);
   }
 
-  // Determine cover vs scene images.
-  // If 9 images: first = cover, rest = 8 scenes.
-  // If 8 images: first scene image doubles as cover.
-  let coverImageBase64: string;
-  let sceneImages: string[];
-
-  if (illustrationBase64.length >= 9) {
-    coverImageBase64 = illustrationBase64[0];
-    sceneImages = illustrationBase64.slice(1, 9);
-  } else {
-    coverImageBase64 = illustrationBase64[0];
-    sceneImages = illustrationBase64.slice(0, 8);
-  }
+  // Index 0 is always the dedicated cover; rest are scene illustrations
+  const coverImageBase64 = illustrationBase64[0];
+  const sceneImages = illustrationBase64.slice(1);
 
   // ── (d+e) Generate HTML ────────────────────────────────────────────────
 

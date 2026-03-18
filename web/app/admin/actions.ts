@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { logEvent } from "@/lib/audit";
+import { buildCoverPrompt } from "@/lib/book/cover-prompt";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -475,6 +476,45 @@ export async function triggerIllustrationPipeline(
 
   const episode = episodeRaw as unknown as EpisodeDbRow | null;
 
+  // ── Build cover prompt from story bible hero ──────────────────────────────
+
+  let coverPrompt: string | undefined;
+
+  const { data: bibleRaw } = await supa
+    .from("story_bibles")
+    .select("hero_profile, season_arc")
+    .eq("child_id", harvest.child_id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (bibleRaw) {
+    const hero = (bibleRaw as Record<string, unknown>).hero_profile as
+      | Record<string, unknown>
+      | undefined;
+    const arc = (bibleRaw as Record<string, unknown>).season_arc as
+      | Record<string, unknown>
+      | undefined;
+
+    const phys = hero?.physical_description as
+      | Record<string, string>
+      | undefined;
+    const traits = hero?.personality_traits as string[] | undefined;
+
+    const appearance = phys
+      ? [phys.hair, phys.eyes, phys.skin_tone, phys.signature_look]
+          .filter(Boolean)
+          .join(", ")
+      : "";
+    const personality = traits?.join(", ") ?? "";
+    const theme =
+      (arc?.overarching_theme as string) ?? harvest.season ?? "adventure";
+
+    if (appearance) {
+      coverPrompt = buildCoverPrompt(appearance, personality, theme);
+    }
+  }
+
   // ── Download character photos to Buffer (never disk) ─────────────────────
 
   const childId = harvest.child_id;
@@ -560,7 +600,11 @@ export async function triggerIllustrationPipeline(
   try {
     genResult = await callModal<ModalGenerateResponse>(
       process.env.MODAL_GENERATE_URL!,
-      { face_model_id: trainResult.face_model_id, prompts }
+      {
+        face_model_id: trainResult.face_model_id,
+        prompts,
+        ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
+      }
     );
   } catch (e) {
     // Generation failed — still clean up LoRA weights, but keep photos for retry

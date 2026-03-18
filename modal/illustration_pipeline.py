@@ -55,6 +55,9 @@ pipeline_image = (
         "peft>=0.7.0",
         "Pillow>=10.0.0",
         "fastapi[standard]",
+        "basicsr>=1.4.2",
+        "realesrgan>=0.3.0",
+        "opencv-python-headless>=4.8.0",
     )
     .run_commands(
         # Pre-download SDXL base model into the image so cold starts
@@ -64,7 +67,12 @@ pipeline_image = (
         "snapshot_download("
         "'stabilityai/stable-diffusion-xl-base-1.0', "
         f"cache_dir='{MODEL_CACHE_PATH}'"
-        ")\""
+        ")\"",
+        # Pre-download Real-ESRGAN weights for cover upscaling
+        "mkdir -p /root/.cache/realesrgan",
+        "curl -L -o /root/.cache/realesrgan/RealESRGAN_x2plus.pth "
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/"
+        "v0.2.1/RealESRGAN_x2plus.pth",
     )
 )
 
@@ -74,6 +82,51 @@ STYLE_SUFFIX = (
     ", watercolor children's book illustration, "
     "Ghibli-warm, soft lighting, detailed background, age-appropriate"
 )
+
+COVER_NEGATIVE_PROMPT = (
+    "text, title, logo, watermark, signature, words, letters, "
+    "blurry, deformed, extra limbs, cropped"
+)
+
+
+# ─── Cover helpers ────────────────────────────────────────────────────────────
+
+
+def build_cover_prompt(character_sheet: str = "") -> str:
+    """Build a dedicated cover prompt using the character identity token."""
+    base = (
+        "A full-body portrait of sks child standing in a magical storybook "
+        "landscape, looking at the viewer with a warm smile, golden hour lighting"
+    )
+    return base + STYLE_SUFFIX
+
+
+def upscale_with_realesrgan(pil_image):
+    """Upscale a PIL image 2x using Real-ESRGAN."""
+    import numpy as np
+    from basicsr.archs.rrdbnet_arch import RRDBNet
+    from realesrgan import RealESRGANer
+
+    model = RRDBNet(
+        num_in_ch=3, num_out_ch=3, num_feat=64,
+        num_block=23, num_grow_ch=32, scale=2,
+    )
+    upsampler = RealESRGANer(
+        scale=2,
+        model_path="/root/.cache/realesrgan/RealESRGAN_x2plus.pth",
+        model=model,
+        half=True,  # fp16 on GPU
+    )
+
+    # PIL → numpy (BGR for OpenCV)
+    img_np = np.array(pil_image)[:, :, ::-1]
+    output, _ = upsampler.enhance(img_np, outscale=2)
+    # numpy (BGR) → PIL (RGB)
+    from PIL import Image
+
+    output_rgb = output[:, :, ::-1]
+    return Image.fromarray(output_rgb)
+
 
 # ─── Auth helper ─────────────────────────────────────────────────────────────
 
@@ -351,18 +404,21 @@ async def train_face_model(req: Request):
 async def generate_illustrations(req: Request):
     """
     Load LoRA weights and generate illustrations from prompts.
+    Index 0 is always a dedicated cover image (1024×1024 + 2x upscale).
 
     Request body:
       {
         "face_model_id": "uuid",
-        "prompts": ["prompt 1", "prompt 2", ...]
+        "prompts": ["scene 1", "scene 2", ...],
+        "cover_prompt": "optional dedicated cover prompt"
       }
 
     Response:
       {
         "face_model_id": "uuid",
         "illustrations": [
-          {"index": 0, "data": "base64...", "prompt": "..."},
+          {"index": 0, "data": "base64...", "prompt": "cover"},
+          {"index": 1, "data": "base64...", "prompt": "scene 1"},
           ...
         ]
       }
@@ -377,12 +433,13 @@ async def generate_illustrations(req: Request):
 
     face_model_id = body.get("face_model_id", "")
     prompts = body.get("prompts", [])
+    cover_prompt_text = body.get("cover_prompt", "")
 
     if not face_model_id:
         web_error({"error": "face_model_id required"})
 
-    if not prompts or len(prompts) > 8:
-        web_error({"error": "Between 1 and 8 prompts required"})
+    if not prompts or len(prompts) > 12:
+        web_error({"error": "Between 1 and 12 prompts required"})
 
     # Verify LoRA weights exist
     lora_dir = Path(LORA_VOLUME_PATH) / face_model_id
@@ -400,12 +457,56 @@ async def generate_illustrations(req: Request):
     pipe.to("cuda")
     pipe.load_lora_weights(str(lora_dir))
 
-    # ── Generate images ─────────────────────────────────────────────────────
+    # ── Generate cover (index 0): 1024×1024, higher quality ────────────────
 
     illustrations = []
 
+    # Use dedicated cover prompt, or fall back to build_cover_prompt()
+    if not cover_prompt_text:
+        cover_prompt_text = build_cover_prompt()
+    styled_cover = cover_prompt_text.rstrip(". ") + STYLE_SUFFIX
+
+    cover_image = pipe(
+        prompt=styled_cover,
+        negative_prompt=COVER_NEGATIVE_PROMPT,
+        width=1024,
+        height=1024,
+        num_inference_steps=40,
+        guidance_scale=8.5,
+    ).images[0]
+
+    # Free SDXL pipe before loading Real-ESRGAN to avoid OOM
+    del pipe
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # Upscale cover 2x via Real-ESRGAN (~2048×2048)
+    cover_image = upscale_with_realesrgan(cover_image)
+
+    buf = io.BytesIO()
+    cover_image.save(buf, format="PNG")
+    illustrations.append({
+        "index": 0,
+        "data": base64.b64encode(buf.getvalue()).decode("utf-8"),
+        "prompt": cover_prompt_text,
+    })
+    del cover_image
+    gc.collect()
+
+    # ── Reload pipeline for scene generation ─────────────────────────────
+
+    pipe = StableDiffusionXLPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        cache_dir=MODEL_CACHE_PATH,
+        torch_dtype=torch.float16,
+        variant="fp16",
+    )
+    pipe.to("cuda")
+    pipe.load_lora_weights(str(lora_dir))
+
+    # ── Generate scene images (index 1+): 768×768 ───────────────────────
+
     for i, raw_prompt in enumerate(prompts):
-        # Append Storybound style to every prompt
         styled_prompt = raw_prompt.rstrip(". ") + STYLE_SUFFIX
 
         image = pipe(
@@ -416,18 +517,15 @@ async def generate_illustrations(req: Request):
             guidance_scale=7.5,
         ).images[0]
 
-        # Convert to PNG bytes in memory (no disk)
         buf = io.BytesIO()
         image.save(buf, format="PNG")
         b64_data = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-        illustrations.append(
-            {
-                "index": i,
-                "data": b64_data,
-                "prompt": raw_prompt,
-            }
-        )
+        illustrations.append({
+            "index": i + 1,
+            "data": b64_data,
+            "prompt": raw_prompt,
+        })
 
     # ── Cleanup ─────────────────────────────────────────────────────────────
 

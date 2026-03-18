@@ -91,21 +91,23 @@ function coverPage(params: BookParams): string {
     <div style="
       position: absolute;
       bottom: 0; left: 0; right: 0;
-      padding: 48px 40px 40px;
-      background: linear-gradient(to top, rgba(27,42,74,0.85) 0%, rgba(27,42,74,0.4) 60%, transparent 100%);
+      padding: 48px 40px 48px;
+      background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.35) 60%, transparent 100%);
     ">
       <p style="
         margin: 0 0 4px 0;
         font-family: ${SERIF};
-        font-size: 36px;
+        font-size: 42px;
         font-weight: 700;
         color: #ffffff;
         line-height: 1.2;
+        letter-spacing: -0.5px;
+        text-shadow: 0 2px 12px rgba(0,0,0,0.4);
       ">${escapeHtml(params.title)}</p>
       <p style="
         margin: 0 0 12px 0;
         font-family: ${SERIF};
-        font-size: 18px;
+        font-size: 22px;
         color: ${GOLD};
         font-style: italic;
       ">A story for ${escapeHtml(params.childName)}</p>
@@ -114,7 +116,7 @@ function coverPage(params: BookParams): string {
         font-family: ${NUNITO};
         font-size: 12px;
         color: rgba(255,255,255,0.7);
-        letter-spacing: 1.5px;
+        letter-spacing: 2px;
         text-transform: uppercase;
       ">A Storybound Story &middot; ${escapeHtml(capitalize(params.season))} ${params.year}</p>
     </div>
