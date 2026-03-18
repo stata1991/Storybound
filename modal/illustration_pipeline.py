@@ -69,10 +69,13 @@ pipeline_image = (
         f"cache_dir='{MODEL_CACHE_PATH}'"
         ")\"",
         # Pre-download Real-ESRGAN weights for cover upscaling
-        "mkdir -p /root/.cache/realesrgan",
-        "curl -L -o /root/.cache/realesrgan/RealESRGAN_x2plus.pth "
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/"
-        "v0.2.1/RealESRGAN_x2plus.pth",
+        "python -c \""
+        "import urllib.request, os; "
+        "os.makedirs('/root/.cache/realesrgan', exist_ok=True); "
+        "urllib.request.urlretrieve("
+        "'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth', "
+        "'/root/.cache/realesrgan/RealESRGAN_x2plus.pth'"
+        ")\"",
     )
 )
 
