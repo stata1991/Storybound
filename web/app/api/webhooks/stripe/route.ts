@@ -122,8 +122,6 @@ export async function POST(request: Request) {
     );
   }
 
-  console.log("[stripe-webhook] event received:", event.type, "id:", event.id);
-
   const admin = getAdmin();
 
   // Log every webhook event received
@@ -140,7 +138,6 @@ export async function POST(request: Request) {
     const session = event.data.object as Stripe.Checkout.Session;
     const customerId = session.customer as string | null;
     const customerEmail = session.customer_details?.email;
-    console.log("[stripe-webhook] customerEmail:", customerEmail);
 
     // Fetch line items to get the price ID
     let priceId: string | null = null;
@@ -178,7 +175,6 @@ export async function POST(request: Request) {
         message: "No family found for checkout email",
         metadata: { customer_email: customerEmail, price_id: priceId },
       });
-      console.log("[stripe-webhook] No family found for email:", customerEmail);
       return NextResponse.json({ received: true, note: "No family found for email" });
     }
 
@@ -196,14 +192,10 @@ export async function POST(request: Request) {
       updateFields.stripe_customer_id = customerId;
     }
 
-    const { data: updateData, error: updateError } = await admin
+    await admin
       .from("families")
       .update(updateFields)
-      .eq("id", familyId)
-      .select();
-
-    console.log("[stripe-webhook] family update result:", JSON.stringify({ data: updateData, error: updateError }));
-    console.log("[stripe-webhook] familyId (activated):", familyId, "stripe_customer_id:", customerId);
+      .eq("id", familyId);
 
     logEvent({
       event_type: "stripe.checkout",
@@ -325,14 +317,11 @@ export async function POST(request: Request) {
           `);
         }
 
-        console.log("[stripe-webhook] Sending welcome email to:", customerEmail);
         const result = await sendEmail({
           to: customerEmail,
           subject: "Welcome to Storybound \ud83c\udf89",
           html: emailBody,
         });
-        console.log("[stripe-webhook] sendEmail result:", JSON.stringify(result));
-
         logEvent({
           event_type: "stripe.welcome_email",
           status: result.success ? "success" : "error",

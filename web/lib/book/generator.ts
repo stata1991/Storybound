@@ -19,6 +19,7 @@ interface EpisodeRow {
 
 interface ChildRow {
   name: string;
+  date_of_birth: string | null;
 }
 
 /* ─── Admin client ────────────────────────────────────────────────────────── */
@@ -88,7 +89,7 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
 
   const { data: childRaw } = await admin
     .from("children")
-    .select("name")
+    .select("name, date_of_birth")
     .eq("id", episode.child_id)
     .single();
 
@@ -97,6 +98,24 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
   }
 
   const child = childRaw as unknown as ChildRow;
+
+  // Calculate child's age from DOB; default to 6 if missing or unparseable
+  let childAge = 6;
+  if (child.date_of_birth) {
+    const dob = new Date(child.date_of_birth);
+    if (isNaN(dob.getTime())) {
+      console.warn(`Missing DOB for child, defaulting to age 6`);
+    } else {
+      const now = new Date();
+      childAge = now.getFullYear() - dob.getFullYear();
+      const monthDiff = now.getMonth() - dob.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) {
+        childAge--;
+      }
+    }
+  } else {
+    console.warn(`Missing DOB for child, defaulting to age 6`);
+  }
 
   const { data: harvestRaw } = await admin
     .from("harvests")
@@ -143,6 +162,7 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
 
   const bookParams: BookParams = {
     childName: child.name,
+    age: childAge,
     season: harvest.season,
     year: episode.year,
     title: episode.title,

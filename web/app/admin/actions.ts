@@ -25,6 +25,9 @@ export interface HarvestRow {
   status: string;
   episodeId: string | null;
   illustrationStatus: string | null;
+  episodeStatus: string | null;
+  printFilePath: string | null;
+  childAge: number | null;
 }
 
 export interface FamilyRow {
@@ -46,8 +49,8 @@ interface HarvestDbRow {
   photo_count: number | null;
   status: string;
   child_id: string;
-  children: { name: string; family_id: string } | null;
-  episodes: { id: string; illustration_status: string }[] | null;
+  children: { name: string; family_id: string; date_of_birth: string | null } | null;
+  episodes: { id: string; illustration_status: string; status: string; print_file_path: string | null }[] | null;
 }
 
 interface HarvestFullDbRow {
@@ -180,22 +183,33 @@ export async function getAdminStats(): Promise<AdminStats | { error: string }> {
 
 /* ─── Harvests ─────────────────────────────────────────────────────────────── */
 
-export async function getAllHarvests(): Promise<HarvestRow[] | { error: string }> {
+export async function getAllHarvests(): Promise<
+  { harvests: HarvestRow[]; shippedCount: number } | { error: string }
+> {
   const auth = await verifyAdmin();
   if ("error" in auth) return { error: auth.error };
 
   const admin = getAdmin();
 
-  // Fetch harvests with child name, family_id, and episode info
-  const { data: harvests } = await admin
-    .from("harvests")
-    .select(
-      "id, season, submitted_at, photo_count, status, child_id, children(name, family_id), episodes(id, illustration_status)"
-    )
-    .order("submitted_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false });
+  // Fetch harvests with child name, family_id, DOB, and episode info
+  const [{ data: harvests }, { count: shippedRaw }] = await Promise.all([
+    admin
+      .from("harvests")
+      .select(
+        "id, season, submitted_at, photo_count, status, child_id, children(name, family_id, date_of_birth), episodes(id, illustration_status, status, print_file_path)"
+      )
+      .order("submitted_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false }),
+    admin
+      .from("episodes")
+      .select("id", { count: "exact", head: true })
+      .in("status", ["printing", "shipped"]),
+  ]);
 
-  if (!harvests || harvests.length === 0) return [];
+  const shippedCount = shippedRaw ?? 0;
+
+  if (!harvests || harvests.length === 0)
+    return { harvests: [], shippedCount };
 
   const rows = harvests as unknown as HarvestDbRow[];
 
@@ -218,8 +232,9 @@ export async function getAllHarvests(): Promise<HarvestRow[] | { error: string }
     emailByFamily[p.family_id] = p.email;
   });
 
-  return rows.map((h) => {
+  const harvestRows = rows.map((h) => {
     const ep = h.episodes?.[0] ?? null;
+    const dob = h.children?.date_of_birth ?? null;
     return {
       id: h.id,
       childName: h.children?.name ?? "Unknown",
@@ -230,8 +245,13 @@ export async function getAllHarvests(): Promise<HarvestRow[] | { error: string }
       status: h.status,
       episodeId: ep?.id ?? null,
       illustrationStatus: ep?.illustration_status ?? null,
+      episodeStatus: ep?.status ?? null,
+      printFilePath: ep?.print_file_path ?? null,
+      childAge: dob ? storyChildAge(dob) : null,
     };
   });
+
+  return { harvests: harvestRows, shippedCount };
 }
 
 /* ─── Families ─────────────────────────────────────────────────────────────── */
@@ -751,6 +771,89 @@ const PROHIBITED_WORDS = [
   "monster", "monsters", "hurt", "blood", "die", "dead",
 ];
 
+/* ─── Age-aware story style ──────────────────────────────────────────────── */
+
+interface StoryStyle {
+  wordsPerScene: number;
+  sentenceLength: string;
+  vocabulary: string;
+  tone: string;
+  tension: string;
+  emotionalArc: string;
+  catchphrase: boolean;
+  exampleSentence: string;
+}
+
+const STORY_STYLE: Record<string, StoryStyle> = {
+  "3-4": {
+    wordsPerScene: 30,
+    sentenceLength: "very short — max 8 words per sentence",
+    vocabulary: "only simple everyday words a toddler knows",
+    tone: "warm, playful, lots of repetition and rhythm — almost sing-song",
+    tension: "none — everything feels safe and cozy",
+    emotionalArc: "child feels safe and loved throughout — no worry, just wonder",
+    catchphrase: true,
+    exampleSentence:
+      'Suppu ran fast. "Vroom-vroom!" he said. The truck beeped back.',
+  },
+  "5-6": {
+    wordsPerScene: 55,
+    sentenceLength: "short to medium — max 15 words per sentence",
+    vocabulary:
+      "simple but expanding — can introduce 1-2 new words per scene with context clues",
+    tone: "warm and encouraging, mildly adventurous, child feels capable",
+    tension: "very mild — a small problem the child solves with help",
+    emotionalArc: "small worry → child tries something → it works → pride",
+    catchphrase: true,
+    exampleSentence:
+      "Suppu looked at the muddy road and thought hard. He had an idea!",
+  },
+  "7-8": {
+    wordsPerScene: 90,
+    sentenceLength:
+      "medium — varied, mix of short punchy and longer descriptive",
+    vocabulary:
+      "age-appropriate chapter book — richer adjectives, some figurative language",
+    tone: "adventurous, child is competent and takes initiative",
+    tension:
+      "moderate — a real problem with a non-obvious solution, child figures it out",
+    emotionalArc: "real problem → failed first attempt → better idea → earns resolution",
+    catchphrase: false,
+    exampleSentence:
+      "The mud stretched across the whole road like a brown sea. Suppu crossed his arms and thought. There had to be a way.",
+  },
+  "9-10": {
+    wordsPerScene: 130,
+    sentenceLength: "varied — short for impact, long for atmosphere",
+    vocabulary:
+      "early chapter book level — metaphors, some complex sentences, emotional nuance",
+    tone: "the child faces a real challenge and grows through it — emotional arc matters",
+    tension:
+      "genuine stakes — something the child cares about is at risk before it resolves",
+    emotionalArc: "genuine stakes → self-doubt moment → growth → resolution that changes something",
+    catchphrase: false,
+    exampleSentence:
+      "Standing at the edge of the flooded road, Suppu felt the familiar knot in his stomach — the one that always showed up right before something hard.",
+  },
+};
+
+const SCENE_COUNT: Record<string, number> = {
+  "3-4": 6,
+  "5-6": 8,
+  "7-8": 10,
+  "9-10": 12,
+};
+
+function getStoryStyle(age: number): { style: StoryStyle; sceneCount: number; band: string } {
+  const clamped = Math.max(3, Math.min(10, age));
+  let band: string;
+  if (clamped <= 4) band = "3-4";
+  else if (clamped <= 6) band = "5-6";
+  else if (clamped <= 8) band = "7-8";
+  else band = "9-10";
+  return { style: STORY_STYLE[band], sceneCount: SCENE_COUNT[band], band };
+}
+
 interface ChildStoryDbRow {
   id: string;
   name: string;
@@ -825,11 +928,6 @@ async function callClaude(
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
-
-  console.log(
-    `[callClaude] attempt=${attempt} raw response (first 500 chars):`,
-    text.slice(0, 500)
-  );
 
   const cleaned = text
     .replace(/^```json?\s*/, "")
@@ -1036,7 +1134,8 @@ function buildCharacterBlock(storyBible: Record<string, unknown>): string {
 function buildEpisodePrompt(
   child: ChildStoryDbRow,
   storyBible: Record<string, unknown>,
-  harvest: HarvestStoryDbRow
+  harvest: HarvestStoryDbRow,
+  age: number
 ): { system: string; user: string } {
   const episodeNumber = harvest.quarter;
   const isEp4 = episodeNumber === 4;
@@ -1052,20 +1151,48 @@ function buildEpisodePrompt(
     : "";
 
   const characterBlock = buildCharacterBlock(storyBible);
+  const { style, sceneCount } = getStoryStyle(age);
+  const totalWordTarget = sceneCount * style.wordsPerScene;
+
+  // Extract hero traits from Story Bible for character consistency instruction
+  const hero = storyBible.hero as Record<string, unknown> | undefined;
+  const heroPhys = hero?.physical_description as Record<string, string> | undefined;
+  const heroTraits = hero?.personality_traits as string[] | undefined;
+  const physDesc = heroPhys
+    ? `${heroPhys.hair ?? ""}, ${heroPhys.eyes ?? ""}, ${heroPhys.skin_tone ?? ""}, ${heroPhys.signature_look ?? ""}`.replace(/, ,/g, ",").replace(/^, |, $/g, "")
+    : "see character block";
+  const personalityDesc = heroTraits?.join(", ") ?? "see character block";
 
   return {
-    system: `You are a children's book author. You are writing one episode of a quarterly personalized storybook series.
-The child is the hero. The story must feel genuinely personal, not templated.
+    system: `You are writing a personalized children's storybook for ${child.name}, age ${age}.
+
+Writing style rules — follow these exactly:
+- Each scene must be ${style.wordsPerScene} words or fewer
+- Sentence length: ${style.sentenceLength}
+- Vocabulary level: ${style.vocabulary}
+- Tone: ${style.tone}
+- Tension level: ${style.tension}
+${style.catchphrase ? `- Give ${child.name} a short personal catchphrase they repeat at exciting moments (1 line, invented for this child based on their traits)` : "- No catchphrase needed at this age"}
+
+Emotional arc for this age: ${style.emotionalArc}
+The story must follow this arc. Do not skip the middle — the resolution only lands if the struggle is real first.
+
+Example of the correct sentence style for this age:
+"${style.exampleSentence}"
+
+Never write above this reading level. If a sentence feels too complex, break it into two.
+
+The child hero is ${child.name}. Physical description: ${physDesc}.
+Personality: ${personalityDesc}.
+Make these traits visible through actions and dialogue, not just narration.
 
 CRITICAL: Character consistency
 You are given a detailed character reference block below. Every physical description, personality trait, and speech pattern MUST match exactly. Do not invent new traits, change appearance details, or contradict the Story Bible. The illustrations will be generated from your scene descriptions, so visual accuracy is essential.
 
 Episode rules:
-- 1,200–1,800 words of story content (32-page book format)
-- This is a hard minimum. If your episode is under 1,200 words, expand scene descriptions, add sensory detail, and deepen the emotional beats until you reach it. Count your words before finishing.
-- Split into 8 scenes of roughly equal length
+- Generate exactly ${sceneCount} scenes. Each scene should advance the story. Do not pad or repeat. End with a satisfying resolution in the final scene.
+- Target ~${totalWordTarget} words total (${sceneCount} scenes × ~${style.wordsPerScene} words each)
 - Each scene gets one illustration prompt (separate field)
-- Language matches the child's reading level: ${child.reading_level.replace(/_/g, " ")}
 - Episode is self-contained (new reader can follow it)
 - Episode threads the seasonal arc (existing reader feels continuity)
 ${isEp4 ? "- Episode 4 must reference specific moments from Episodes 1, 2, and 3" : ""}
@@ -1113,20 +1240,31 @@ Output this exact JSON structure:
   "parent_note": "A brief warm note for the parent about what this story celebrated (2-3 sentences, not printed in book)"
 }
 
-Remember: exactly 8 scenes. Each illustration_prompt must describe ${child.name} using the exact physical details from the Characters block and end with [FACE REF: use reference image storybound_ref_CHILD_ID_q${episodeNumber}.png]`,
+Remember: exactly ${sceneCount} scenes. Each illustration_prompt must describe ${child.name} using the exact physical details from the Characters block and end with [FACE REF: use reference image storybound_ref_CHILD_ID_q${episodeNumber}.png]`,
   };
 }
 
 function runStoryQualityChecks(
   episode: Record<string, unknown>,
-  child: ChildStoryDbRow
+  child: ChildStoryDbRow,
+  age: number
 ): string[] {
   const warnings: string[] = [];
   const scenes = episode.scenes as Record<string, unknown>[] | undefined;
-  const sceneCount = scenes?.length ?? 0;
+  const actualSceneCount = scenes?.length ?? 0;
+  const { style, sceneCount: expectedSceneCount } = getStoryStyle(age);
 
-  if (sceneCount !== 8) {
-    warnings.push(`Expected 8 scenes, got ${sceneCount}.`);
+  if (actualSceneCount < expectedSceneCount) {
+    console.warn(
+      `Scene count too low: expected ${expectedSceneCount}, got ${actualSceneCount} — flagging for admin review`
+    );
+    warnings.push(
+      `REVIEW REQUIRED: Expected ${expectedSceneCount} scenes (age ${age}), got ${actualSceneCount}. Book is too short for this age band.`
+    );
+  } else if (actualSceneCount > expectedSceneCount) {
+    warnings.push(
+      `Expected ${expectedSceneCount} scenes (age ${age}), got ${actualSceneCount}.`
+    );
   }
 
   if (scenes) {
@@ -1137,6 +1275,28 @@ function runStoryQualityChecks(
       warnings.push(
         `[FACE REF] tag missing on scenes: ${missingRef.map((s) => s.number).join(", ")}.`
       );
+    }
+
+    // Per-scene word count validation + trimming
+    const wordLimit = style.wordsPerScene;
+    const trimThreshold = Math.ceil(wordLimit * 1.2);
+
+    for (const scene of scenes) {
+      const text = (scene.text as string) ?? "";
+      const words = text.trim().split(/\s+/);
+      if (words.length > trimThreshold) {
+        console.warn(
+          `Scene ${scene.number}: ${words.length} words exceeds ${wordLimit} limit by >20% — trimming to ${wordLimit}`
+        );
+        warnings.push(
+          `Scene ${scene.number} trimmed: ${words.length} → ${wordLimit} words.`
+        );
+        scene.text = words.slice(0, wordLimit).join(" ") + "\u2026";
+      } else if (words.length > wordLimit) {
+        warnings.push(
+          `Scene ${scene.number}: ${words.length} words (limit ${wordLimit}, within 20% tolerance).`
+        );
+      }
     }
 
     const storyText = scenes
@@ -1168,11 +1328,18 @@ function runStoryQualityChecks(
       warnings.push(`Hero name "${child.name}" not found in story text.`);
     }
 
-    const wordCount = storyText.split(/\s+/).length;
-    if (wordCount < 1200) {
-      warnings.push(`Word count ${wordCount} is below minimum 1200.`);
-    } else if (wordCount > 1800) {
-      warnings.push(`Word count ${wordCount} exceeds maximum 1800.`);
+    const totalWordTarget = expectedSceneCount * style.wordsPerScene;
+    const totalWordCount = storyText.split(/\s+/).length;
+    const minWords = Math.floor(totalWordTarget * 0.7);
+    const maxWords = Math.ceil(totalWordTarget * 1.3);
+    if (totalWordCount < minWords) {
+      warnings.push(
+        `Total word count ${totalWordCount} below minimum ${minWords} (target ${totalWordTarget}).`
+      );
+    } else if (totalWordCount > maxWords) {
+      warnings.push(
+        `Total word count ${totalWordCount} exceeds maximum ${maxWords} (target ${totalWordTarget}).`
+      );
     }
   }
 
@@ -1352,7 +1519,7 @@ export async function generateStory(
 
   // ── Generate episode (Pass 2) ──────────────────────────────────────────
 
-  const episodePrompt = buildEpisodePrompt(child, storyBible, harvest);
+  const episodePrompt = buildEpisodePrompt(child, storyBible, harvest, age);
 
   let episodeResult: Record<string, unknown>;
   try {
@@ -1373,7 +1540,7 @@ export async function generateStory(
 
   // ── Quality checks ────────────────────────────────────────────────────
 
-  const qualityWarnings = runStoryQualityChecks(episodeResult, child);
+  const qualityWarnings = runStoryQualityChecks(episodeResult, child, age);
 
   // ── Insert episode ────────────────────────────────────────────────────
 
@@ -1415,4 +1582,254 @@ export async function generateStory(
   });
 
   return { success: true, qualityWarnings };
+}
+
+/* ─── Print flow ──────────────────────────────────────────────────────────── */
+
+export async function getPrintDetails(
+  harvestId: string
+): Promise<
+  | {
+      childName: string;
+      childAge: number | null;
+      shippingAddress: string | null;
+      pdfUrl: string;
+    }
+  | { error: string }
+> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const admin = getAdmin();
+
+  const { data: ep } = await admin
+    .from("episodes")
+    .select("id, child_id, print_file_path")
+    .eq("harvest_id", harvestId)
+    .single();
+
+  if (!ep) return { error: "No episode found for this harvest." };
+  const episode = ep as unknown as {
+    id: string;
+    child_id: string;
+    print_file_path: string | null;
+  };
+
+  if (!episode.print_file_path) {
+    return { error: "No PDF has been generated for this episode." };
+  }
+
+  const { data: childRaw } = await admin
+    .from("children")
+    .select("name, date_of_birth, family_id")
+    .eq("id", episode.child_id)
+    .single();
+
+  if (!childRaw) return { error: "Child not found." };
+  const child = childRaw as unknown as {
+    name: string;
+    date_of_birth: string | null;
+    family_id: string;
+  };
+
+  // Fetch shipping address from family
+  const { data: familyRaw } = await admin
+    .from("families")
+    .select(
+      "shipping_name, address_line1, address_line2, city, state, zip, country"
+    )
+    .eq("id", child.family_id)
+    .single();
+
+  let shippingAddress: string | null = null;
+  if (familyRaw) {
+    const f = familyRaw as unknown as {
+      shipping_name: string | null;
+      address_line1: string | null;
+      address_line2: string | null;
+      city: string | null;
+      state: string | null;
+      zip: string | null;
+      country: string | null;
+    };
+    if (f.address_line1) {
+      const parts = [
+        f.shipping_name,
+        f.address_line1,
+        f.address_line2,
+        [f.city, f.state].filter(Boolean).join(", ") +
+          (f.zip ? ` ${f.zip}` : ""),
+        f.country && f.country !== "US" ? f.country : null,
+      ].filter(Boolean);
+      shippingAddress = parts.join("\n");
+    }
+  }
+
+  // Generate signed URL for PDF (24-hour expiry)
+  const { data: urlData, error: urlErr } = await admin.storage
+    .from("books")
+    .createSignedUrl(episode.print_file_path, 86400);
+
+  if (urlErr || !urlData?.signedUrl) {
+    return { error: "Failed to generate PDF download URL." };
+  }
+
+  return {
+    childName: child.name,
+    childAge: child.date_of_birth ? storyChildAge(child.date_of_birth) : null,
+    shippingAddress,
+    pdfUrl: urlData.signedUrl,
+  };
+}
+
+export async function markSentToPrint(
+  harvestId: string
+): Promise<{ success: true; sentAt: string } | { error: string }> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const admin = getAdmin();
+
+  const { data: ep } = await admin
+    .from("episodes")
+    .select("id, status")
+    .eq("harvest_id", harvestId)
+    .single();
+
+  if (!ep) return { error: "No episode found." };
+  const episode = ep as unknown as { id: string; status: string };
+
+  if (episode.status !== "approved") {
+    return { error: `Episode status is '${episode.status}', expected 'approved'.` };
+  }
+
+  const sentAt = new Date().toISOString();
+
+  const { error: updateErr } = await admin
+    .from("episodes")
+    .update({ status: "printing" })
+    .eq("id", episode.id);
+
+  if (updateErr) {
+    return { error: `Failed to update: ${updateErr.message}` };
+  }
+
+  logEvent({
+    event_type: "print.sent",
+    status: "success",
+    harvest_id: harvestId,
+    message: "Marked as sent to print",
+  });
+
+  return { success: true, sentAt };
+}
+
+export async function markShipped(
+  harvestId: string
+): Promise<{ success: true; shippedAt: string } | { error: string }> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const admin = getAdmin();
+
+  const { data: ep } = await admin
+    .from("episodes")
+    .select("id, child_id, status")
+    .eq("harvest_id", harvestId)
+    .single();
+
+  if (!ep) return { error: "No episode found." };
+  const episode = ep as unknown as {
+    id: string;
+    child_id: string;
+    status: string;
+  };
+
+  if (episode.status !== "printing") {
+    return { error: `Episode status is '${episode.status}', expected 'printing'.` };
+  }
+
+  const shippedAt = new Date().toISOString();
+
+  const { error: updateErr } = await admin
+    .from("episodes")
+    .update({ status: "shipped" })
+    .eq("id", episode.id);
+
+  if (updateErr) {
+    return { error: `Failed to update: ${updateErr.message}` };
+  }
+
+  // Fetch parent email + child name for shipping notification
+  const { data: childRaw } = await admin
+    .from("children")
+    .select("name, family_id")
+    .eq("id", episode.child_id)
+    .single();
+
+  if (childRaw) {
+    const child = childRaw as unknown as { name: string; family_id: string };
+    const { data: parentRaw } = await admin
+      .from("parents")
+      .select("email")
+      .eq("family_id", child.family_id)
+      .single();
+
+    if (parentRaw) {
+      const parentEmail = (parentRaw as unknown as { email: string }).email;
+      const { sendEmail } = await import("@/lib/email/resend");
+
+      const NAVY = "#1B2A4A";
+      const GOLD = "#C8963E";
+      const CREAM = "#FDF8F0";
+      const MUTED = "#8A93A6";
+
+      await sendEmail({
+        to: parentEmail,
+        subject: `${child.name}\u2019s book is on its way!`,
+        html: `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background-color:${CREAM};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background-color:${CREAM};">
+<tr><td align="center" style="padding:40px 20px;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background-color:#ffffff;border-radius:16px;overflow:hidden;">
+<tr><td style="padding:32px 32px 0 32px;">
+  <p style="margin:0;font-size:20px;font-weight:700;color:${NAVY};font-family:Georgia,serif;">Storybound</p>
+</td></tr>
+<tr><td style="padding:24px 32px 32px 32px;">
+  <p style="margin:0 0 16px 0;font-size:22px;font-weight:700;color:${NAVY};line-height:1.4;">
+    ${child.name}\u2019s story is on its way to your doorstep.
+  </p>
+  <p style="margin:0 0 24px 0;font-size:15px;color:#444;line-height:1.6;">
+    We\u2019ve sent ${child.name}\u2019s custom illustrated book to the printer, and it\u2019s now heading your way. Expect it to arrive within 7\u201310 business days.
+  </p>
+  <p style="margin:0 0 24px 0;font-size:15px;color:#444;line-height:1.6;">
+    Every page was crafted from the memories you shared \u2014 this is truly ${child.name}\u2019s story, and no other copy exists in the world.
+  </p>
+  <a href="${process.env.NEXT_PUBLIC_APP_URL ?? "https://storybound.co"}/dashboard"
+     style="display:inline-block;padding:14px 32px;background-color:${GOLD};color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;border-radius:50px;">
+    View your dashboard
+  </a>
+</td></tr>
+<tr><td style="padding:24px 32px;border-top:1px solid #E8E4DF;">
+  <p style="margin:0 0 8px 0;font-size:13px;color:${MUTED};line-height:1.5;">
+    Questions? Reply to this email or contact us at storybound@gmail.com
+  </p>
+  <p style="margin:0;font-size:13px;color:${MUTED};line-height:1.5;">The Storybound team</p>
+</td></tr>
+</table>
+</td></tr></table>
+</body></html>`,
+      });
+    }
+  }
+
+  logEvent({
+    event_type: "print.shipped",
+    status: "success",
+    harvest_id: harvestId,
+    message: "Marked as shipped, notification sent",
+  });
+
+  return { success: true, shippedAt };
 }

@@ -1,16 +1,57 @@
 /* ─── Storybound Book HTML Template ────────────────────────────────────────── */
 
+import { readFileSync } from "fs";
+import { join } from "path";
+
+/* ─── Embedded Nunito font (latin, woff2) ────────────────────────────────── */
+
+const nunitoBase64 = readFileSync(
+  join(process.cwd(), "web/lib/book/fonts/Nunito-Latin.woff2")
+).toString("base64");
+
 /* ─── Brand colors ────────────────────────────────────────────────────────── */
 
 const NAVY = "#1B2A4A";
 const GOLD = "#C8963E";
 const CREAM = "#FDF8F0";
 const MUTED = "#8A93A6";
+const WARM_WHITE = "#FFFDF7";
+
+/* ─── Font stack ─────────────────────────────────────────────────────────── */
+
+const NUNITO = "'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const SERIF = "Georgia, 'Playfair Display', serif";
+
+/* ─── Age profiles ───────────────────────────────────────────────────────── */
+
+interface AgeProfile {
+  label: string;
+  minAge: number;
+  maxAge: number;
+  layout: "overlay" | "sideBySide";
+  fontSize: number;      // scene body text px
+  lineHeight: number;    // unitless multiplier
+  chapterLabel: boolean; // show "Chapter N" header
+  wordsPerScene: number; // max words before truncation (safety net)
+}
+
+const AGE_PROFILES: AgeProfile[] = [
+  { label: "3-4", minAge: 3, maxAge: 4, layout: "overlay",    fontSize: 24, lineHeight: 1.9, chapterLabel: false, wordsPerScene: 40 },
+  { label: "5-6", minAge: 5, maxAge: 6, layout: "overlay",    fontSize: 20, lineHeight: 1.8, chapterLabel: false, wordsPerScene: 60 },
+  { label: "7-8", minAge: 7, maxAge: 8, layout: "sideBySide", fontSize: 16, lineHeight: 1.7, chapterLabel: true,  wordsPerScene: 120 },
+  { label: "9-10", minAge: 9, maxAge: 10, layout: "sideBySide", fontSize: 14, lineHeight: 1.65, chapterLabel: true,  wordsPerScene: 180 },
+];
+
+function getAgeProfile(age: number): AgeProfile {
+  const clamped = Math.max(3, Math.min(10, age));
+  return AGE_PROFILES.find((p) => clamped >= p.minAge && clamped <= p.maxAge) ?? AGE_PROFILES[0];
+}
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
 
 export interface BookParams {
   childName: string;
+  age: number;
   season: string;
   year: number;
   title: string;
@@ -55,7 +96,7 @@ function coverPage(params: BookParams): string {
     ">
       <p style="
         margin: 0 0 4px 0;
-        font-family: Georgia, 'Playfair Display', serif;
+        font-family: ${SERIF};
         font-size: 36px;
         font-weight: 700;
         color: #ffffff;
@@ -63,14 +104,14 @@ function coverPage(params: BookParams): string {
       ">${escapeHtml(params.title)}</p>
       <p style="
         margin: 0 0 12px 0;
-        font-family: Georgia, 'Playfair Display', serif;
+        font-family: ${SERIF};
         font-size: 18px;
         color: ${GOLD};
         font-style: italic;
       ">A story for ${escapeHtml(params.childName)}</p>
       <p style="
         margin: 0;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-family: ${NUNITO};
         font-size: 12px;
         color: rgba(255,255,255,0.7);
         letter-spacing: 1.5px;
@@ -94,7 +135,7 @@ function dedicationPage(dedication: string): string {
     ">
       <p style="
         margin: 0;
-        font-family: Georgia, 'Playfair Display', serif;
+        font-family: ${SERIF};
         font-size: 18px;
         color: ${NAVY};
         font-style: italic;
@@ -106,12 +147,16 @@ function dedicationPage(dedication: string): string {
   `);
 }
 
-/* ─── Illustration page (full bleed) ──────────────────────────────────────── */
+/* ─── Scene page — overlay layout (ages 3–6) ─────────────────────────────── */
 
-function illustrationPage(imageBase64: string): string {
+function sceneOverlay(
+  scene: { number: number; text: string; imageBase64: string },
+  profile: AgeProfile
+): string {
+  const safeText = truncateToWords(scene.text, profile.wordsPerScene);
   return page(`
     <img
-      src="data:image/png;base64,${imageBase64}"
+      src="data:image/png;base64,${scene.imageBase64}"
       style="
         position: absolute;
         top: 0; left: 0;
@@ -119,40 +164,103 @@ function illustrationPage(imageBase64: string): string {
         object-fit: cover;
       "
     />
-  `, "#000000");
-}
-
-/* ─── Text page ───────────────────────────────────────────────────────────── */
-
-function textPage(sceneNumber: number, text: string): string {
-  return page(`
     <div style="
       position: absolute;
-      top: 24px;
-      right: 28px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 11px;
-      color: ${MUTED};
-    ">${sceneNumber}</div>
-    <div style="
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      padding: 60px 56px;
-      box-sizing: border-box;
+      bottom: 0; left: 0; right: 0;
+      padding: 40px 48px 48px;
+      background: linear-gradient(
+        to top,
+        rgba(255,253,247,0.97) 0%,
+        rgba(255,253,247,0.85) 35%,
+        transparent 60%,
+        transparent 100%
+      );
     ">
       <p style="
         margin: 0;
-        font-family: Georgia, 'Playfair Display', serif;
-        font-size: 18px;
+        font-family: ${NUNITO};
+        font-size: ${profile.fontSize}px;
+        font-weight: 600;
         color: ${NAVY};
-        line-height: 1.8;
+        line-height: ${profile.lineHeight};
         text-align: left;
-        max-width: 6in;
-      ">${escapeHtml(text)}</p>
+      ">${escapeHtml(safeText)}</p>
+    </div>
+  `, "#000000");
+}
+
+/* ─── Scene page — side-by-side layout (ages 7–10) ───────────────────────── */
+
+function sceneSideBySide(
+  scene: { number: number; text: string; imageBase64: string },
+  profile: AgeProfile
+): string {
+  const safeText = truncateToWords(scene.text, profile.wordsPerScene);
+  return page(`
+    <div style="
+      display: flex;
+      width: 100%;
+      height: 100%;
+    ">
+      <div style="
+        width: 50%;
+        height: 100%;
+        overflow: hidden;
+        position: relative;
+      ">
+        <img
+          src="data:image/png;base64,${scene.imageBase64}"
+          style="
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            object-fit: cover;
+          "
+        />
+      </div>
+      <div style="
+        width: 50%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 48px 40px;
+        box-sizing: border-box;
+        background-color: ${CREAM};
+      ">
+        ${profile.chapterLabel ? `
+        <p style="
+          margin: 0 0 16px 0;
+          font-family: ${NUNITO};
+          font-size: 11px;
+          font-weight: 700;
+          color: ${GOLD};
+          letter-spacing: 2px;
+          text-transform: uppercase;
+        ">Chapter ${scene.number}</p>` : ""}
+        <p style="
+          margin: 0;
+          font-family: ${NUNITO};
+          font-size: ${profile.fontSize}px;
+          font-weight: 400;
+          color: ${NAVY};
+          line-height: ${profile.lineHeight};
+          text-align: left;
+        ">${escapeHtml(safeText)}</p>
+      </div>
     </div>
   `);
+}
+
+/* ─── Scene page dispatcher ──────────────────────────────────────────────── */
+
+function scenePage(
+  scene: { number: number; text: string; imageBase64: string },
+  profile: AgeProfile
+): string {
+  return profile.layout === "overlay"
+    ? sceneOverlay(scene, profile)
+    : sceneSideBySide(scene, profile);
 }
 
 /* ─── Back page ───────────────────────────────────────────────────────────── */
@@ -171,7 +279,7 @@ function backPage(childName: string): string {
     ">
       <p style="
         margin: 0 0 8px 0;
-        font-family: Georgia, 'Playfair Display', serif;
+        font-family: ${SERIF};
         font-size: 22px;
         color: ${NAVY};
         font-weight: 700;
@@ -179,14 +287,14 @@ function backPage(childName: string): string {
       ">This story was made for ${escapeHtml(childName)}.</p>
       <p style="
         margin: 0 0 48px 0;
-        font-family: Georgia, 'Playfair Display', serif;
+        font-family: ${SERIF};
         font-size: 16px;
         color: ${MUTED};
         font-style: italic;
       ">From the people who love them.</p>
       <p style="
         margin: 0 0 48px 0;
-        font-family: Georgia, 'Playfair Display', serif;
+        font-family: ${SERIF};
         font-size: 28px;
         font-weight: 700;
         color: ${NAVY};
@@ -194,7 +302,7 @@ function backPage(childName: string): string {
       ">Storybound</p>
       <p style="
         margin: 0;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-family: ${NUNITO};
         font-size: 10px;
         color: ${MUTED};
         line-height: 1.6;
@@ -218,9 +326,17 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
 
+function truncateToWords(text: string, max: number): string {
+  const words = text.trim().split(/\s+/);
+  if (words.length <= max) return text;
+  console.warn(`Scene text truncated: ${words.length} words → ${max}`);
+  return words.slice(0, max).join(" ") + "\u2026";
+}
+
 /* ─── Main export ─────────────────────────────────────────────────────────── */
 
 export function generateBookHTML(params: BookParams): string {
+  const profile = getAgeProfile(params.age);
   const pages: string[] = [];
 
   // 1. Cover
@@ -229,13 +345,12 @@ export function generateBookHTML(params: BookParams): string {
   // 2. Dedication
   pages.push(dedicationPage(params.dedication));
 
-  // 3. Scene spreads (illustration + text alternating)
+  // 3. Scene pages (layout adapts by age)
   for (const scene of params.scenes) {
-    pages.push(illustrationPage(scene.imageBase64));
-    pages.push(textPage(scene.number, scene.text));
+    pages.push(scenePage(scene, profile));
   }
 
-  // 4. Final page (as a text-only page)
+  // 4. Final page
   pages.push(page(`
     <div style="
       display: flex;
@@ -247,7 +362,7 @@ export function generateBookHTML(params: BookParams): string {
     ">
       <p style="
         margin: 0;
-        font-family: Georgia, 'Playfair Display', serif;
+        font-family: ${SERIF};
         font-size: 20px;
         color: ${NAVY};
         font-style: italic;
@@ -266,6 +381,18 @@ export function generateBookHTML(params: BookParams): string {
 <head>
   <meta charset="utf-8">
   <style>
+    @font-face {
+      font-family: 'Nunito';
+      src: url('data:font/woff2;base64,${nunitoBase64}') format('woff2');
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Nunito';
+      src: url('data:font/woff2;base64,${nunitoBase64}') format('woff2');
+      font-weight: 600;
+      font-style: normal;
+    }
     @page {
       size: 8.5in 8.5in;
       margin: 0;

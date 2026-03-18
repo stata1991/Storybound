@@ -6,6 +6,7 @@ import {
   getAllHarvests,
   getAllFamilies,
 } from "./actions";
+import type { AdminStats } from "./actions";
 import HarvestRow from "./components/HarvestRow";
 
 export default async function AdminPage() {
@@ -23,11 +24,32 @@ export default async function AdminPage() {
     redirect("/dashboard");
   }
 
-  const [stats, harvests, families] = await Promise.all([
+  const [statsResult, harvestsResult, familiesResult] = await Promise.all([
     getAdminStats(),
     getAllHarvests(),
     getAllFamilies(),
   ]);
+
+  const stats: AdminStats =
+    statsResult && "totalFamilies" in statsResult
+      ? statsResult
+      : {
+          totalFamilies: 0,
+          activeSubscriptions: 0,
+          harvestsSubmitted: 0,
+          booksInProduction: 0,
+          booksShipped: 0,
+          giftClaimsPending: 0,
+        };
+  const harvests =
+    harvestsResult && "harvests" in harvestsResult
+      ? harvestsResult.harvests
+      : [];
+  const shippedCount =
+    harvestsResult && "shippedCount" in harvestsResult
+      ? harvestsResult.shippedCount
+      : 0;
+  const families = Array.isArray(familiesResult) ? familiesResult : [];
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -75,6 +97,22 @@ export default async function AdminPage() {
               </span>
             )}
           </h2>
+
+          {shippedCount > 0 && (
+            <div className={`mb-4 rounded-lg border px-4 py-3 text-sm ${
+              shippedCount >= 50
+                ? "border-amber-200 bg-amber-50 text-amber-800"
+                : "border-gray-200 bg-white text-gray-600"
+            }`}>
+              <span className="font-semibold">{shippedCount} / 50</span>{" "}
+              manual orders processed
+              {shippedCount >= 50 && (
+                <span className="ml-2 font-medium">
+                  — Time to automate printing — see docs/gelato-integration.md
+                </span>
+              )}
+            </div>
+          )}
 
           {harvests.length === 0 ? (
             <div className="rounded-lg border border-gray-200 bg-white px-6 py-8 text-center">
