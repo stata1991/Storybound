@@ -46,6 +46,10 @@ secrets = modal.Secret.from_name("storybound-secrets")
 
 pipeline_image = (
     modal.Image.debian_slim(python_version="3.11")
+    .apt_install(
+        "libgl1-mesa-glx",
+        "libglib2.0-0",
+    )
     .pip_install(
         "torch>=2.0.0",
         "torchvision>=0.15.0",
@@ -55,9 +59,8 @@ pipeline_image = (
         "peft>=0.7.0",
         "Pillow>=10.0.0",
         "fastapi[standard]",
-        "basicsr>=1.4.2",
-        "realesrgan>=0.3.0",
         "opencv-python-headless>=4.8.0",
+        "httpx>=0.27.0",
     )
     .run_commands(
         # Pre-download SDXL base model into the image so cold starts
@@ -68,28 +71,132 @@ pipeline_image = (
         "'stabilityai/stable-diffusion-xl-base-1.0', "
         f"cache_dir='{MODEL_CACHE_PATH}'"
         ")\"",
+        # Pre-download madebyollin fp16-stable VAE
+        "python -c \""
+        "from huggingface_hub import snapshot_download; "
+        "snapshot_download("
+        "'madebyollin/sdxl-vae-fp16-fix', "
+        f"cache_dir='{MODEL_CACHE_PATH}'"
+        ")\"",
         # Pre-download Real-ESRGAN weights for cover upscaling
         "python -c \""
         "import urllib.request, os; "
         "os.makedirs('/root/.cache/realesrgan', exist_ok=True); "
         "urllib.request.urlretrieve("
-        "'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth', "
-        "'/root/.cache/realesrgan/RealESRGAN_x2plus.pth'"
+        "'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth', "
+        "'/root/.cache/realesrgan/realesr-animevideov3.pth'"
         ")\"",
     )
 )
 
 # ─── Style suffix ────────────────────────────────────────────────────────────
 
-STYLE_SUFFIX = (
-    ", watercolor children's book illustration, "
-    "Ghibli-warm, soft lighting, detailed background, age-appropriate"
-)
+# Kept short (~7 tokens) to stay within CLIP 77-token budget
+STYLE_SUFFIX = ", gouache illustration, children's book, warm colors"
 
 COVER_NEGATIVE_PROMPT = (
     "text, title, logo, watermark, signature, words, letters, "
-    "blurry, deformed, extra limbs, cropped"
+    "blurry, deformed, extra limbs, cropped, "
+    "teenager, adult, woman, man, older person, "
+    "mature face, adult proportions"
 )
+
+SCENE_NEGATIVE_PROMPT = (
+    "text, title, logo, watermark, signature, words, letters, "
+    "blurry, deformed, extra limbs, cropped, "
+    "teenager, adult, woman, man, older person, "
+    "mature face, adult proportions, earrings on adult, "
+    "adult jewelry"
+)
+
+
+# ─── Age prefix (Fix 1) ─────────────────────────────────────────────────────
+
+
+def get_age_prefix(age: int, pronouns: str = "they_them") -> str:
+    """
+    Short age-anchoring prefix for SDXL prompts (~4 tokens).
+    Must come FIRST — before LoRA token and scene description.
+    Kept minimal to stay within CLIP 77-token budget.
+    """
+    if "she" in pronouns.lower() or pronouns == "she_her":
+        word = "girl"
+    elif "he" in pronouns.lower() or pronouns == "he_him":
+        word = "boy"
+    else:
+        word = "child"
+
+    clamped = max(3, min(10, age))
+
+    if clamped <= 4:
+        return f"3-year-old toddler {word}"
+    elif clamped <= 6:
+        return f"5-year-old little {word}"
+    elif clamped <= 8:
+        return f"8-year-old {word}"
+    else:
+        return f"10-year-old preteen {word}"
+
+
+def truncate_scene_description(prompt: str, max_words: int = 20) -> str:
+    """Take first sentence only, max N words. Strips [FACE REF...] tags."""
+    import re
+    # Remove [FACE REF: ...] tags — SDXL can't use text as image references
+    prompt = re.sub(r"\[FACE REF[^\]]*\]", "", prompt).strip()
+    # Take first sentence
+    first_sentence = prompt.split(".")[0].strip()
+    words = first_sentence.split()
+    if len(words) > max_words:
+        first_sentence = " ".join(words[:max_words])
+    return first_sentence
+
+
+def extract_core_appearance(description: str, max_words: int = 10) -> str:
+    """Extract the 3 most distinctive visual features, max N words."""
+    if not description:
+        return ""
+    # Split on commas, take first 3 meaningful parts
+    parts = [p.strip() for p in description.split(",") if p.strip()]
+    result = ", ".join(parts[:3])
+    words = result.split()
+    if len(words) > max_words:
+        result = " ".join(words[:max_words])
+    return result
+
+
+# ─── Color mood from memory photos (Fix 8B) ─────────────────────────────────
+
+
+def get_dominant_color_mood(photos_b64: list) -> str:
+    """
+    Analyze up to 3 memory photos to extract color/lighting mood keywords.
+    Appended to style suffix for scene generation.
+    """
+    from PIL import Image
+
+    moods = set()
+    for b64 in photos_b64[:3]:
+        try:
+            img = Image.open(
+                io.BytesIO(base64.b64decode(b64))
+            ).convert("RGB").resize((50, 50))
+            pixels = list(img.getdata())
+            avg_r = sum(p[0] for p in pixels) / len(pixels)
+            avg_g = sum(p[1] for p in pixels) / len(pixels)
+            avg_b = sum(p[2] for p in pixels) / len(pixels)
+
+            if avg_r > 180 and avg_g > 140:
+                moods.add("warm golden lighting")
+            elif avg_b > 180:
+                moods.add("cool bright daylight")
+            elif avg_r > 160 and avg_b < 120:
+                moods.add("warm cozy indoor lighting")
+            else:
+                moods.add("soft natural lighting")
+        except Exception:
+            continue
+
+    return ", ".join(moods) if moods else ""
 
 
 # ─── Cover helpers ────────────────────────────────────────────────────────────
@@ -104,31 +211,121 @@ def build_cover_prompt(character_sheet: str = "") -> str:
     return base + STYLE_SUFFIX
 
 
-def upscale_with_realesrgan(pil_image):
-    """Upscale a PIL image 2x using Real-ESRGAN."""
+def upscale_with_realesrgan(image: "Image.Image") -> "Image.Image":
+    """
+    2x upscale using Real-ESRGAN animevideov3 weights.
+    Pure PyTorch implementation — no basicsr or realesrgan packages.
+    """
     import numpy as np
-    from basicsr.archs.rrdbnet_arch import RRDBNet
-    from realesrgan import RealESRGANer
-
-    model = RRDBNet(
-        num_in_ch=3, num_out_ch=3, num_feat=64,
-        num_block=23, num_grow_ch=32, scale=2,
-    )
-    upsampler = RealESRGANer(
-        scale=2,
-        model_path="/root/.cache/realesrgan/RealESRGAN_x2plus.pth",
-        model=model,
-        half=True,  # fp16 on GPU
-    )
-
-    # PIL → numpy (BGR for OpenCV)
-    img_np = np.array(pil_image)[:, :, ::-1]
-    output, _ = upsampler.enhance(img_np, outscale=2)
-    # numpy (BGR) → PIL (RGB)
+    import torch
+    import torch.nn as nn
     from PIL import Image
 
-    output_rgb = output[:, :, ::-1]
-    return Image.fromarray(output_rgb)
+    model_path = "/root/.cache/realesrgan/realesr-animevideov3.pth"
+
+    if not os.path.exists(model_path):
+        raise RuntimeError(
+            f"Real-ESRGAN weights not found at {model_path}. "
+            "Rebuild the Modal image with: modal deploy modal/illustration_pipeline.py"
+        )
+
+    # SRVGGNetCompact architecture — matches animevideov3 weights exactly
+    # Implementing inline to avoid any external package dependency
+    class SRVGGNetCompact(nn.Module):
+        def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64,
+                     num_conv=16, upscale=4, act_type='prelu'):
+            super().__init__()
+            self.num_in_ch = num_in_ch
+            self.num_out_ch = num_out_ch
+            self.num_feat = num_feat
+            self.num_conv = num_conv
+            self.upscale = upscale
+            self.act_type = act_type
+
+            self.body = nn.ModuleList()
+            self.body.append(nn.Conv2d(num_in_ch, num_feat, 3, 1, 1))
+            if act_type == 'relu':
+                activation = nn.ReLU(inplace=True)
+            elif act_type == 'prelu':
+                activation = nn.PReLU(num_parameters=num_feat)
+            elif act_type == 'leakyrelu':
+                activation = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+            self.body.append(activation)
+
+            for _ in range(num_conv):
+                self.body.append(nn.Conv2d(num_feat, num_feat, 3, 1, 1))
+                if act_type == 'relu':
+                    activation = nn.ReLU(inplace=True)
+                elif act_type == 'prelu':
+                    activation = nn.PReLU(num_parameters=num_feat)
+                elif act_type == 'leakyrelu':
+                    activation = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+                self.body.append(activation)
+
+            self.body.append(
+                nn.Conv2d(num_feat, num_out_ch * upscale * upscale, 3, 1, 1)
+            )
+            self.upsampler = nn.PixelShuffle(upscale)
+
+        def forward(self, x):
+            out = x
+            for layer in self.body:
+                out = layer(out)
+            out = self.upsampler(out)
+            # add the nearest upsampled input as residual
+            base = torch.nn.functional.interpolate(
+                x, scale_factor=self.upscale,
+                mode='nearest'
+            )
+            return out + base
+
+    # Load model
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = SRVGGNetCompact(
+        num_in_ch=3, num_out_ch=3,
+        num_feat=64, num_conv=16,
+        upscale=4, act_type='prelu'
+    )
+
+    # Load weights — handle both raw state dict and wrapped formats
+    weights = torch.load(model_path, map_location=device)
+    if 'params' in weights:
+        model.load_state_dict(weights['params'], strict=True)
+    elif 'params_ema' in weights:
+        model.load_state_dict(weights['params_ema'], strict=True)
+    else:
+        model.load_state_dict(weights, strict=True)
+
+    model = model.to(device)
+    model.eval()
+
+    # Convert PIL to tensor
+    img_np = np.array(image.convert("RGB")).astype(np.float32) / 255.0
+    img_tensor = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).to(device)
+
+    # Upscale with autocast on GPU
+    # A10G has 24GB — 1024x1024 at fp32 is fine without tiling
+    _, _, h, w = img_tensor.shape
+
+    with torch.no_grad():
+        if torch.cuda.is_available():
+            with torch.cuda.amp.autocast():
+                output_4x = model(img_tensor)
+        else:
+            output_4x = model(img_tensor)
+
+    # Downsample from 4x to 2x
+    output_2x = torch.nn.functional.interpolate(
+        output_4x,
+        size=(h * 2, w * 2),
+        mode='bicubic',
+        align_corners=False
+    )
+
+    # Convert back to PIL
+    output_np = output_2x.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    output_np = (output_np * 255.0).clip(0, 255).astype(np.uint8)
+    return Image.fromarray(output_np)
 
 
 # ─── Auth helper ─────────────────────────────────────────────────────────────
@@ -184,6 +381,11 @@ async def train_face_model(req: Request):
 
     body = await req.json()
 
+    # ── Parse webhook callback params (optional — enables async flow) ──────
+    callback_url = body.get("callback_url")
+    child_id = body.get("child_id")
+    harvest_id = body.get("harvest_id")
+
     import torch
     from diffusers import StableDiffusionXLPipeline
     from peft import LoraConfig, get_peft_model
@@ -203,26 +405,73 @@ async def train_face_model(req: Request):
     face_model_id = str(uuid.uuid4())
 
     # Decode to PIL — pure memory, no disk
+    import cv2
+    import numpy as np
+
+    face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+
     pil_images = []
-    for b64_str in photos_b64:
+    n_cropped = 0
+
+    for i, b64_str in enumerate(photos_b64):
         img_bytes = base64.b64decode(b64_str)
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        # Center-crop to square for face focus
         w, h = img.size
-        side = min(w, h)
-        left = (w - side) // 2
-        top = (h - side) // 2
-        img = img.crop((left, top, left + side, top + side))
+
+        # Face detection on grayscale numpy array
+        gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+        faces = face_cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50)
+        )
+
+        if len(faces) > 0:
+            # Use largest face by area
+            fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+
+            # Add 40% padding around face bounding box
+            pad_x = int(fw * 0.4)
+            pad_y = int(fh * 0.4)
+            x1 = max(0, fx - pad_x)
+            y1 = max(0, fy - pad_y)
+            x2 = min(w, fx + fw + pad_x)
+            y2 = min(h, fy + fh + pad_y)
+
+            # Make it square (expand the shorter side)
+            crop_w = x2 - x1
+            crop_h = y2 - y1
+            if crop_w > crop_h:
+                diff = crop_w - crop_h
+                y1 = max(0, y1 - diff // 2)
+                y2 = min(h, y1 + crop_w)
+            elif crop_h > crop_w:
+                diff = crop_h - crop_w
+                x1 = max(0, x1 - diff // 2)
+                x2 = min(w, x1 + crop_h)
+
+            img = img.crop((x1, y1, x2, y2))
+            n_cropped += 1
+            print(f"Photo {i}: face detected, cropped to {x2-x1}x{y2-y1}")
+        else:
+            # Fallback: center-crop to square
+            side = min(w, h)
+            left = (w - side) // 2
+            top = (h - side) // 2
+            img = img.crop((left, top, left + side, top + side))
+            print(f"Photo {i}: no face detected, using original")
+
         img = img.resize((512, 512), Image.LANCZOS)
         pil_images.append(img)
+
+    print(f"Preprocessed {n_cropped}/{len(photos_b64)} photos with face crops")
 
     # ── Load base model ─────────────────────────────────────────────────────
 
     pipe = StableDiffusionXLPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         cache_dir=MODEL_CACHE_PATH,
-        torch_dtype=torch.float16,
-        variant="fp16",
+        torch_dtype=torch.bfloat16,
     )
     pipe.to("cuda")
 
@@ -237,8 +486,8 @@ async def train_face_model(req: Request):
     # ── Apply LoRA to UNet ──────────────────────────────────────────────────
 
     lora_config = LoraConfig(
-        r=4,
-        lora_alpha=4,
+        r=16,
+        lora_alpha=16,
         target_modules=[
             "to_q",
             "to_k",
@@ -248,6 +497,7 @@ async def train_face_model(req: Request):
         lora_dropout=0.0,
     )
     unet = get_peft_model(unet, lora_config)
+    unet.to(torch.bfloat16)
     unet.train()
 
     # Freeze everything except LoRA
@@ -307,7 +557,7 @@ async def train_face_model(req: Request):
     latents_list = []
     with torch.no_grad():
         for img in pil_images:
-            img_tensor = transform(img).unsqueeze(0).to("cuda", dtype=torch.float16)
+            img_tensor = transform(img).unsqueeze(0).to("cuda", dtype=torch.bfloat16)
             latent = vae.encode(img_tensor).latent_dist.sample() * vae.config.scaling_factor
             latents_list.append(latent)
 
@@ -322,16 +572,21 @@ async def train_face_model(req: Request):
 
     # ── Training loop ───────────────────────────────────────────────────────
 
-    optimizer = torch.optim.AdamW(unet.parameters(), lr=1e-4, weight_decay=1e-2)
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=5e-5, weight_decay=1e-2)
 
-    num_steps = 150
+    lora_params = [p for p in unet.parameters() if p.requires_grad]
+    print(f"Trainable LoRA params: {len(lora_params)}")
+    print(f"Total param tensors: {sum(1 for _ in unet.parameters())}")
+    print(f"Training config: steps=800, rank=16, lr=5e-5")
+
+    num_steps = 800
     num_images = len(latents_list)
 
     # SDXL additional conditioning: time_ids
     add_time_ids = torch.tensor(
         [[512.0, 512.0, 0.0, 0.0, 512.0, 512.0]],
         device="cuda",
-        dtype=torch.float16,
+        dtype=torch.bfloat16,
     )
 
     for step in range(num_steps):
@@ -350,20 +605,21 @@ async def train_face_model(req: Request):
         # Add noise to latent
         noisy_latent = noise_scheduler.add_noise(latent, noise, timesteps)
 
-        # Predict noise
-        added_cond_kwargs = {
-            "text_embeds": pooled_prompt_embeds.to(dtype=torch.float16),
-            "time_ids": add_time_ids,
-        }
-        noise_pred = unet(
-            noisy_latent,
-            timesteps,
-            encoder_hidden_states=prompt_embeds.to(dtype=torch.float16),
-            added_cond_kwargs=added_cond_kwargs,
-        ).sample
+        # Forward pass in bf16 autocast (optimizer stays float32)
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            added_cond_kwargs = {
+                "text_embeds": pooled_prompt_embeds.to(dtype=torch.bfloat16),
+                "time_ids": add_time_ids,
+            }
+            noise_pred = unet(
+                noisy_latent,
+                timesteps,
+                encoder_hidden_states=prompt_embeds.to(dtype=torch.bfloat16),
+                added_cond_kwargs=added_cond_kwargs,
+            ).sample
 
-        # MSE loss against actual noise
-        loss = torch.nn.functional.mse_loss(noise_pred, noise)
+            # MSE loss against actual noise
+            loss = torch.nn.functional.mse_loss(noise_pred, noise)
 
         optimizer.zero_grad()
         loss.backward()
@@ -374,9 +630,45 @@ async def train_face_model(req: Request):
     save_dir = Path(LORA_VOLUME_PATH) / face_model_id
     save_dir.mkdir(parents=True, exist_ok=True)
 
+    print(f"Training LoRA for face_model_id: {face_model_id}")
+    print(f"Saving LoRA weights to: {save_dir}")
+
+    # Abort on NaN/Inf — prevent corrupted checkpoint
+    for name, param in unet.named_parameters():
+        if param.requires_grad:
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                raise RuntimeError(
+                    f"NaN/Inf detected in {name} before save. "
+                    "Aborting to prevent corrupted checkpoint."
+                )
+
     # Save only the LoRA adapter weights
     unet.save_pretrained(str(save_dir))
-    lora_volume.commit()
+    await lora_volume.commit.aio()
+
+    # Weight magnitude check — detect unstable LoRA weights
+    lora_weights = [p for p in unet.parameters() if p.requires_grad]
+    if lora_weights:
+        max_val = max(p.abs().max().item() for p in lora_weights)
+        print(f"LoRA weight max absolute value: {max_val:.4f}")
+        if max_val > 2.0:
+            print(f"WARNING: LoRA weights are unstable (max={max_val:.4f} > 2.0)")
+    else:
+        print("WARNING: No trainable LoRA parameters found")
+
+    # Verify weights were actually saved
+    volume_path = str(save_dir)
+    if os.path.exists(volume_path):
+        files = os.listdir(volume_path)
+        print(f"LoRA saved successfully: {files}")
+        total_size = sum(
+            os.path.getsize(os.path.join(volume_path, f))
+            for f in files
+            if os.path.isfile(os.path.join(volume_path, f))
+        )
+        print(f"Total size: {total_size} bytes")
+    else:
+        print(f"ERROR: LoRA path not found after commit: {volume_path}")
 
     # ── Cleanup GPU memory ──────────────────────────────────────────────────
 
@@ -385,6 +677,30 @@ async def train_face_model(req: Request):
     del optimizer
     gc.collect()
     torch.cuda.empty_cache()
+
+    # ── Fire webhook callback if provided (async flow) ───────────────────
+    if callback_url and harvest_id:
+        import httpx
+
+        webhook_secret = os.environ.get("WEBHOOK_SECRET", "")
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                await client.post(
+                    callback_url,
+                    json={
+                        "harvest_id": harvest_id,
+                        "child_id": child_id,
+                        "face_model_id": face_model_id,
+                        "status": "ok",
+                    },
+                    headers={
+                        "x-webhook-secret": webhook_secret,
+                        "Content-Type": "application/json",
+                    },
+                )
+            print(f"Webhook callback sent to {callback_url}")
+        except Exception as e:
+            print(f"Webhook callback failed (non-blocking): {e}")
 
     return {
         "face_model_id": face_model_id,
@@ -437,19 +753,66 @@ async def generate_illustrations(req: Request):
     face_model_id = body.get("face_model_id", "")
     prompts = body.get("prompts", [])
     cover_prompt_text = body.get("cover_prompt", "")
+    skip_lora = body.get("skip_lora", False)
+    child_age = body.get("age", 6)
+    child_pronouns = body.get("pronouns", "they_them")
+    character_description = body.get("character_description", "")
+    memory_photos_b64 = body.get("memory_photos_b64", [])
 
-    if not face_model_id:
-        web_error({"error": "face_model_id required"})
+    if not skip_lora and not face_model_id:
+        web_error({"error": "face_model_id required (or set skip_lora: true)"})
 
     if not prompts or len(prompts) > 12:
         web_error({"error": "Between 1 and 12 prompts required"})
 
-    # Verify LoRA weights exist
-    lora_dir = Path(LORA_VOLUME_PATH) / face_model_id
-    if not lora_dir.exists():
-        web_error({"error": f"Face model {face_model_id} not found"}, status=404)
+    print(f"Received {len(prompts)} scene prompts")
+    print(f"Generating {len(prompts)} scenes + 1 cover")
+    print(f"Child age: {child_age}, pronouns: {child_pronouns}")
 
-    # ── Load pipeline + LoRA ────────────────────────────────────────────────
+    # ── Build prompt components ─────────────────────────────────────────────
+
+    age_prefix = get_age_prefix(child_age, child_pronouns)
+    core_appearance = extract_core_appearance(character_description)
+    lora_token = "sks child"
+
+    color_mood = ""
+    if memory_photos_b64:
+        color_mood = get_dominant_color_mood(memory_photos_b64)
+        if color_mood:
+            print(f"Memory photo color mood: {color_mood}")
+
+    # ── Load pipeline + LoRA verification ─────────────────────────────────
+
+    lora_loaded = False
+    lora_dir = None
+
+    if skip_lora:
+        print("Skipping LoRA — running with base model only (no face conditioning)")
+    else:
+        lora_dir = Path(LORA_VOLUME_PATH) / face_model_id
+        print(f"Loading LoRA for face_model_id: {face_model_id}")
+        print(f"Looking for LoRA at: {lora_dir}")
+
+        if not lora_dir.exists():
+            print(f"LoRA not found — listing volume root:")
+            root_contents = (
+                os.listdir(LORA_VOLUME_PATH)
+                if os.path.exists(LORA_VOLUME_PATH)
+                else "volume not mounted"
+            )
+            print(f"Volume contents: {root_contents}")
+            print("Proceeding WITHOUT face conditioning")
+        else:
+            lora_files = os.listdir(str(lora_dir))
+            print(f"Found LoRA files: {lora_files}")
+
+    from diffusers import AutoencoderKL
+
+    vae = AutoencoderKL.from_pretrained(
+        "madebyollin/sdxl-vae-fp16-fix",
+        cache_dir=MODEL_CACHE_PATH,
+        torch_dtype=torch.float16,
+    )
 
     pipe = StableDiffusionXLPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
@@ -457,26 +820,81 @@ async def generate_illustrations(req: Request):
         torch_dtype=torch.float16,
         variant="fp16",
     )
+    pipe.vae = vae
     pipe.to("cuda")
-    pipe.load_lora_weights(str(lora_dir))
 
-    # ── Generate cover (index 0): 1024×1024, higher quality ────────────────
+    if not skip_lora and lora_dir and lora_dir.exists():
+        try:
+            from safetensors.torch import load_file, save_file
+            import tempfile
+
+            lora_path = str(lora_dir / "adapter_model.safetensors")
+            state_dict = load_file(lora_path)
+
+            remapped = {}
+            for k, v in state_dict.items():
+                new_key = k.replace("base_model.model.", "unet.")
+                remapped[new_key] = v
+
+            print(f"Remapped {len(remapped)} LoRA keys. Sample: {list(remapped.keys())[:3]}")
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                remapped_path = os.path.join(tmp_dir, "adapter_model.safetensors")
+                save_file(remapped, remapped_path)
+                pipe.load_lora_weights(tmp_dir, weight_name="adapter_model.safetensors")
+
+            pipe.fuse_lora(lora_scale=0.7)
+            lora_loaded = True
+            print("LoRA loaded and fused successfully")
+        except Exception as e:
+            print(f"ERROR loading LoRA: {e}")
+            print("Proceeding without face conditioning")
+
+    # ── Build cover prompt (budget-aware) ────────────────────────────────
 
     illustrations = []
 
-    # Use dedicated cover prompt, or fall back to build_cover_prompt()
     if not cover_prompt_text:
         cover_prompt_text = build_cover_prompt()
-    styled_cover = cover_prompt_text.rstrip(". ") + STYLE_SUFFIX
 
-    cover_image = pipe(
+    # Assemble cover prompt within CLIP token budget
+    cover_scene_desc = truncate_scene_description(cover_prompt_text)
+    cover_parts = [age_prefix, lora_token]
+    if core_appearance:
+        cover_parts.append(core_appearance)
+    cover_parts.append(cover_scene_desc)
+    cover_parts.append(STYLE_SUFFIX.lstrip(", "))
+    if color_mood:
+        cover_parts.append(color_mood)
+    styled_cover = ", ".join(cover_parts)
+
+    word_count = len(styled_cover.split())
+    if word_count > 60:
+        print(f"WARNING: Cover prompt too long: {word_count} words")
+    print(f"Cover prompt ({word_count} words): {styled_cover}")
+
+    result = pipe(
         prompt=styled_cover,
         negative_prompt=COVER_NEGATIVE_PROMPT,
         width=1024,
         height=1024,
         num_inference_steps=40,
         guidance_scale=8.5,
-    ).images[0]
+        output_type="latent",
+    )
+
+    # Clamp NaNs from UNet before decode
+    latents = result.images
+    latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
+    latents = latents.clamp(-4, 4)
+
+    # Unscale and decode with madebyollin fp16 VAE
+    latents = latents / pipe.vae.config.scaling_factor
+    with torch.no_grad():
+        decoded = pipe.vae.decode(latents, return_dict=False)[0]
+    cover_image = pipe.image_processor.postprocess(
+        decoded, output_type="pil"
+    )[0]
 
     # Free SDXL pipe before loading Real-ESRGAN to avoid OOM
     del pipe
@@ -498,27 +916,86 @@ async def generate_illustrations(req: Request):
 
     # ── Reload pipeline for scene generation ─────────────────────────────
 
+    from diffusers import AutoencoderKL
+
+    vae = AutoencoderKL.from_pretrained(
+        "madebyollin/sdxl-vae-fp16-fix",
+        cache_dir=MODEL_CACHE_PATH,
+        torch_dtype=torch.float16,
+    )
+
     pipe = StableDiffusionXLPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         cache_dir=MODEL_CACHE_PATH,
         torch_dtype=torch.float16,
         variant="fp16",
     )
+    pipe.vae = vae
     pipe.to("cuda")
-    pipe.load_lora_weights(str(lora_dir))
+
+    if lora_loaded and lora_dir and lora_dir.exists():
+        try:
+            from safetensors.torch import load_file, save_file
+            import tempfile
+
+            lora_path = str(lora_dir / "adapter_model.safetensors")
+            state_dict = load_file(lora_path)
+
+            remapped = {}
+            for k, v in state_dict.items():
+                new_key = k.replace("base_model.model.", "unet.")
+                remapped[new_key] = v
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                remapped_path = os.path.join(tmp_dir, "adapter_model.safetensors")
+                save_file(remapped, remapped_path)
+                pipe.load_lora_weights(tmp_dir, weight_name="adapter_model.safetensors")
+
+            pipe.fuse_lora(lora_scale=0.7)
+            print("LoRA reloaded for scene generation")
+        except Exception as e:
+            print(f"ERROR reloading LoRA for scenes: {e}")
 
     # ── Generate scene images (index 1+): 768×768 ───────────────────────
 
     for i, raw_prompt in enumerate(prompts):
-        styled_prompt = raw_prompt.rstrip(". ") + STYLE_SUFFIX
+        scene_desc = truncate_scene_description(raw_prompt)
+        parts = [age_prefix, lora_token]
+        if core_appearance:
+            parts.append(core_appearance)
+        parts.append(scene_desc)
+        parts.append(STYLE_SUFFIX.lstrip(", "))
+        if color_mood:
+            parts.append(color_mood)
+        styled_prompt = ", ".join(parts)
 
-        image = pipe(
+        word_count = len(styled_prompt.split())
+        if word_count > 60:
+            print(f"WARNING: Scene {i+1} prompt too long: {word_count} words")
+        print(f"Scene {i+1} prompt ({word_count} words): {styled_prompt[:200]}")
+
+        result = pipe(
             prompt=styled_prompt,
+            negative_prompt=SCENE_NEGATIVE_PROMPT,
             width=768,
             height=768,
             num_inference_steps=30,
             guidance_scale=7.5,
-        ).images[0]
+            output_type="latent",
+        )
+
+        # Clamp NaNs from UNet before decode
+        latents = result.images
+        latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
+        latents = latents.clamp(-4, 4)
+
+        # Unscale and decode with madebyollin fp16 VAE
+        latents = latents / pipe.vae.config.scaling_factor
+        with torch.no_grad():
+            decoded = pipe.vae.decode(latents, return_dict=False)[0]
+        image = pipe.image_processor.postprocess(
+            decoded, output_type="pil"
+        )[0]
 
         buf = io.BytesIO()
         image.save(buf, format="PNG")
@@ -537,7 +1014,8 @@ async def generate_illustrations(req: Request):
     torch.cuda.empty_cache()
 
     return {
-        "face_model_id": face_model_id,
+        "face_model_id": face_model_id or "none",
+        "skip_lora": skip_lora,
         "illustrations": illustrations,
     }
 
@@ -581,7 +1059,7 @@ async def delete_face_model(req: Request):
         }
 
     shutil.rmtree(str(lora_dir))
-    lora_volume.commit()
+    await lora_volume.commit.aio()
 
     return {
         "deleted": True,

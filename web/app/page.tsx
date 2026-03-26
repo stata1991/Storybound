@@ -208,28 +208,6 @@ function Pricing() {
                 ))}
               </ul>
             </div>
-            {/* Founding digital companion */}
-            <div className="rounded-xl border border-dashed border-gold/40 bg-white/80 px-5 py-4 md:px-6 md:py-5">
-              <p className="font-sans text-xs font-medium uppercase tracking-widest text-gold">
-                Digital only
-              </p>
-              <div className="mt-2 flex items-baseline gap-1">
-                <span className="font-serif text-2xl font-bold text-navy">
-                  $39
-                </span>
-                <span className="font-sans text-sm text-navy/50">/year</span>
-              </div>
-              <p className="mt-2 font-sans text-sm leading-relaxed text-navy/60">
-                Same 4 quarterly stories, delivered as beautiful digital books.
-                No shipping anywhere in the world.
-              </p>
-              <a
-                href="/auth"
-                className="mt-4 block rounded-full border border-gold/40 py-2.5 text-center font-sans text-sm font-semibold text-gold transition-all hover:border-gold hover:bg-gold hover:text-white"
-              >
-                Get started
-              </a>
-            </div>
           </div>
 
           {/* Gift a Story Year column */}
@@ -272,27 +250,6 @@ function Pricing() {
                 ))}
               </ul>
             </div>
-            {/* Gift digital companion */}
-            <div className="rounded-xl border border-dashed border-forest/40 bg-white/80 px-5 py-4 md:px-6 md:py-5">
-              <p className="font-sans text-xs font-medium uppercase tracking-widest text-gold">
-                Digital only
-              </p>
-              <div className="mt-2 flex items-baseline gap-1">
-                <span className="font-serif text-2xl font-bold text-navy">
-                  $39
-                </span>
-              </div>
-              <p className="mt-2 font-sans text-sm leading-relaxed text-navy/60">
-                Perfect for international families or anyone who prefers
-                digital. Same stories, no shipping.
-              </p>
-              <a
-                href="/auth"
-                className="mt-4 block rounded-full border border-forest/40 py-2.5 text-center font-sans text-sm font-semibold text-forest transition-all hover:border-forest hover:bg-forest hover:text-white"
-              >
-                Get started
-              </a>
-            </div>
           </div>
 
           {/* Single Book column */}
@@ -333,27 +290,6 @@ function Pricing() {
                 ))}
               </ul>
             </div>
-            {/* Single digital companion */}
-            <div className="rounded-xl border border-dashed border-navy/15 bg-white/80 px-5 py-4 md:px-6 md:py-5">
-              <p className="font-sans text-xs font-medium uppercase tracking-widest text-gold">
-                Digital only
-              </p>
-              <div className="mt-2 flex items-baseline gap-1">
-                <span className="font-serif text-2xl font-bold text-navy">
-                  $15
-                </span>
-                <span className="font-sans text-sm text-navy/50">one-time</span>
-              </div>
-              <p className="mt-2 font-sans text-sm leading-relaxed text-navy/60">
-                One story, delivered instantly as a digital book.
-              </p>
-              <a
-                href="/auth"
-                className="mt-4 block rounded-full border border-navy/15 py-2.5 text-center font-sans text-sm font-semibold text-navy transition-all hover:border-gold hover:text-gold"
-              >
-                Get started
-              </a>
-            </div>
           </div>
         </div>
       </div>
@@ -386,7 +322,7 @@ const FAQS = [
   },
   {
     q: "Do you ship internationally?",
-    a: "We currently ship physical books within the US. International families can subscribe to our digital-only plans \u2014 same stories, delivered digitally, available worldwide. Questions? Email storybound@gmail.com",
+    a: "We currently ship within the US. International shipping is coming soon. Questions? Email storybound@gmail.com",
   },
   {
     q: "How does the gift subscription work?",

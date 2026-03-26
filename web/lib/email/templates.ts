@@ -76,6 +76,14 @@ interface SubmittedParams {
   season: string;
 }
 
+interface PreviewParams {
+  childName: string;
+  season: string;
+  harvestId: string;
+  previewDeadline: string;
+  parentEmail: string;
+}
+
 /* ─── Template 1: Memory Drop Open ─────────────────────────────────────────── */
 
 export function memoryDropOpen(params: DropParams) {
@@ -165,7 +173,81 @@ export function memoryDropFinal(params: DropParams) {
   return { subject, html };
 }
 
-/* ─── Template 4: Memory Submitted ─────────────────────────────────────────── */
+/* ─── Template 4: Book Ready to Preview ───────────────────────────────────── */
+
+export function bookReadyToPreview(params: PreviewParams) {
+  const name = capitalize(params.childName);
+  const season = capitalize(params.season);
+  const deadline = formatCloseDate(params.previewDeadline);
+  const url = `${APP_URL}/dashboard/preview/${params.harvestId}`;
+
+  const subject = `${name}'s ${season} book is ready to preview`;
+
+  const html = layout(`
+    <h1 style="margin:0 0 16px 0;font-size:22px;font-weight:700;color:${NAVY};font-family:Georgia,serif;line-height:1.3;">
+      ${name}'s book is ready for your eyes.
+    </h1>
+    <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      We've finished crafting ${name}'s ${season} chapter — every illustration, every word, built from the memories you shared. Take a look and let us know if everything feels right before we send it to the printer.
+    </p>
+    ${ctaButton("Preview your book \u2192", url)}
+    <p style="margin:0 0 16px 0;font-size:14px;color:${MUTED};line-height:1.5;">
+      You have until ${deadline} to review. After that, we'll send it to print automatically.
+    </p>
+    <p style="margin:0 0 16px 0;font-size:14px;color:${MUTED};line-height:1.5;">
+      If something doesn't look right, you can flag it from the preview page and we'll make it right.
+    </p>
+    <p style="margin:0;font-size:13px;color:${MUTED};line-height:1.5;">
+      Having trouble signing in?
+      <a href="${APP_URL}/auth/magic-link?email=${encodeURIComponent(params.parentEmail)}&redirect=${encodeURIComponent(`/dashboard/preview/${params.harvestId}`)}" style="color:${GOLD};text-decoration:underline;">
+        Get a sign-in link sent to this email
+      </a>
+    </p>
+  `);
+
+  return { subject, html };
+}
+
+/* ─── Template 5: Preview Auto-Approved (deadline passed) ─────────────────── */
+
+export function previewAutoApproved(params: SubmittedParams) {
+  const name = capitalize(params.childName);
+  const season = capitalize(params.season);
+  const url = `${APP_URL}/dashboard`;
+
+  const subject = `We're printing ${name}'s book \u2014 no changes requested`;
+
+  const html = layout(`
+    <h1 style="margin:0 0 16px 0;font-size:22px;font-weight:700;color:${NAVY};font-family:Georgia,serif;line-height:1.3;">
+      ${name}'s ${season} book is heading to the printer.
+    </h1>
+    <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      Your preview window has closed and no changes were requested, so we're moving forward with printing ${name}'s book. Every page was crafted from the memories you shared — this is truly ${name}'s story.
+    </p>
+    <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      We'll send you a shipping notification once it's on its way.
+    </p>
+    ${ctaButton("View your dashboard \u2192", url)}
+    <p style="margin:0;font-size:14px;color:${GOLD};font-weight:600;line-height:1.5;">
+      Thank you for being part of ${name}'s story.
+    </p>
+  `);
+
+  return { subject, html };
+}
+
+/* ─── Template 6: Memory Submitted ─────────────────────────────────────────── */
+
+interface DigitalBookReadyParams {
+  childName: string;
+  season: string;
+  harvestId: string;
+}
+
+interface PhysicalSubscriptionConfirmedParams {
+  childName: string;
+  season: string;
+}
 
 export function memorySubmitted(params: SubmittedParams) {
   const name = capitalize(params.childName);
@@ -181,10 +263,71 @@ export function memorySubmitted(params: SubmittedParams) {
       Our team is now crafting ${name}'s ${season} chapter. Every photo, every milestone, every little detail you shared — it all goes into making their story feel real.
     </p>
     <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
-      We'll be in touch when your book ships.
+      We'll be in touch when your book is ready to preview.
     </p>
     <p style="margin:0;font-size:14px;color:${GOLD};font-weight:600;line-height:1.5;">
       Thank you for being part of ${name}'s story.
+    </p>
+  `);
+
+  return { subject, html };
+}
+
+/* ─── Template 7: Digital Book Ready ──────────────────────────────────────── */
+
+export function digitalBookReady(params: DigitalBookReadyParams) {
+  const name = capitalize(params.childName);
+  const season = capitalize(params.season);
+  const previewUrl = `${APP_URL}/dashboard/preview/${params.harvestId}`;
+
+  const subject = `${name}'s digital book is ready to read!`;
+
+  const html = layout(`
+    <h1 style="margin:0 0 16px 0;font-size:22px;font-weight:700;color:${NAVY};font-family:Georgia,serif;line-height:1.3;">
+      ${name}'s ${season} book is ready.
+    </h1>
+    <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      Every illustration, every word \u2014 built from the memories you shared. ${name}'s digital book is waiting for you.
+    </p>
+    ${ctaButton(`Read ${name}'s book \u2192`, previewUrl)}
+    <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      Love it? You can get a beautifully printed copy delivered to your door \u2014 plus 3 more books this year.
+    </p>
+    <table cellpadding="0" cellspacing="0" style="margin:0 0 24px 0;">
+      <tr><td style="border:2px solid ${GOLD};border-radius:9999px;padding:12px 28px;">
+        <a href="${previewUrl}" style="color:${GOLD};font-size:15px;font-weight:600;text-decoration:none;display:inline-block;">Get it printed &rarr;</a>
+      </td></tr>
+    </table>
+    <p style="margin:0;font-size:14px;color:${MUTED};line-height:1.5;">
+      Your digital book will always be here, free forever.
+    </p>
+  `);
+
+  return { subject, html };
+}
+
+/* ─── Template 8: Physical Subscription Confirmed ─────────────────────────── */
+
+export function physicalSubscriptionConfirmed(params: PhysicalSubscriptionConfirmedParams) {
+  const name = capitalize(params.childName);
+  const season = capitalize(params.season);
+  const url = `${APP_URL}/dashboard`;
+
+  const subject = `Subscribed! ${name}'s book is going to print`;
+
+  const html = layout(`
+    <h1 style="margin:0 0 16px 0;font-size:22px;font-weight:700;color:${NAVY};font-family:Georgia,serif;line-height:1.3;">
+      ${name}'s ${season} book is heading to the printer.
+    </h1>
+    <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      Your subscription is confirmed. ${name}'s book is being printed right now, and you can expect it to arrive within 2\u20133 weeks.
+    </p>
+    <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      That's not all \u2014 you'll receive <strong>3 more personalized books this year</strong>, one each season, each built from fresh memories you share.
+    </p>
+    ${ctaButton("View your dashboard \u2192", url)}
+    <p style="margin:0;font-size:14px;color:${GOLD};font-weight:600;line-height:1.5;">
+      Thank you for making ${name}'s story something they can hold.
     </p>
   `);
 

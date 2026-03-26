@@ -27,6 +27,8 @@ export interface HarvestData {
   current_interests: string[];
   character_archetype: string | null;
   notable_notes: string | null;
+  photo_count: number | null;
+  photo_paths: string[] | null;
 }
 
 export type ChildHarvestResult =
@@ -61,7 +63,7 @@ export async function getChildAndHarvest(
   const { data: harvests } = await supabase
     .from("harvests")
     .select(
-      "id, quarter, year, season, window_opens_at, window_closes_at, submitted_at, status, milestone_description, current_interests, character_archetype, notable_notes"
+      "id, quarter, year, season, window_opens_at, window_closes_at, submitted_at, status, milestone_description, current_interests, character_archetype, notable_notes, photo_count, photo_paths"
     )
     .eq("child_id", childId)
     .lte("window_opens_at", now)
@@ -243,4 +245,29 @@ export async function submitMemoryDrop(
   });
 
   redirect("/dashboard?submitted=true");
+}
+
+/* ─── Photo signed URLs ───────────────────────────────────────────────────── */
+
+export async function getHarvestPhotoUrls(
+  paths: string[]
+): Promise<string[]> {
+  if (!paths || paths.length === 0) return [];
+
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  const urls: string[] = [];
+  for (const path of paths) {
+    const { data } = await admin.storage
+      .from("harvest-photos")
+      .createSignedUrl(path, 3600); // 1 hour
+    if (data?.signedUrl) {
+      urls.push(data.signedUrl);
+    }
+  }
+  return urls;
 }

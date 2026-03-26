@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
 import { logEvent } from "@/lib/audit";
+import { sendEmail } from "@/lib/email/resend";
+import { memorySubmitted } from "@/lib/email/templates";
 
 interface ChildProfileData {
   // Step 1
@@ -15,7 +17,7 @@ interface ChildProfileData {
   interests: string;
   avoidances: string;
   defaultArchetype: string;
-  // Step 3 (address)
+  // Step 3 (address — optional, user can skip)
   parentFirstName?: string;
   shippingName?: string;
   addressLine1?: string;
@@ -24,8 +26,6 @@ interface ChildProfileData {
   state?: string;
   zip?: string;
   country?: string;
-  // Meta
-  subscriptionType?: string;
 }
 
 function parseCommaSeparated(value: string): string[] {
@@ -68,11 +68,6 @@ export async function saveChildProfile(data: ChildProfileData) {
   if (avoidancesList.some((a) => a.length > 100)) {
     return { error: "Each avoidance must be 100 characters or less." };
   }
-  const VALID_SUB_TYPES = ["founding", "gift", "one_time"];
-  if (data.subscriptionType && !VALID_SUB_TYPES.includes(data.subscriptionType)) {
-    return { error: "Invalid subscription type." };
-  }
-
   // Service role client bypasses RLS for record creation
   const admin = createAdminClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -113,26 +108,13 @@ export async function saveChildProfile(data: ChildProfileData) {
       }
     }
   } else {
-    // New user — create family + parent
-    const subType = data.subscriptionType || "founding";
-    const isFounding = subType === "founding";
-
-    const priceMap: Record<string, number> = {
-      founding: 89.0,
-      standard: 109.0,
-      one_time: 29.0,
-      gift: 89.0,
-    };
-
+    // New user — create family + parent (free onboarding, no payment yet)
     const { data: family, error: familyError } = await admin
       .from("families")
       .insert({
-        subscription_status: "active",
-        subscription_type: subType,
+        subscription_status: "trialing",
+        subscription_type: "none",
         subscription_tier: "physical_digital",
-        subscription_price: priceMap[subType] ?? 89.0,
-        is_founding_member: isFounding,
-        billing_cycle_start: new Date().toISOString().split("T")[0],
         shipping_name: data.shippingName || null,
         address_line1: data.addressLine1 || null,
         address_line2: data.addressLine2 || null,
@@ -164,8 +146,6 @@ export async function saveChildProfile(data: ChildProfileData) {
   }
 
   // Insert child record
-  const isOneTime = (data.subscriptionType || "founding") === "one_time";
-
   const { data: child, error: childError } = await admin
     .from("children")
     .insert({
@@ -177,7 +157,7 @@ export async function saveChildProfile(data: ChildProfileData) {
       interests: interestsList,
       avoidances: avoidancesList,
       default_archetype: data.defaultArchetype || null,
-      is_one_time: isOneTime,
+      is_one_time: false,
       current_year: 1,
     })
     .select("id")
@@ -194,15 +174,19 @@ export async function saveChildProfile(data: ChildProfileData) {
   const now = new Date();
   const fourWeeksLater = new Date(now.getTime() + 28 * 24 * 60 * 60 * 1000);
 
-  const { error: harvestError } = await admin.from("harvests").insert({
-    child_id: child.id,
-    quarter,
-    year: now.getFullYear(),
-    season: SEASONS[quarter],
-    window_opens_at: now.toISOString(),
-    window_closes_at: fourWeeksLater.toISOString(),
-    status: "pending",
-  });
+  const { data: harvestRow, error: harvestError } = await admin
+    .from("harvests")
+    .insert({
+      child_id: child.id,
+      quarter,
+      year: now.getFullYear(),
+      season: SEASONS[quarter],
+      window_opens_at: now.toISOString(),
+      window_closes_at: fourWeeksLater.toISOString(),
+      status: "pending",
+    })
+    .select("id")
+    .single();
 
   if (harvestError) {
     console.error("Failed to create initial harvest (non-blocking):", harvestError.message);
@@ -216,7 +200,39 @@ export async function saveChildProfile(data: ChildProfileData) {
     message: "Child profile created",
   });
 
-  return { childId: child.id };
+  // Notify admin that a new harvest is ready
+  if (harvestRow?.id) {
+    try {
+      const dob = new Date(data.dateOfBirth);
+      const today = new Date();
+      let age = today.getFullYear() - dob.getFullYear();
+      if (
+        today.getMonth() < dob.getMonth() ||
+        (today.getMonth() === dob.getMonth() && today.getDate() < dob.getDate())
+      ) {
+        age--;
+      }
+
+      const adminEmail = process.env.ADMIN_EMAIL ?? "tatasupreeth@gmail.com";
+      const dashboardUrl = `https://storyboundapp.com/admin/harvest/${harvestRow.id}`;
+
+      await sendEmail({
+        to: adminEmail,
+        subject: `New harvest ready — ${data.name}, Age ${age}`,
+        html: `
+          <p>A new child has completed onboarding and is ready for illustration generation.</p>
+          <p><strong>Child:</strong> ${data.name}<br/>
+          <strong>Age:</strong> ${age}<br/>
+          <strong>Harvest ID:</strong> ${harvestRow.id}</p>
+          <p><a href="${dashboardUrl}">View in Admin Dashboard</a></p>
+        `,
+      });
+    } catch {
+      // Non-blocking — don't let email failure break onboarding
+    }
+  }
+
+  return { childId: child.id, harvestId: harvestRow?.id ?? null };
 }
 
 export async function addAnotherChild() {
@@ -299,7 +315,7 @@ export async function uploadCharacterPhotos(childId: string, formData: FormData)
     metadata: { photo_count: photos.length },
   });
 
-  redirect("/dashboard");
+  return { success: true };
 }
 
 export async function getChildForCharacterPhotos(
@@ -334,4 +350,120 @@ export async function getChildForCharacterPhotos(
     .single();
 
   return child as { id: string; name: string } | null;
+}
+
+export async function submitOnboardingMemoryDrop(
+  childId: string,
+  data: {
+    milestone: string;
+    currentInterests: string;
+    notes: string;
+    photos?: { path: string; caption: string }[];
+  }
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return { error: "Not authenticated. Please sign in." };
+  }
+
+  // Validate inputs
+  if (!data.milestone || data.milestone.length > 500) {
+    return { error: "Milestone is required (max 500 characters)." };
+  }
+  if (!data.currentInterests || data.currentInterests.length > 500) {
+    return { error: "Current interests are required (max 500 characters)." };
+  }
+  if (data.notes && data.notes.length > 1000) {
+    return { error: "Notes must be 1000 characters or less." };
+  }
+
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  // Verify child belongs to user's family
+  const { data: parent } = await admin
+    .from("parents")
+    .select("family_id, email")
+    .eq("id", user.id)
+    .single();
+
+  if (!parent) return { error: "Parent record not found." };
+
+  const { data: child } = await admin
+    .from("children")
+    .select("id, name, family_id")
+    .eq("id", childId)
+    .eq("family_id", parent.family_id)
+    .single();
+
+  if (!child) return { error: "Child not found." };
+
+  // Find the pending harvest created during onboarding
+  const { data: harvest, error: harvestError } = await admin
+    .from("harvests")
+    .select("id, season")
+    .eq("child_id", childId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (harvestError || !harvest) {
+    return { error: "No pending memory drop found." };
+  }
+
+  // Update the harvest with memory drop data
+  const interestsList = data.currentInterests
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // Belt-and-suspenders: include photos if the component passed them
+  const updatePayload: Record<string, unknown> = {
+    milestone_description: data.milestone,
+    current_interests: interestsList,
+    notable_notes: data.notes || null,
+    status: "submitted",
+    submitted_at: new Date().toISOString(),
+  };
+
+  if (data.photos && data.photos.length > 0) {
+    updatePayload.photo_paths = data.photos.map((p) => p.path);
+    updatePayload.photo_captions = data.photos.map((p) => p.caption);
+    updatePayload.photo_count = data.photos.length;
+  }
+
+  const { error: updateError } = await admin
+    .from("harvests")
+    .update(updatePayload)
+    .eq("id", harvest.id);
+
+  if (updateError) {
+    return { error: "Failed to save memory drop. Please try again." };
+  }
+
+  logEvent({
+    event_type: "onboarding.memory_drop",
+    status: "success",
+    family_id: parent.family_id,
+    child_id: childId,
+    message: "Onboarding memory drop submitted",
+  });
+
+  // Fire-and-forget email
+  const { subject, html } = memorySubmitted({
+    childName: child.name,
+    season: harvest.season,
+  });
+  sendEmail({ to: parent.email, subject, html }).catch(() => {});
+
+  return { success: true };
 }

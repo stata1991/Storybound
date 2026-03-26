@@ -29,6 +29,8 @@ export interface HarvestRow {
   episodeStatus: string | null;
   printFilePath: string | null;
   childAge: number | null;
+  parentFlagMessage: string | null;
+  subscriptionType: string | null;
 }
 
 export interface FamilyRow {
@@ -51,7 +53,7 @@ interface HarvestDbRow {
   status: string;
   child_id: string;
   children: { name: string; family_id: string; date_of_birth: string | null } | null;
-  episodes: { id: string; illustration_status: string; status: string; print_file_path: string | null }[] | null;
+  episodes: { id: string; illustration_status: string; status: string; print_file_path: string | null; parent_flag_message: string | null }[] | null;
 }
 
 interface HarvestFullDbRow {
@@ -67,6 +69,8 @@ interface HarvestFullDbRow {
 interface ChildFullDbRow {
   id: string;
   name: string;
+  date_of_birth: string | null;
+  pronouns: string;
   interests: string[];
   reading_level: string;
   character_photos_deleted_at: string | null;
@@ -197,7 +201,7 @@ export async function getAllHarvests(): Promise<
     admin
       .from("harvests")
       .select(
-        "id, season, submitted_at, photo_count, status, child_id, children(name, family_id, date_of_birth), episodes(id, illustration_status, status, print_file_path)"
+        "id, season, submitted_at, photo_count, status, child_id, children(name, family_id, date_of_birth), episodes(id, illustration_status, status, print_file_path, parent_flag_message)"
       )
       .order("submitted_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false }),
@@ -223,14 +227,25 @@ export async function getAllHarvests(): Promise<
     )
   );
 
-  const { data: parents } = await admin
-    .from("parents")
-    .select("family_id, email")
-    .in("family_id", familyIds);
+  const [{ data: parents }, { data: families }] = await Promise.all([
+    admin
+      .from("parents")
+      .select("family_id, email")
+      .in("family_id", familyIds),
+    admin
+      .from("families")
+      .select("id, subscription_type")
+      .in("id", familyIds),
+  ]);
 
   const emailByFamily: Record<string, string> = {};
   (parents as unknown as ParentDbRow[] ?? []).forEach((p) => {
     emailByFamily[p.family_id] = p.email;
+  });
+
+  const subTypeByFamily: Record<string, string> = {};
+  (families as unknown as { id: string; subscription_type: string }[] ?? []).forEach((f) => {
+    subTypeByFamily[f.id] = f.subscription_type;
   });
 
   const harvestRows = rows.map((h) => {
@@ -249,6 +264,8 @@ export async function getAllHarvests(): Promise<
       episodeStatus: ep?.status ?? null,
       printFilePath: ep?.print_file_path ?? null,
       childAge: dob ? storyChildAge(dob) : null,
+      parentFlagMessage: ep?.parent_flag_message ?? null,
+      subscriptionType: subTypeByFamily[h.children?.family_id ?? ""] ?? null,
     };
   });
 
@@ -385,6 +402,7 @@ async function callModal<T>(url: string, body: Record<string, unknown>): Promise
       Authorization: `Bearer ${process.env.MODAL_AUTH_TOKEN}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(300_000), // 5 minutes
   });
 
   if (!res.ok) {
@@ -417,22 +435,142 @@ function buildDefaultPrompts(
   ];
 }
 
-export async function triggerIllustrationPipeline(
+/* ─── startFaceTraining — async training kickoff ──────────────────────────── */
+
+export async function startFaceTraining(
   harvestId: string
-): Promise<{ success: true } | { error: string }> {
+): Promise<{ success: true; face_model_id: string } | { error: string }> {
   const auth = await verifyAdmin();
   if ("error" in auth) return { error: auth.error };
 
-  logEvent({
-    event_type: "illustration.pipeline",
-    status: "started",
-    harvest_id: harvestId,
-    message: "Illustration pipeline started",
-  });
-
   const supa = getAdmin();
 
-  // ── Fetch harvest ────────────────────────────────────────────────────────
+  const { data: harvestRaw } = await supa
+    .from("harvests")
+    .select("id, child_id, season, photo_paths, status")
+    .eq("id", harvestId)
+    .single();
+
+  if (!harvestRaw) return { error: "Harvest not found." };
+  const harvest = harvestRaw as unknown as HarvestFullDbRow;
+
+  if (harvest.status !== "processing") {
+    return { error: `Harvest status is '${harvest.status}', expected 'processing'.` };
+  }
+
+  const childId = harvest.child_id;
+
+  const { data: childRaw } = await supa
+    .from("children")
+    .select("id, name, date_of_birth, pronouns, interests, reading_level, character_photos_deleted_at")
+    .eq("id", childId)
+    .single();
+
+  if (!childRaw) return { error: "Child not found." };
+  const child = childRaw as unknown as ChildFullDbRow;
+
+  if (child.character_photos_deleted_at) {
+    return { error: "Character photos already deleted. Use skip-LoRA path instead." };
+  }
+
+  // Download character photos
+  const { data: photoFiles, error: listErr } = await supa.storage
+    .from("character-photos")
+    .list(childId, { limit: 100 });
+
+  if (listErr) return { error: `Failed to list character photos: ${listErr.message}` };
+
+  const validFiles = (photoFiles ?? []).filter((f) => f.name !== ".emptyFolderPlaceholder");
+  if (validFiles.length === 0) return { error: "No character photos found for this child." };
+
+  const photosBase64: string[] = [];
+  for (const file of validFiles) {
+    const filePath = `${childId}/${file.name}`;
+    const { data: blob, error: dlErr } = await supa.storage
+      .from("character-photos")
+      .download(filePath);
+    if (dlErr || !blob) return { error: `Failed to download photo: ${dlErr?.message ?? filePath}` };
+    const arrayBuf = await blob.arrayBuffer();
+    photosBase64.push(Buffer.from(arrayBuf).toString("base64"));
+  }
+
+  // Build callback URL for async completion
+  const callbackUrl = process.env.NEXT_PUBLIC_APP_URL
+    ? `${process.env.NEXT_PUBLIC_APP_URL}/api/admin/training-complete`
+    : undefined;
+
+  // Kick off training on Modal
+  logEvent({
+    event_type: "illustration.training",
+    status: "started",
+    harvest_id: harvestId,
+    child_id: childId,
+    message: "LoRA face training started",
+  });
+
+  let trainResult: ModalTrainResponse;
+  try {
+    trainResult = await callModal<ModalTrainResponse>(
+      process.env.MODAL_TRAIN_URL!,
+      {
+        photos: photosBase64,
+        callback_url: callbackUrl,
+        child_id: childId,
+        harvest_id: harvestId,
+      }
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Unknown error";
+    logEvent({
+      event_type: "illustration.training",
+      status: "error",
+      harvest_id: harvestId,
+      message: `Face training failed: ${msg}`,
+    });
+    return { error: `Face training failed: ${msg}` };
+  }
+
+  // Update harvest with face ref and set status to training
+  await supa
+    .from("harvests")
+    .update({
+      face_ref_generated: true,
+      face_ref_path: trainResult.face_model_id,
+      status: "training",
+    })
+    .eq("id", harvestId);
+
+  // Delete character photos from bucket — Modal has them in memory now
+  try {
+    const pathsToDelete = validFiles.map((f) => `${childId}/${f.name}`);
+    await supa.storage.from("character-photos").remove(pathsToDelete);
+    await supa
+      .from("children")
+      .update({ character_photos_deleted_at: new Date().toISOString() })
+      .eq("id", childId);
+  } catch (cleanupErr) {
+    console.error("Character photo cleanup failed (non-blocking):", cleanupErr);
+  }
+
+  return { success: true, face_model_id: trainResult.face_model_id };
+}
+
+/* ─── completeIllustrationGeneration — post-training generation ───────────── */
+
+export async function completeIllustrationGeneration(
+  harvestId: string,
+  faceModelId: string
+): Promise<{ success: true } | { error: string }> {
+  const supa = getAdmin();
+
+  logEvent({
+    event_type: "illustration.generation",
+    status: "started",
+    harvest_id: harvestId,
+    message: `Illustration generation started (face_model_id: ${faceModelId})`,
+  });
+
+  // ── Fetch harvest ──────────────────────────────────────────────────────────
 
   const { data: harvestRaw } = await supa
     .from("harvests")
@@ -443,42 +581,34 @@ export async function triggerIllustrationPipeline(
     .single();
 
   if (!harvestRaw) return { error: "Harvest not found." };
-
   const harvest = harvestRaw as unknown as HarvestFullDbRow;
 
-  if (harvest.status !== "processing") {
-    return { error: `Harvest status is '${harvest.status}', expected 'processing'.` };
-  }
-
-  // ── Fetch child ──────────────────────────────────────────────────────────
+  // ── Fetch child ────────────────────────────────────────────────────────────
 
   const { data: childRaw } = await supa
     .from("children")
-    .select("id, name, interests, reading_level, character_photos_deleted_at")
+    .select("id, name, date_of_birth, pronouns, interests, reading_level, character_photos_deleted_at")
     .eq("id", harvest.child_id)
     .single();
 
   if (!childRaw) return { error: "Child not found." };
-
   const child = childRaw as unknown as ChildFullDbRow;
+  const childAge = child.date_of_birth ? storyChildAge(child.date_of_birth) : 6;
 
-  if (child.character_photos_deleted_at) {
-    return { error: "Character photos already used and deleted for this child." };
-  }
-
-  // ── Fetch episode (optional) ─────────────────────────────────────────────
+  // ── Fetch episode ──────────────────────────────────────────────────────────
 
   const { data: episodeRaw } = await supa
     .from("episodes")
-    .select("id, scenes")
+    .select("id, scenes, illustration_status")
     .eq("harvest_id", harvestId)
     .single();
 
-  const episode = episodeRaw as unknown as EpisodeDbRow | null;
+  const episode = episodeRaw as unknown as (EpisodeDbRow & { illustration_status?: string }) | null;
 
-  // ── Build cover prompt from story bible hero ──────────────────────────────
+  // ── Build cover prompt + character description ─────────────────────────────
 
   let coverPrompt: string | undefined;
+  let characterDescription = "";
 
   const { data: bibleRaw } = await supa
     .from("story_bibles")
@@ -512,72 +642,11 @@ export async function triggerIllustrationPipeline(
 
     if (appearance) {
       coverPrompt = buildCoverPrompt(appearance, personality, theme);
+      characterDescription = appearance;
     }
   }
 
-  // ── Download character photos to Buffer (never disk) ─────────────────────
-
-  const childId = harvest.child_id;
-
-  const { data: photoFiles, error: listErr } = await supa.storage
-    .from("character-photos")
-    .list(childId, { limit: 100 });
-
-  if (listErr) {
-    return { error: `Failed to list character photos: ${listErr.message}` };
-  }
-
-  const validFiles = (photoFiles ?? []).filter((f) => f.name !== ".emptyFolderPlaceholder");
-
-  if (validFiles.length === 0) {
-    return { error: "No character photos found for this child." };
-  }
-
-  const photosBase64: string[] = [];
-
-  for (const file of validFiles) {
-    const filePath = `${childId}/${file.name}`;
-    const { data: blob, error: dlErr } = await supa.storage
-      .from("character-photos")
-      .download(filePath);
-
-    if (dlErr || !blob) {
-      return { error: `Failed to download photo: ${dlErr?.message ?? filePath}` };
-    }
-
-    const arrayBuf = await blob.arrayBuffer();
-    photosBase64.push(Buffer.from(arrayBuf).toString("base64"));
-  }
-
-  // ── Train face model ─────────────────────────────────────────────────────
-
-  let trainResult: ModalTrainResponse;
-  try {
-    trainResult = await callModal<ModalTrainResponse>(
-      process.env.MODAL_TRAIN_URL!,
-      { photos: photosBase64 }
-    );
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Unknown error";
-    logEvent({
-      event_type: "illustration.pipeline",
-      status: "error",
-      harvest_id: harvestId,
-      message: `Face training failed: ${msg}`,
-    });
-    return { error: `Face training failed: ${msg}` };
-  }
-
-  // Update harvest with face ref
-  await supa
-    .from("harvests")
-    .update({
-      face_ref_generated: true,
-      face_ref_path: trainResult.face_model_id,
-    })
-    .eq("id", harvestId);
-
-  // ── Build prompts ────────────────────────────────────────────────────────
+  // ── Build prompts ──────────────────────────────────────────────────────────
 
   let prompts: string[];
 
@@ -585,35 +654,59 @@ export async function triggerIllustrationPipeline(
     prompts = episode.scenes
       .map((s) => s.illustration_prompt)
       .filter(Boolean)
-      .slice(0, 8);
+      .slice(0, 12);
   } else {
     prompts = buildDefaultPrompts(child, harvest);
   }
 
-  if (prompts.length === 0) {
-    return { error: "No illustration prompts available." };
+  if (prompts.length === 0) return { error: "No illustration prompts available." };
+
+  // ── Download memory photos for color mood extraction ───────────────────────
+
+  const memoryPhotosBase64: string[] = [];
+  if (harvest.photo_paths && harvest.photo_paths.length > 0) {
+    for (const photoPath of harvest.photo_paths.slice(0, 3)) {
+      try {
+        const { data: blob } = await supa.storage
+          .from("harvest-photos")
+          .download(photoPath);
+        if (blob) {
+          const arrayBuf = await blob.arrayBuffer();
+          memoryPhotosBase64.push(Buffer.from(arrayBuf).toString("base64"));
+        }
+      } catch {
+        // Non-blocking — color mood is optional
+      }
+    }
   }
 
-  // ── Generate illustrations ───────────────────────────────────────────────
+  const modalSharedParams = {
+    age: childAge,
+    pronouns: child.pronouns ?? "they_them",
+    ...(characterDescription ? { character_description: characterDescription } : {}),
+    ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
+  };
+
+  // ── Generate illustrations with LoRA ───────────────────────────────────────
 
   let genResult: ModalGenerateResponse;
   try {
     genResult = await callModal<ModalGenerateResponse>(
       process.env.MODAL_GENERATE_URL!,
       {
-        face_model_id: trainResult.face_model_id,
+        face_model_id: faceModelId,
         prompts,
         ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
+        ...modalSharedParams,
       }
     );
   } catch (e) {
-    // Generation failed — still clean up LoRA weights, but keep photos for retry
     await callModal(process.env.MODAL_DELETE_URL!, {
-      face_model_id: trainResult.face_model_id,
+      face_model_id: faceModelId,
     }).catch(() => {});
     const msg = e instanceof Error ? e.message : "Unknown error";
     logEvent({
-      event_type: "illustration.pipeline",
+      event_type: "illustration.generation",
       status: "error",
       harvest_id: harvestId,
       message: `Illustration generation failed: ${msg}`,
@@ -621,7 +714,294 @@ export async function triggerIllustrationPipeline(
     return { error: `Illustration generation failed: ${msg}` };
   }
 
-  // ── Upload illustrations to Supabase Storage ─────────────────────────────
+  // Delete LoRA weights
+  await callModal(process.env.MODAL_DELETE_URL!, {
+    face_model_id: faceModelId,
+  }).catch(() => {});
+
+  // ── Upload illustrations to Supabase Storage ───────────────────────────────
+
+  await supa.storage.createBucket("illustrations", {
+    public: false,
+    allowedMimeTypes: ["image/png"],
+  });
+
+  const childId = harvest.child_id;
+  const episodeId = episode?.id ?? "no-episode";
+  const illustrationPaths: string[] = [];
+
+  for (const ill of genResult.illustrations) {
+    const pngBuffer = Buffer.from(ill.data, "base64");
+    const storagePath = `${child.id}/${episodeId}/${ill.index}.png`;
+
+    const { error: upErr } = await supa.storage
+      .from("illustrations")
+      .upload(storagePath, pngBuffer, {
+        contentType: "image/png",
+        upsert: true,
+      });
+
+    if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
+    illustrationPaths.push(storagePath);
+  }
+
+  // ── Update episode ─────────────────────────────────────────────────────────
+
+  if (episode) {
+    await supa
+      .from("episodes")
+      .update({
+        illustration_paths: illustrationPaths,
+        illustration_status: "review",
+      })
+      .eq("id", episode.id);
+  }
+
+  // Delete harvest memory photos
+  if (harvest.photo_paths && harvest.photo_paths.length > 0) {
+    try {
+      await supa.storage.from("harvest-photos").remove(harvest.photo_paths);
+      await supa
+        .from("harvests")
+        .update({ photos_deleted_at: new Date().toISOString() })
+        .eq("id", harvestId);
+    } catch (cleanupErr) {
+      console.error("Harvest photo cleanup failed (non-blocking):", cleanupErr);
+    }
+  }
+
+  // Update harvest status to processing (complete comes after book generation)
+  await supa
+    .from("harvests")
+    .update({ status: "processing" })
+    .eq("id", harvestId);
+
+  logEvent({
+    event_type: "illustration.generation",
+    status: "success",
+    harvest_id: harvestId,
+    child_id: childId,
+    message: "Illustration generation completed",
+    metadata: { illustration_count: illustrationPaths.length },
+  });
+
+  return { success: true };
+}
+
+/* ─── triggerIllustrationPipeline — synchronous wrapper ───────────────────── */
+
+export async function triggerIllustrationPipeline(
+  harvestId: string,
+  skipLora?: boolean
+): Promise<{ success: true } | { error: string }> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  logEvent({
+    event_type: "illustration.pipeline",
+    status: "started",
+    harvest_id: harvestId,
+    message: "Illustration pipeline started (sync wrapper)",
+  });
+
+  const supa = getAdmin();
+
+  // ── Fetch harvest + child for skip-lora guard ──────────────────────────────
+
+  const { data: harvestRaw } = await supa
+    .from("harvests")
+    .select(
+      "id, child_id, season, photo_paths, status, milestone_description, current_interests"
+    )
+    .eq("id", harvestId)
+    .single();
+
+  if (!harvestRaw) return { error: "Harvest not found." };
+  const harvest = harvestRaw as unknown as HarvestFullDbRow;
+
+  if (harvest.status !== "processing") {
+    return { error: `Harvest status is '${harvest.status}', expected 'processing'.` };
+  }
+
+  const { data: childRaw } = await supa
+    .from("children")
+    .select("id, name, date_of_birth, pronouns, interests, reading_level, character_photos_deleted_at")
+    .eq("id", harvest.child_id)
+    .single();
+
+  if (!childRaw) return { error: "Child not found." };
+  const child = childRaw as unknown as ChildFullDbRow;
+  const childAge = child.date_of_birth ? storyChildAge(child.date_of_birth) : 6;
+
+  const { data: episodeRaw } = await supa
+    .from("episodes")
+    .select("id, scenes, illustration_status")
+    .eq("harvest_id", harvestId)
+    .single();
+
+  const episode = episodeRaw as unknown as (EpisodeDbRow & { illustration_status?: string }) | null;
+
+  let forceSkipLora = skipLora ?? false;
+
+  if (child.character_photos_deleted_at) {
+    const illStatus = episode?.illustration_status;
+    if (illStatus === "review" || illStatus === "approved" || illStatus === "complete") {
+      return { error: "Illustrations already complete for this episode." };
+    }
+    forceSkipLora = true;
+  }
+
+  // ── Build cover prompt + character description ─────────────────────────────
+
+  let coverPrompt: string | undefined;
+  let characterDescription = "";
+
+  const { data: bibleRaw } = await supa
+    .from("story_bibles")
+    .select("hero_profile, season_arc")
+    .eq("child_id", harvest.child_id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (bibleRaw) {
+    const hero = (bibleRaw as Record<string, unknown>).hero_profile as
+      | Record<string, unknown>
+      | undefined;
+    const arc = (bibleRaw as Record<string, unknown>).season_arc as
+      | Record<string, unknown>
+      | undefined;
+
+    const phys = hero?.physical_description as
+      | Record<string, string>
+      | undefined;
+    const traits = hero?.personality_traits as string[] | undefined;
+
+    const appearance = phys
+      ? [phys.hair, phys.eyes, phys.skin_tone, phys.signature_look]
+          .filter(Boolean)
+          .join(", ")
+      : "";
+    const personality = traits?.join(", ") ?? "";
+    const theme =
+      (arc?.overarching_theme as string) ?? harvest.season ?? "adventure";
+
+    if (appearance) {
+      coverPrompt = buildCoverPrompt(appearance, personality, theme);
+      characterDescription = appearance;
+    }
+  }
+
+  // ── Build prompts ──────────────────────────────────────────────────────────
+
+  let prompts: string[];
+
+  if (episode?.scenes && episode.scenes.length > 0) {
+    prompts = episode.scenes
+      .map((s) => s.illustration_prompt)
+      .filter(Boolean)
+      .slice(0, 12);
+  } else {
+    prompts = buildDefaultPrompts(child, harvest);
+  }
+
+  if (prompts.length === 0) return { error: "No illustration prompts available." };
+
+  const childId = harvest.child_id;
+  let genResult: ModalGenerateResponse;
+
+  // ── Download memory photos for color mood extraction ───────────────────────
+
+  const memoryPhotosBase64: string[] = [];
+  if (harvest.photo_paths && harvest.photo_paths.length > 0) {
+    for (const photoPath of harvest.photo_paths.slice(0, 3)) {
+      try {
+        const { data: blob } = await supa.storage
+          .from("harvest-photos")
+          .download(photoPath);
+        if (blob) {
+          const arrayBuf = await blob.arrayBuffer();
+          memoryPhotosBase64.push(Buffer.from(arrayBuf).toString("base64"));
+        }
+      } catch {
+        // Non-blocking
+      }
+    }
+  }
+
+  const modalSharedParams = {
+    age: childAge,
+    pronouns: child.pronouns ?? "they_them",
+    ...(characterDescription ? { character_description: characterDescription } : {}),
+    ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
+  };
+
+  if (forceSkipLora) {
+    logEvent({
+      event_type: "illustration.pipeline",
+      status: "started",
+      harvest_id: harvestId,
+      message: "Running with base model only (skip_lora)",
+    });
+
+    try {
+      genResult = await callModal<ModalGenerateResponse>(
+        process.env.MODAL_GENERATE_URL!,
+        {
+          prompts,
+          skip_lora: true,
+          ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
+          ...modalSharedParams,
+        }
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      logEvent({
+        event_type: "illustration.pipeline",
+        status: "error",
+        harvest_id: harvestId,
+        message: `Illustration generation (skip_lora) failed: ${msg}`,
+      });
+      return { error: `Illustration generation failed: ${msg}` };
+    }
+  } else {
+    // Normal path: train + generate synchronously
+    const trainResult = await startFaceTraining(harvestId);
+    if ("error" in trainResult) return trainResult;
+
+    // Reset status back to processing for the generation phase
+    await supa.from("harvests").update({ status: "processing" }).eq("id", harvestId);
+
+    try {
+      genResult = await callModal<ModalGenerateResponse>(
+        process.env.MODAL_GENERATE_URL!,
+        {
+          face_model_id: trainResult.face_model_id,
+          prompts,
+          ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
+          ...modalSharedParams,
+        }
+      );
+    } catch (e) {
+      await callModal(process.env.MODAL_DELETE_URL!, {
+        face_model_id: trainResult.face_model_id,
+      }).catch(() => {});
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      logEvent({
+        event_type: "illustration.pipeline",
+        status: "error",
+        harvest_id: harvestId,
+        message: `Illustration generation failed: ${msg}`,
+      });
+      return { error: `Illustration generation failed: ${msg}` };
+    }
+
+    await callModal(process.env.MODAL_DELETE_URL!, {
+      face_model_id: trainResult.face_model_id,
+    }).catch(() => {});
+  }
+
+  // ── Upload illustrations to Supabase Storage ───────────────────────────────
 
   await supa.storage.createBucket("illustrations", {
     public: false,
@@ -642,14 +1022,9 @@ export async function triggerIllustrationPipeline(
         upsert: true,
       });
 
-    if (upErr) {
-      return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
-    }
-
+    if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
     illustrationPaths.push(storagePath);
   }
-
-  // ── Update episode ───────────────────────────────────────────────────────
 
   if (episode) {
     await supa
@@ -661,24 +1036,16 @@ export async function triggerIllustrationPipeline(
       .eq("id", episode.id);
   }
 
-  // ── Delete LoRA weights (constraint step 5) ──────────────────────────────
-
-  await callModal(process.env.MODAL_DELETE_URL!, {
-    face_model_id: trainResult.face_model_id,
-  }).catch(() => {});
-
-  // ── Delete character photos from bucket & mark child ─────────────────────
-
-  try {
-    const pathsToDelete = validFiles.map((f) => `${childId}/${f.name}`);
-    await supa.storage.from("character-photos").remove(pathsToDelete);
-
-    await supa
-      .from("children")
-      .update({ character_photos_deleted_at: new Date().toISOString() })
-      .eq("id", childId);
-  } catch (cleanupErr) {
-    console.error("Character photo cleanup failed (non-blocking):", cleanupErr);
+  if (harvest.photo_paths && harvest.photo_paths.length > 0) {
+    try {
+      await supa.storage.from("harvest-photos").remove(harvest.photo_paths);
+      await supa
+        .from("harvests")
+        .update({ photos_deleted_at: new Date().toISOString() })
+        .eq("id", harvestId);
+    } catch (cleanupErr) {
+      console.error("Harvest photo cleanup failed (non-blocking):", cleanupErr);
+    }
   }
 
   logEvent({
@@ -781,13 +1148,18 @@ export async function generateBook(
     return { error: "PDF uploaded but failed to create download URL." };
   }
 
-  // ── Update episode ───────────────────────────────────────────────────────
+  // ── Update episode — set to book_ready for parent preview ────────────────
+
+  const previewDeadline = new Date();
+  previewDeadline.setDate(previewDeadline.getDate() + 7);
 
   await supa
     .from("episodes")
     .update({
       print_file_path: storagePath,
-      status: "approved",
+      status: "book_ready",
+      preview_deadline: previewDeadline.toISOString(),
+      parent_flag_message: null,
     })
     .eq("id", ep.id);
 
@@ -796,10 +1168,185 @@ export async function generateBook(
     status: "success",
     harvest_id: harvestId,
     child_id: ep.child_id,
-    message: "Book generated and uploaded",
+    message: "Book generated and uploaded — awaiting parent preview",
   });
 
+  // ── Send book-ready email to parent (fire-and-forget) ────────────────────
+
+  try {
+    const { data: childRaw } = await supa
+      .from("children")
+      .select("name, family_id")
+      .eq("id", ep.child_id)
+      .single();
+
+    if (childRaw) {
+      const child = childRaw as unknown as { name: string; family_id: string };
+
+      const { data: parentRaw } = await supa
+        .from("parents")
+        .select("email")
+        .eq("family_id", child.family_id)
+        .single();
+
+      const { data: familyRaw } = await supa
+        .from("families")
+        .select("subscription_tier")
+        .eq("id", child.family_id)
+        .single();
+
+      if (parentRaw) {
+        const parentEmail = (parentRaw as unknown as { email: string }).email;
+        const tier = (familyRaw as unknown as { subscription_tier: string } | null)
+          ?.subscription_tier ?? "physical_digital";
+
+        const month = new Date().getMonth();
+        const season = month <= 1 || month === 11 ? "Winter"
+          : month <= 4 ? "Spring"
+          : month <= 7 ? "Summer"
+          : "Fall";
+
+        const childName = child.name.charAt(0).toUpperCase() + child.name.slice(1);
+
+        const physicalMessage = `
+          <p style="margin:0 0 16px 0;font-size:15px;color:#1B2A4A;line-height:1.6;">
+            Your printed book will ship as part of your ${season} quarterly delivery &mdash; one of four books ${childName} will receive this year, with a special edition arriving for their birthday quarter.
+          </p>`;
+
+        const digitalMessage = `
+          <p style="margin:0 0 16px 0;font-size:15px;color:#1B2A4A;line-height:1.6;">
+            Want a printed copy? Upgrade to a physical plan from your dashboard anytime &mdash; ${childName} will receive four printed books per year, including a special edition for their birthday.
+          </p>`;
+
+        const tierMessage = tier === "digital_only" ? digitalMessage : physicalMessage;
+
+        const { sendEmail } = await import("@/lib/email/resend");
+
+        await sendEmail({
+          to: parentEmail,
+          subject: `${childName}\u2019s storybook is ready to read! \u{1F4D6}`,
+          html: `
+            <p style="margin:0 0 16px 0;font-size:15px;color:#1B2A4A;line-height:1.6;">
+              Great news! ${childName}\u2019s personalized storybook is ready for you to preview.
+            </p>
+            <p style="margin:0 0 24px 0;">
+              <a href="https://storyboundapp.com/dashboard" style="display:inline-block;padding:14px 28px;background-color:#C8963E;color:#ffffff;font-weight:600;text-decoration:none;border-radius:8px;font-size:15px;">
+                Preview Your Book \u2192
+              </a>
+            </p>
+            ${tierMessage}
+          `,
+        });
+
+        logEvent({
+          event_type: "book_ready_email_sent",
+          status: "success",
+          harvest_id: harvestId,
+          child_id: ep.child_id,
+        });
+      }
+    }
+  } catch (emailErr) {
+    logEvent({
+      event_type: "book_ready_email_failed",
+      status: "error",
+      harvest_id: harvestId,
+      child_id: ep.child_id,
+      message: emailErr instanceof Error ? emailErr.message : "Unknown email error",
+    });
+  }
+
   return { success: true, downloadUrl: urlData.signedUrl };
+}
+
+/* ─── Reset flagged book to book_ready ────────────────────────────────────── */
+
+export async function resetToBookReady(
+  harvestId: string
+): Promise<{ success: true } | { error: string }> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const supa = getAdmin();
+
+  const { data: episodeRaw } = await supa
+    .from("episodes")
+    .select("id, child_id, status")
+    .eq("harvest_id", harvestId)
+    .single();
+
+  if (!episodeRaw) return { error: "No episode found for this harvest." };
+
+  const ep = episodeRaw as unknown as {
+    id: string;
+    child_id: string;
+    status: string;
+  };
+
+  if (ep.status !== "parent_flagged") {
+    return { error: `Episode status is '${ep.status}', expected 'parent_flagged'.` };
+  }
+
+  const previewDeadline = new Date();
+  previewDeadline.setDate(previewDeadline.getDate() + 7);
+
+  await supa
+    .from("episodes")
+    .update({
+      status: "book_ready",
+      parent_flag_message: null,
+      preview_deadline: previewDeadline.toISOString(),
+    })
+    .eq("id", ep.id);
+
+  logEvent({
+    event_type: "book.preview_reset",
+    status: "success",
+    harvest_id: harvestId,
+    child_id: ep.child_id,
+    message: "Flagged book reset to book_ready for re-review",
+  });
+
+  // Re-send preview email
+  const { data: childRaw } = await supa
+    .from("children")
+    .select("name, family_id")
+    .eq("id", ep.child_id)
+    .single();
+
+  if (childRaw) {
+    const child = childRaw as unknown as { name: string; family_id: string };
+    const { data: parentRaw } = await supa
+      .from("parents")
+      .select("email")
+      .eq("family_id", child.family_id)
+      .single();
+
+    if (parentRaw) {
+      const parentEmail = (parentRaw as unknown as { email: string }).email;
+      const { sendEmail } = await import("@/lib/email/resend");
+      const { bookReadyToPreview } = await import("@/lib/email/templates");
+
+      const { data: harvestRaw } = await supa
+        .from("harvests")
+        .select("season")
+        .eq("id", harvestId)
+        .single();
+      const season = (harvestRaw as unknown as { season: string } | null)?.season ?? "winter";
+
+      const email = bookReadyToPreview({
+        childName: child.name,
+        season,
+        harvestId,
+        previewDeadline: previewDeadline.toISOString(),
+        parentEmail,
+      });
+
+      sendEmail({ to: parentEmail, subject: email.subject, html: email.html });
+    }
+  }
+
+  return { success: true };
 }
 
 /* ─── Story generation ───────────────────────────────────────────────────── */
@@ -881,6 +1428,8 @@ const STORY_STYLE: Record<string, StoryStyle> = {
   },
 };
 
+// Scene counts are intentionally age-scaled. Total illustrations = SCENE_COUNT + 1 (cover).
+// Age 3-4: 6 scenes + 1 cover = 7 images. Age 5-6: 8+1=9. Age 7-8: 10+1=11. Age 9-10: 12+1=13.
 const SCENE_COUNT: Record<string, number> = {
   "3-4": 6,
   "5-6": 8,
@@ -904,11 +1453,13 @@ interface ChildStoryDbRow {
   preferred_name: string | null;
   date_of_birth: string;
   pronouns: string;
+  pronouns_other: string | null;
   reading_level: string;
   interests: string[];
   favorites: Record<string, string>;
   avoidances: string[];
   family_notes: string | null;
+  default_archetype: string | null;
 }
 
 interface HarvestStoryDbRow {
@@ -918,10 +1469,9 @@ interface HarvestStoryDbRow {
   quarter: number;
   year: number;
   status: string;
-  memory_1: string | null;
-  memory_2: string | null;
   current_interests: string[];
   milestone_description: string | null;
+  character_archetype: string | null;
   notable_notes: string | null;
   photo_captions: string[];
 }
@@ -947,7 +1497,8 @@ function storyChildAge(dob: string): number {
   return age;
 }
 
-function pronounLabel(p: string): string {
+function pronounLabel(p: string, other?: string | null): string {
+  if (p === "other" && other) return other;
   return p.replace(/_/g, "/");
 }
 
@@ -1007,7 +1558,7 @@ The Story Bible is the single source of truth for this child's character across 
 Every field you output — especially physical descriptions, personality traits, and supporting characters — will be injected verbatim into every future episode prompt. Be specific and detailed.
 
 Rules:
-- The child IS the hero. Not a character inspired by them. Them.
+- The child IS the hero. Not a character inspired by them. Them.${child.preferred_name ? `\n- The hero's name in the story should be "${child.preferred_name}" (their preferred name).` : ""}
 - The world is fictional. No real locations, schools, or identifiable details.
 - Four episodes per year form one Season. Each episode is self-contained but threads the arc.
 - Episode 4 is ALWAYS the Birthday Episode — the emotional climax of the season.
@@ -1019,21 +1570,21 @@ Output format: valid JSON only. No preamble, no markdown fences, no trailing com
     user: `Generate a Story Bible for this child:
 
 Child profile:
-- Name: ${child.name}
+- Name: ${child.name}${child.preferred_name ? `\n- Goes by: ${child.preferred_name}` : ""}
 - Age: ${age}
-- Pronouns: ${pronounLabel(child.pronouns)}
+- Pronouns: ${pronounLabel(child.pronouns, child.pronouns_other)}
 - Interests: ${child.interests.join(", ")}
 - Favorite things: ${Object.entries(child.favorites ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ")}
 - Fears to avoid: ${child.avoidances.length > 0 ? child.avoidances.join(", ") : "none specified"}
 - Reading level: ${child.reading_level.replace(/_/g, " ")}
-- Family context: ${child.family_notes ?? "Not provided"}
+- Family context: ${child.family_notes ?? "Not provided"}${child.default_archetype ? `\n- Character inspiration: ${child.default_archetype} (reimagine as an original character — no trademarked names or likenesses)` : ""}
 
 Output this exact JSON structure:
 {
   "hero": {
-    "name": "${child.name}",
+    "name": "${child.preferred_name ?? child.name}",
     "age": ${age},
-    "pronouns": "${pronounLabel(child.pronouns)}",
+    "pronouns": "${pronounLabel(child.pronouns, child.pronouns_other)}",
     "physical_description": {
       "hair": "Specific hair color, length, style (e.g., 'shoulder-length curly brown hair often in two braids')",
       "eyes": "Specific eye color and expression (e.g., 'big, warm brown eyes that light up when curious')",
@@ -1175,24 +1726,55 @@ function buildCharacterBlock(storyBible: Record<string, unknown>): string {
   return block;
 }
 
+interface PreviousEpisodeSeed {
+  episodeNumber: number;
+  season: string;
+  title: string;
+  storySeeds: {
+    key_moment?: string;
+    emotional_growth?: string;
+    unresolved_thread?: string;
+    callback_moment?: string;
+  } | null;
+}
+
 function buildEpisodePrompt(
   child: ChildStoryDbRow,
   storyBible: Record<string, unknown>,
   harvest: HarvestStoryDbRow,
-  age: number
+  age: number,
+  previousEpisodes: PreviousEpisodeSeed[]
 ): { system: string; user: string } {
   const episodeNumber = harvest.quarter;
   const isEp4 = episodeNumber === 4;
-  const episodes = storyBible.episodes as
-    | Record<string, unknown>[]
-    | undefined;
 
-  const ep4Section = isEp4
-    ? `\nPrevious episode callbacks:
-- Episode 1 moment to reference: ${(episodes?.[0])?.resolution ?? "N/A"}
-- Episode 2 moment to reference: ${(episodes?.[1])?.resolution ?? "N/A"}
-- Episode 3 moment to reference: ${(episodes?.[2])?.resolution ?? "N/A"}`
-    : "";
+  // Build continuity section from actual generated episodes (not just Story Bible outlines)
+  let continuitySection = "";
+  if (previousEpisodes.length > 0) {
+    continuitySection = "\nPrevious episodes this season (use these for emotional continuity):";
+    for (const prev of previousEpisodes) {
+      continuitySection += `\n\nEpisode ${prev.episodeNumber} — "${prev.title}" (${prev.season}):`;
+      if (prev.storySeeds) {
+        if (prev.storySeeds.key_moment) {
+          continuitySection += `\n- Key moment: ${prev.storySeeds.key_moment}`;
+        }
+        if (prev.storySeeds.emotional_growth) {
+          continuitySection += `\n- Emotional growth: ${prev.storySeeds.emotional_growth}`;
+        }
+        if (prev.storySeeds.unresolved_thread) {
+          continuitySection += `\n- Unresolved thread: ${prev.storySeeds.unresolved_thread}`;
+        }
+        if (prev.storySeeds.callback_moment) {
+          continuitySection += `\n- Callback-worthy moment: ${prev.storySeeds.callback_moment}`;
+        }
+      }
+    }
+    if (isEp4) {
+      continuitySection += "\n\nEpisode 4 is the BIRTHDAY EPISODE — the emotional climax. You MUST reference at least one key moment or callback-worthy moment from each previous episode. Weave them into the resolution as a celebration of the hero's growth this year.";
+    } else {
+      continuitySection += "\n\nWeave in at least one reference to a previous episode's unresolved thread or callback moment. Show growth — the hero should feel like they're building on what they learned before.";
+    }
+  }
 
   const characterBlock = buildCharacterBlock(storyBible);
   const { style, sceneCount } = getStoryStyle(age);
@@ -1208,7 +1790,7 @@ function buildEpisodePrompt(
   const personalityDesc = heroTraits?.join(", ") ?? "see character block";
 
   return {
-    system: `You are writing a personalized children's storybook for ${child.name}, age ${age}.
+    system: `You are writing a personalized children's storybook for ${child.preferred_name ?? child.name}, age ${age}.
 
 Writing style rules — follow these exactly:
 - Each scene must be ${style.wordsPerScene} words or fewer
@@ -1216,7 +1798,7 @@ Writing style rules — follow these exactly:
 - Vocabulary level: ${style.vocabulary}
 - Tone: ${style.tone}
 - Tension level: ${style.tension}
-${style.catchphrase ? `- Give ${child.name} a short personal catchphrase they repeat at exciting moments (1 line, invented for this child based on their traits)` : "- No catchphrase needed at this age"}
+${style.catchphrase ? `- Give ${child.preferred_name ?? child.name} a short personal catchphrase they repeat at exciting moments (1 line, invented for this child based on their traits)` : "- No catchphrase needed at this age"}
 
 Emotional arc for this age: ${style.emotionalArc}
 The story must follow this arc. Do not skip the middle — the resolution only lands if the struggle is real first.
@@ -1226,8 +1808,9 @@ Example of the correct sentence style for this age:
 
 Never write above this reading level. If a sentence feels too complex, break it into two.
 
-The child hero is ${child.name}. Physical description: ${physDesc}.
+The child hero is ${child.preferred_name ?? child.name}. Physical description: ${physDesc}.
 Personality: ${personalityDesc}.
+Pronouns: ${pronounLabel(child.pronouns, child.pronouns_other)}.
 Make these traits visible through actions and dialogue, not just narration.
 
 CRITICAL: Character consistency
@@ -1243,7 +1826,7 @@ ${isEp4 ? "- Episode 4 must reference specific moments from Episodes 1, 2, and 3
 
 Illustration prompt rules:
 - Every illustration_prompt must describe the hero using the EXACT physical details from the character block (hair, eyes, skin tone, signature look)
-- Every illustration_prompt must end with [FACE REF: use reference image storybound_ref_CHILD_ID_q${episodeNumber}.png]
+- Keep each illustration_prompt under 20 words — focus on the single most important visual element of the scene
 - Describe the companion using their EXACT physical description from the character block
 - Maintain visual consistency: same clothes, same hair, same features in every scene
 
@@ -1255,19 +1838,18 @@ Content safety:
 - Positive resolution required. Challenge is emotional, not dangerous.
 
 Output format: valid JSON only. No preamble, no markdown fences, no trailing commas, no comments. Every string value must be properly escaped.`,
-    user: `Generate Episode ${episodeNumber} for ${child.name}.
+    user: `Generate Episode ${episodeNumber} for ${child.preferred_name ?? child.name}.
 ${characterBlock}
 Story Bible:
 ${JSON.stringify(storyBible, null, 2)}
 
 This quarter's harvest data:
 - Season: ${harvest.season}
-- Key memory 1: ${harvest.memory_1 ?? "Not provided"}
-- Key memory 2: ${harvest.memory_2 ?? "Not provided"}
+- Milestone this season: ${harvest.milestone_description ?? "Not provided"} — THIS is the emotional core of the episode. The story's central challenge or triumph should grow from this real moment.
 - Photo descriptions: ${harvest.photo_captions.length > 0 ? harvest.photo_captions.join("; ") : "None available"}
-- Current interests (updated): ${harvest.current_interests.length > 0 ? harvest.current_interests.join(", ") : "Same as profile"}
+- Current interests (updated): ${harvest.current_interests.length > 0 ? harvest.current_interests.join(", ") : "Same as profile"}${harvest.character_archetype ? `\n- Character inspiration this season: ${harvest.character_archetype} (reimagine as original — no trademarked names or likenesses)` : ""}
 - Anything new or notable: ${harvest.notable_notes ?? "Nothing noted"}
-${ep4Section}
+${continuitySection}
 
 Output this exact JSON structure:
 {
@@ -1281,10 +1863,16 @@ Output this exact JSON structure:
     }
   ],
   "final_page": "A short closing line (1-2 sentences) that hints at next episode",
-  "parent_note": "A brief warm note for the parent about what this story celebrated (2-3 sentences, not printed in book)"
+  "parent_note": "A brief warm note for the parent about what this story celebrated (2-3 sentences, not printed in book)",
+  "story_seeds": {
+    "key_moment": "The single most vivid, emotionally resonant scene in this episode (1 sentence — specific enough to callback later)",
+    "emotional_growth": "What the hero learned or how they grew (1 sentence — e.g., 'learned that being scared doesn't mean you can't be brave')",
+    "unresolved_thread": "A small loose end or curiosity that a future episode could pick up (1 sentence — e.g., 'the glowing seed they planted hasn't sprouted yet')",
+    "callback_moment": "A specific visual or dialogue moment worth referencing in a future episode (1 sentence — e.g., 'when Aria whispered to the firefly and it blinked three times')"
+  }
 }
 
-Remember: exactly ${sceneCount} scenes. Each illustration_prompt must describe ${child.name} using the exact physical details from the Characters block and end with [FACE REF: use reference image storybound_ref_CHILD_ID_q${episodeNumber}.png]`,
+Remember: exactly ${sceneCount} scenes. Each illustration_prompt must describe ${child.preferred_name ?? child.name} using the exact physical details from the Characters block. Keep each illustration_prompt under 20 words.`,
   };
 }
 
@@ -1312,15 +1900,6 @@ function runStoryQualityChecks(
   }
 
   if (scenes) {
-    const missingRef = scenes.filter(
-      (s) => !(s.illustration_prompt as string)?.includes("[FACE REF")
-    );
-    if (missingRef.length > 0) {
-      warnings.push(
-        `[FACE REF] tag missing on scenes: ${missingRef.map((s) => s.number).join(", ")}.`
-      );
-    }
-
     // Per-scene word count validation + trimming
     const wordLimit = style.wordsPerScene;
     const trimThreshold = Math.ceil(wordLimit * 1.2);
@@ -1368,8 +1947,9 @@ function runStoryQualityChecks(
       }
     }
 
-    if (!storyText.includes(child.name.toLowerCase())) {
-      warnings.push(`Hero name "${child.name}" not found in story text.`);
+    const heroName = child.preferred_name ?? child.name;
+    if (!storyText.includes(heroName.toLowerCase())) {
+      warnings.push(`Hero name "${heroName}" not found in story text.`);
     }
 
     const totalWordTarget = expectedSceneCount * style.wordsPerScene;
@@ -1394,7 +1974,70 @@ function runStoryQualityChecks(
     warnings.push("Missing parent_note.");
   }
 
+  const seeds = episode.story_seeds as Record<string, string> | undefined;
+  if (!seeds) {
+    warnings.push("Missing story_seeds — continuity to future episodes will be broken.");
+  } else {
+    const required = ["key_moment", "emotional_growth", "unresolved_thread", "callback_moment"];
+    const missing = required.filter((k) => !seeds[k]);
+    if (missing.length > 0) {
+      warnings.push(`Incomplete story_seeds — missing: ${missing.join(", ")}.`);
+    }
+  }
+
   return warnings;
+}
+
+/* ─── Scene prompt enrichment with memory photos (Fix 8A) ──────────────── */
+
+async function enrichScenePromptsWithMemories(
+  scenePrompts: string[],
+  photoCaptions: string[],
+  childName: string
+): Promise<string[]> {
+  if (photoCaptions.length === 0 || scenePrompts.length === 0) {
+    return scenePrompts;
+  }
+
+  try {
+    const result = await callClaude(
+      `You are given illustration prompts for a children's book and memory photo captions submitted by a parent.
+
+Your job: for each scene prompt, check if any memory caption is thematically relevant and add ONE specific visual detail from it to the prompt.
+
+Rules:
+- Only add details that fit naturally
+- Never force all captions into every scene
+- Keep additions under 10 words
+- Return the same number of prompts
+- Return JSON array only`,
+      `Child: ${childName}
+
+Memory captions:
+${photoCaptions.map((c, i) => `${i + 1}. ${c}`).join("\n")}
+
+Scene prompts:
+${scenePrompts.map((p, i) => `${i + 1}. ${p}`).join("\n")}
+
+Return enriched prompts as a JSON array of strings.`
+    );
+
+    // result is already parsed as Record<string, unknown> by callClaude
+    // It should be an array at the top level
+    const parsed = Array.isArray(result) ? result as string[] : null;
+
+    if (!parsed || parsed.length !== scenePrompts.length) {
+      console.warn(
+        `Scene enrichment returned ${parsed?.length ?? "non-array"} prompts, expected ${scenePrompts.length} — using originals`
+      );
+      return scenePrompts;
+    }
+
+    return parsed;
+  } catch (e) {
+    console.warn("Scene enrichment failed — using original prompts:", e);
+    return scenePrompts;
+  }
 }
 
 function reconstructStoryBible(
@@ -1416,6 +2059,93 @@ function reconstructStoryBible(
     season_arc: arcClean,
     episodes: row.episode_outlines ?? [],
   };
+}
+
+/* ─── Memory richness scoring ──────────────────────────────────────────── */
+
+interface RichnessResult {
+  score: number;          // 0–100
+  tier: "rich" | "adequate" | "thin";
+  warnings: string[];
+}
+
+function scoreHarvestRichness(
+  harvest: HarvestStoryDbRow,
+  child: ChildStoryDbRow
+): RichnessResult {
+  let score = 0;
+  const warnings: string[] = [];
+
+  // ── Milestone (0–30 pts) — the emotional core ─────────────────────────
+  const milestone = harvest.milestone_description?.trim() ?? "";
+  if (milestone.length === 0) {
+    warnings.push("PERSONALIZATION: No milestone provided — story will lack a real-life emotional anchor.");
+  } else if (milestone.length < 20) {
+    score += 10;
+    warnings.push("PERSONALIZATION: Milestone is very brief — story may feel generic. Consider asking parent for more detail.");
+  } else if (milestone.length < 80) {
+    score += 20;
+  } else {
+    score += 30;
+  }
+
+  // ── Photo captions (0–20 pts) — visual + contextual details ───────────
+  const captions = harvest.photo_captions?.filter((c) => c.trim().length > 0) ?? [];
+  if (captions.length === 0) {
+    warnings.push("PERSONALIZATION: No photo captions — illustrations will lack real-life grounding.");
+  } else if (captions.length === 1) {
+    score += 8;
+  } else if (captions.length === 2) {
+    score += 14;
+  } else {
+    score += 20;
+  }
+
+  // ── Current interests (0–15 pts) ──────────────────────────────────────
+  const interests = harvest.current_interests?.filter((i) => i.trim().length > 0) ?? [];
+  if (interests.length === 0) {
+    // Fall back to profile interests
+    if (child.interests.length > 0) {
+      score += 5;
+      warnings.push("PERSONALIZATION: No updated interests this season — falling back to profile interests.");
+    } else {
+      warnings.push("PERSONALIZATION: No interests on profile or harvest — story world will be generic.");
+    }
+  } else if (interests.length === 1) {
+    score += 8;
+  } else {
+    score += 15;
+  }
+
+  // ── Notable notes (0–10 pts) — life context ──────────────────────────
+  const notes = harvest.notable_notes?.trim() ?? "";
+  if (notes.length > 0) {
+    score += notes.length >= 30 ? 10 : 5;
+  }
+
+  // ── Character archetype (0–10 pts) ────────────────────────────────────
+  const archetype = harvest.character_archetype?.trim() ?? child.default_archetype?.trim() ?? "";
+  if (archetype.length > 0) {
+    score += 10;
+  }
+
+  // ── Child profile completeness (0–15 pts) ─────────────────────────────
+  if (child.family_notes && child.family_notes.trim().length > 0) score += 5;
+  if (child.favorites && Object.keys(child.favorites).length > 0) score += 5;
+  if (child.avoidances && child.avoidances.length > 0) score += 5;
+
+  // ── Determine tier ────────────────────────────────────────────────────
+  let tier: "rich" | "adequate" | "thin";
+  if (score >= 65) {
+    tier = "rich";
+  } else if (score >= 35) {
+    tier = "adequate";
+  } else {
+    tier = "thin";
+    warnings.push(`PERSONALIZATION: Score ${score}/100 (thin). Story will rely heavily on the Story Bible with minimal real-life connection.`);
+  }
+
+  return { score, tier, warnings };
 }
 
 export async function generateStory(
@@ -1440,7 +2170,7 @@ export async function generateStory(
   const { data: harvestRaw } = await supa
     .from("harvests")
     .select(
-      "id, child_id, season, quarter, year, status, memory_1, memory_2, current_interests, milestone_description, notable_notes, photo_captions"
+      "id, child_id, season, quarter, year, status, current_interests, milestone_description, character_archetype, notable_notes, photo_captions"
     )
     .eq("id", harvestId)
     .single();
@@ -1472,7 +2202,7 @@ export async function generateStory(
   const { data: childRaw } = await supa
     .from("children")
     .select(
-      "id, name, preferred_name, date_of_birth, pronouns, reading_level, interests, favorites, avoidances, family_notes"
+      "id, name, preferred_name, date_of_birth, pronouns, pronouns_other, reading_level, interests, favorites, avoidances, family_notes, default_archetype"
     )
     .eq("id", harvest.child_id)
     .single();
@@ -1481,6 +2211,22 @@ export async function generateStory(
 
   const child = childRaw as unknown as ChildStoryDbRow;
   const age = storyChildAge(child.date_of_birth);
+
+  // ── Memory richness validation ─────────────────────────────────────────
+
+  const richness = scoreHarvestRichness(harvest, child);
+
+  logEvent({
+    event_type: "story.richness",
+    status: "success",
+    harvest_id: harvestId,
+    message: `Personalization score: ${richness.score}/100 (${richness.tier})`,
+    metadata: {
+      score: richness.score,
+      tier: richness.tier,
+      warning_count: richness.warnings.length,
+    },
+  });
 
   // ── Get or generate story bible ────────────────────────────────────────
 
@@ -1561,9 +2307,39 @@ export async function generateStory(
     storyBible = bibleResult;
   }
 
+  // ── Fetch previous episodes for continuity ─────────────────────────────
+
+  const previousEpisodes: PreviousEpisodeSeed[] = [];
+  if (harvest.quarter > 1) {
+    const { data: prevEps } = await supa
+      .from("episodes")
+      .select("episode_number, title, story_seeds")
+      .eq("child_id", child.id)
+      .eq("year", harvest.year)
+      .lt("episode_number", harvest.quarter)
+      .order("episode_number", { ascending: true });
+
+    if (prevEps) {
+      for (const pe of prevEps) {
+        const ep = pe as unknown as {
+          episode_number: number;
+          title: string | null;
+          story_seeds: Record<string, string> | null;
+        };
+        const seasons = ["spring", "summer", "autumn", "birthday"];
+        previousEpisodes.push({
+          episodeNumber: ep.episode_number,
+          season: seasons[ep.episode_number - 1] ?? "unknown",
+          title: ep.title ?? `Episode ${ep.episode_number}`,
+          storySeeds: ep.story_seeds,
+        });
+      }
+    }
+  }
+
   // ── Generate episode (Pass 2) ──────────────────────────────────────────
 
-  const episodePrompt = buildEpisodePrompt(child, storyBible, harvest, age);
+  const episodePrompt = buildEpisodePrompt(child, storyBible, harvest, age, previousEpisodes);
 
   let episodeResult: Record<string, unknown>;
   try {
@@ -1584,13 +2360,32 @@ export async function generateStory(
 
   // ── Quality checks ────────────────────────────────────────────────────
 
-  const qualityWarnings = runStoryQualityChecks(episodeResult, child, age);
+  const qualityWarnings = [
+    ...richness.warnings,
+    ...runStoryQualityChecks(episodeResult, child, age),
+  ];
 
-  // ── Insert episode ────────────────────────────────────────────────────
+  // ── Enrich scene prompts with memory photo captions (Fix 8A) ──────────
 
   const scenes = episodeResult.scenes as
     | Record<string, unknown>[]
     | undefined;
+
+  if (scenes && harvest.photo_captions.length > 0) {
+    const originalPrompts = scenes.map((s) => (s.illustration_prompt as string) ?? "");
+    const enriched = await enrichScenePromptsWithMemories(
+      originalPrompts,
+      harvest.photo_captions,
+      child.preferred_name ?? child.name
+    );
+    for (let i = 0; i < scenes.length; i++) {
+      if (enriched[i] && enriched[i] !== originalPrompts[i]) {
+        scenes[i].illustration_prompt = enriched[i];
+      }
+    }
+  }
+
+  // ── Insert episode ────────────────────────────────────────────────────
 
   const { error: epInsertErr } = await supa.from("episodes").insert({
     child_id: child.id,
@@ -1604,6 +2399,7 @@ export async function generateStory(
     scenes: scenes ?? [],
     final_page: (episodeResult.final_page as string) ?? null,
     parent_note: (episodeResult.parent_note as string) ?? null,
+    story_seeds: (episodeResult.story_seeds as Record<string, unknown>) ?? null,
     status: "draft",
   });
 
@@ -1743,8 +2539,8 @@ export async function markSentToPrint(
   if (!ep) return { error: "No episode found." };
   const episode = ep as unknown as { id: string; status: string };
 
-  if (episode.status !== "approved") {
-    return { error: `Episode status is '${episode.status}', expected 'approved'.` };
+  if (episode.status !== "parent_approved") {
+    return { error: `Episode status is '${episode.status}', expected 'parent_approved'.` };
   }
 
   const sentAt = new Date().toISOString();

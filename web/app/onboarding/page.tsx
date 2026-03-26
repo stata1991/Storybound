@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import { saveChildProfile } from "./actions";
+import { useState, useRef, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { saveChildProfile, submitOnboardingMemoryDrop } from "./actions";
 import StepPhotos from "./StepPhotos";
+import MemoryPhotoUpload from "@/app/components/MemoryPhotoUpload";
+import type { MemoryPhotoUploadRef } from "@/app/components/MemoryPhotoUpload";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -17,7 +19,7 @@ interface FormState {
   interests: string;
   avoidances: string;
   defaultArchetype: string;
-  // Step 3
+  // Step 3 (address — optional)
   parentFirstName: string;
   shippingName: string;
   addressLine1: string;
@@ -26,6 +28,12 @@ interface FormState {
   state: string;
   zip: string;
   country: string;
+}
+
+interface MemoryDropState {
+  milestone: string;
+  currentInterests: string;
+  notes: string;
 }
 
 const INITIAL_STATE: FormState = {
@@ -46,16 +54,22 @@ const INITIAL_STATE: FormState = {
   country: "US",
 };
 
+const INITIAL_MEMORY_DROP: MemoryDropState = {
+  milestone: "",
+  currentInterests: "",
+  notes: "",
+};
+
 const PRONOUNS = [
   { value: "boy", label: "Boy" },
   { value: "girl", label: "Girl" },
 ];
 
 const READING_LEVELS = [
-  { value: "pre_reader", label: "Pre-reader (3–4)" },
-  { value: "early_reader", label: "Early reader (4–6)" },
-  { value: "independent", label: "Independent (6–8)" },
-  { value: "chapter_book", label: "Chapter book (8–10)" },
+  { value: "pre_reader", label: "Pre-reader (3\u20134)" },
+  { value: "early_reader", label: "Early reader (4\u20136)" },
+  { value: "independent", label: "Independent (6\u20138)" },
+  { value: "chapter_book", label: "Chapter book (8\u201310)" },
 ];
 
 /* ─── Helpers ──────────────────────────────────────────────────────────────── */
@@ -69,23 +83,6 @@ function calculateAge(dob: string): number {
     age--;
   }
   return age;
-}
-
-function getMemoryDropWindow(): string {
-  const closes = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000);
-  const formatted = closes.toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-  });
-  return `Open now — window closes ${formatted}`;
-}
-
-function formatDate(dateStr: string): string {
-  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
 }
 
 /* ─── Progress Indicator ───────────────────────────────────────────────────── */
@@ -165,7 +162,7 @@ function ProgressIndicator({
 /* ─── DOB Validation ───────────────────────────────────────────────────────── */
 
 function isDobValid(dob: string): boolean {
-  if (!dob) return true; // empty is not invalid, just incomplete
+  if (!dob) return true;
   const birth = new Date(dob + "T00:00:00");
   const today = new Date();
   if (birth > today) return false;
@@ -218,7 +215,7 @@ function StepAbout({
         />
         {dobTouched && !dobValid && (
           <p className="mt-1.5 font-sans text-xs text-red-500">
-            Please enter a valid birthday for a child aged 2–12.
+            Please enter a valid birthday for a child aged 2\u201312.
           </p>
         )}
       </div>
@@ -311,7 +308,7 @@ function StepWorld({
           type="text"
           value={form.defaultArchetype}
           onChange={(e) => onChange({ defaultArchetype: e.target.value })}
-          placeholder="Elsa, Superman, a friendly dragon — anything they love"
+          placeholder="Elsa, Superman, a friendly dragon \u2014 anything they love"
           className="w-full rounded-full border border-navy/15 bg-white px-6 py-3.5 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm"
         />
         <p className="mt-1.5 font-sans text-xs text-navy/40">
@@ -326,9 +323,11 @@ function StepWorld({
 function StepAddress({
   form,
   onChange,
+  onSkip,
 }: {
   form: FormState;
   onChange: (updates: Partial<FormState>) => void;
+  onSkip: () => void;
 }) {
   return (
     <div className="space-y-4">
@@ -445,102 +444,164 @@ function StepAddress({
       </div>
 
       <p className="font-sans text-xs text-navy/40">
-        We ship within the US. International? Choose digital-only on the
-        previous step.
+        We currently ship within the US.
       </p>
+
+      <button
+        type="button"
+        onClick={onSkip}
+        className="mt-2 w-full rounded-full border border-navy/10 py-3 font-sans text-sm text-navy/50 transition-all hover:border-gold/30 hover:text-gold"
+      >
+        Skip for now
+      </button>
     </div>
   );
 }
 
-function StepConfirm({
-  form,
-  isAdditional,
+function StepMemoryDrop({
+  childName,
+  memoryDrop,
+  onChange,
+  childId,
+  harvestId,
+  photoRef,
 }: {
-  form: FormState;
-  isAdditional: boolean;
+  childName: string;
+  memoryDrop: MemoryDropState;
+  onChange: (updates: Partial<MemoryDropState>) => void;
+  childId: string | null;
+  harvestId: string | null;
+  photoRef: React.Ref<MemoryPhotoUploadRef>;
 }) {
-  const age = form.dateOfBirth ? calculateAge(form.dateOfBirth) : null;
-  const memoryDropDate = getMemoryDropWindow();
-
-  const pronounLabel =
-    PRONOUNS.find((p) => p.value === form.pronouns)?.label ?? "—";
-  const readingLabel =
-    READING_LEVELS.find((r) => r.value === form.readingLevel)?.label ?? "—";
+  const name = childName
+    ? childName.charAt(0).toUpperCase() + childName.slice(1)
+    : "your child";
 
   return (
     <div className="space-y-6">
-      {/* Child summary */}
-      <div className="rounded-2xl border border-navy/10 bg-cream-warm p-6">
-        <h3 className="font-serif text-xl font-semibold text-navy">
-          {form.name.charAt(0).toUpperCase() + form.name.slice(1)}
-          {age !== null && (
-            <span className="text-navy/50">, age {age}</span>
-          )}
-        </h3>
-        <div className="mt-4 space-y-2 font-sans text-sm text-navy/70">
-          <p>
-            <span className="font-medium text-navy/50">Birthday:</span>{" "}
-            {form.dateOfBirth ? formatDate(form.dateOfBirth) : "—"}
-          </p>
-          <p>
-            <span className="font-medium text-navy/50">Pronouns:</span>{" "}
-            {pronounLabel}
-          </p>
-          <p>
-            <span className="font-medium text-navy/50">Reading level:</span>{" "}
-            {readingLabel}
-          </p>
-          {form.interests && (
-            <p>
-              <span className="font-medium text-navy/50">Interests:</span>{" "}
-              {form.interests.split(",").map((s) => s.trim()).filter(Boolean).join(", ")}
-            </p>
-          )}
-          {form.avoidances && (
-            <p>
-              <span className="font-medium text-navy/50">Avoidances:</span>{" "}
-              {form.avoidances.split(",").map((s) => s.trim()).filter(Boolean).join(", ")}
-            </p>
-          )}
-          {form.defaultArchetype && (
-            <p>
-              <span className="font-medium text-navy/50">Companion:</span>{" "}
-              {form.defaultArchetype}
-            </p>
-          )}
-        </div>
+      <p className="font-sans text-sm leading-relaxed text-navy/50">
+        Share a few things about {name}&rsquo;s world right now. These details
+        bring their first story to life.
+      </p>
+
+      <div>
+        <label className="mb-2 block font-sans text-sm font-medium text-navy">
+          Biggest milestone lately
+        </label>
+        <textarea
+          value={memoryDrop.milestone}
+          onChange={(e) => onChange({ milestone: e.target.value })}
+          placeholder="Lost their first tooth, learned to ride a bike, started kindergarten..."
+          rows={3}
+          className="w-full rounded-2xl border border-navy/15 bg-white px-6 py-4 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm resize-none"
+        />
       </div>
 
-      {/* Address summary */}
-      {!isAdditional && form.addressLine1 && (
-        <div className="rounded-2xl border border-navy/10 bg-cream-warm p-6">
-          <h3 className="font-serif text-lg font-semibold text-navy">
-            Delivery address
-          </h3>
-          <div className="mt-3 font-sans text-sm leading-relaxed text-navy/70">
-            <p>{form.shippingName}</p>
-            <p>{form.addressLine1}</p>
-            {form.addressLine2 && <p>{form.addressLine2}</p>}
-            <p>
-              {form.city}, {form.state} {form.zip}
-            </p>
-            <p>{form.country}</p>
-          </div>
-        </div>
-      )}
+      <div>
+        <label className="mb-2 block font-sans text-sm font-medium text-navy">
+          What are they obsessed with right now?
+        </label>
+        <textarea
+          value={memoryDrop.currentInterests}
+          onChange={(e) => onChange({ currentInterests: e.target.value })}
+          placeholder="dinosaurs, building forts, a specific song they play on repeat..."
+          rows={3}
+          className="w-full rounded-2xl border border-navy/15 bg-white px-6 py-4 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm resize-none"
+        />
+      </div>
 
-      {/* Memory drop window */}
+      <div>
+        <label className="mb-2 block font-sans text-sm font-medium text-navy">
+          Anything else we should know?{" "}
+          <span className="font-normal text-navy/40">(optional)</span>
+        </label>
+        <textarea
+          value={memoryDrop.notes}
+          onChange={(e) => onChange({ notes: e.target.value })}
+          placeholder="New sibling on the way, just moved to a new house, loves bedtime stories about..."
+          rows={2}
+          className="w-full rounded-2xl border border-navy/15 bg-white px-6 py-4 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm resize-none"
+        />
+      </div>
+
+      {/* Photo upload (optional) */}
+      {childId && harvestId && (
+        <>
+          <div className="flex items-center gap-3">
+            <div className="h-px flex-1 bg-navy/10" />
+            <span className="font-sans text-xs font-medium text-navy/40">
+              Add photos from this season (optional)
+            </span>
+            <div className="h-px flex-1 bg-navy/10" />
+          </div>
+          <p className="font-sans text-xs text-navy/40">
+            These help us illustrate your child&rsquo;s world.
+          </p>
+          <MemoryPhotoUpload
+            ref={photoRef}
+            childId={childId}
+            harvestId={harvestId}
+            onComplete={() => {}}
+          />
+          <p className="text-center font-sans text-xs text-navy/30">
+            Skip for now — you can add photos later from your dashboard.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function StepConfirmation({ childName }: { childName: string }) {
+  const name = childName
+    ? childName.charAt(0).toUpperCase() + childName.slice(1)
+    : "Your child";
+
+  return (
+    <div className="space-y-6 text-center">
+      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gold/10">
+        <svg
+          className="h-8 w-8 text-gold"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M5 13l4 4L19 7"
+          />
+        </svg>
+      </div>
+
+      <h3 className="font-serif text-xl font-semibold text-navy">
+        {name}&rsquo;s story is being created!
+      </h3>
+
+      <p className="font-sans text-sm leading-relaxed text-navy/60">
+        Our team is crafting a one-of-a-kind book using everything you&rsquo;ve
+        shared. We&rsquo;ll email you when it&rsquo;s ready to preview.
+      </p>
+
       <div className="rounded-2xl border border-gold/20 bg-gold/5 p-6">
         <p className="font-sans text-sm font-medium text-gold">
-          Memory drop window
+          What happens next?
         </p>
-        <p className="mt-1 font-serif text-lg font-semibold text-navy">
-          {memoryDropDate}
-        </p>
-        <p className="mt-3 font-sans text-sm leading-relaxed text-navy/60">
-          Share {form.name || "your child"}&rsquo;s photos and milestones
-          to start crafting their first story.
-        </p>
+        <ul className="mt-3 space-y-2 text-left font-sans text-sm text-navy/60">
+          <li className="flex items-start gap-2">
+            <span className="mt-0.5 text-gold">1.</span>
+            We write and illustrate {name}&rsquo;s story
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="mt-0.5 text-gold">2.</span>
+            You get an email to preview the book
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="mt-0.5 text-gold">3.</span>
+            Choose to keep it digital (free) or get it printed
+          </li>
+        </ul>
       </div>
     </div>
   );
@@ -550,32 +611,67 @@ function StepConfirm({
 
 function OnboardingWizard() {
   const searchParams = useSearchParams();
-  const isPaid = searchParams.get("paid") === "true";
+  const router = useRouter();
   const isAdditional = searchParams.get("additional") === "true";
-  const subscriptionType = searchParams.get("type") || "founding";
 
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<FormState>(INITIAL_STATE);
+  const [memoryDrop, setMemoryDrop] = useState<MemoryDropState>(INITIAL_MEMORY_DROP);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [childId, setChildId] = useState<string | null>(null);
+  const [harvestId, setHarvestId] = useState<string | null>(null);
+  const savingRef = useRef(false);
+  const photoRef = useRef<MemoryPhotoUploadRef>(null);
 
   const onChange = (updates: Partial<FormState>) => {
     setForm((prev) => ({ ...prev, ...updates }));
   };
 
-  // Steps: About → World → [Address] → Confirm → Photos
-  const steps = isAdditional
-    ? ["About", "Their world", "Confirm", "Photos"]
-    : ["About", "Their world", "Address", "Confirm", "Photos"];
-  const totalSteps = steps.length;
-  const confirmStep = isAdditional ? 3 : 4;
-  const isPhotosStep = step === totalSteps;
+  const onMemoryDropChange = (updates: Partial<MemoryDropState>) => {
+    setMemoryDrop((prev) => ({ ...prev, ...updates }));
+  };
 
-  // Map logical step to content
+  // Step layout differs based on additional child flow
+  // Normal:     About → World → Address → Photos → Memory Drop → Done
+  // Additional: About → World → Photos → Memory Drop → Done
+  const steps = isAdditional
+    ? ["About", "Their world", "Photos", "Memory drop", "Done!"]
+    : ["About", "Their world", "Address", "Photos", "Memory drop", "Done!"];
+  const totalSteps = steps.length;
+
+  // The step BEFORE photos where we save the profile
+  const saveStep = isAdditional ? 2 : 3;
+  const photosStep = isAdditional ? 3 : 4;
+  const memoryDropStep = isAdditional ? 4 : 5;
+  const confirmationStep = isAdditional ? 5 : 6;
+
   function getStepContent() {
-    if (isPhotosStep && childId) {
-      return <StepPhotos childName={form.name} childId={childId} />;
+    if (step === confirmationStep) {
+      return <StepConfirmation childName={form.name} />;
+    }
+
+    if (step === memoryDropStep) {
+      return (
+        <StepMemoryDrop
+          childName={form.name}
+          memoryDrop={memoryDrop}
+          onChange={onMemoryDropChange}
+          childId={childId}
+          harvestId={harvestId}
+          photoRef={photoRef}
+        />
+      );
+    }
+
+    if (step === photosStep && childId) {
+      return (
+        <StepPhotos
+          childName={form.name}
+          childId={childId}
+          onComplete={() => setStep(memoryDropStep)}
+        />
+      );
     }
 
     if (isAdditional) {
@@ -584,8 +680,6 @@ function OnboardingWizard() {
           return <StepAbout form={form} onChange={onChange} />;
         case 2:
           return <StepWorld form={form} onChange={onChange} />;
-        case 3:
-          return <StepConfirm form={form} isAdditional={isAdditional} />;
       }
     } else {
       switch (step) {
@@ -594,15 +688,26 @@ function OnboardingWizard() {
         case 2:
           return <StepWorld form={form} onChange={onChange} />;
         case 3:
-          return <StepAddress form={form} onChange={onChange} />;
-        case 4:
-          return <StepConfirm form={form} isAdditional={isAdditional} />;
+          return (
+            <StepAddress
+              form={form}
+              onChange={onChange}
+              onSkip={() => handleSaveAndAdvance(true)}
+            />
+          );
       }
     }
   }
 
   function getStepTitle(): string {
-    if (isPhotosStep) {
+    if (step === confirmationStep) return "You\u2019re all set!";
+    if (step === memoryDropStep) {
+      const name = form.name
+        ? form.name.charAt(0).toUpperCase() + form.name.slice(1)
+        : "your child";
+      return `${name}\u2019s first memory drop`;
+    }
+    if (step === photosStep) {
       const name = form.name
         ? form.name.charAt(0).toUpperCase() + form.name.slice(1)
         : "your child";
@@ -615,8 +720,6 @@ function OnboardingWizard() {
           return "About your child";
         case 2:
           return "Their world";
-        case 3:
-          return "Your story begins";
         default:
           return "";
       }
@@ -627,16 +730,17 @@ function OnboardingWizard() {
       case 2:
         return "Their world";
       case 3:
-        return "Where to send it";
-      case 4:
-        return "Your story begins";
+        return "Where should we ship?";
       default:
         return "";
     }
   }
 
-  // Validation per step
   function canProceed(): boolean {
+    if (step === memoryDropStep) {
+      return Boolean(memoryDrop.milestone && memoryDrop.currentInterests);
+    }
+
     if (isAdditional) {
       switch (step) {
         case 1:
@@ -653,6 +757,7 @@ function OnboardingWizard() {
       case 2:
         return true;
       case 3:
+        // Address step — "Next" requires full address, "Skip" bypasses this
         return Boolean(
           form.parentFirstName &&
             form.shippingName &&
@@ -666,25 +771,79 @@ function OnboardingWizard() {
     }
   }
 
+  async function handleSaveAndAdvance(skipAddress: boolean) {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setError(null);
+    setLoading(true);
+
+    const profileData = skipAddress
+      ? { ...form, addressLine1: "", shippingName: "", city: "", state: "", zip: "" }
+      : form;
+
+    const result = await saveChildProfile(profileData);
+    if (result && "error" in result) {
+      setError(result.error as string);
+      setLoading(false);
+      savingRef.current = false;
+      return;
+    }
+    if (result && "childId" in result) {
+      setChildId(result.childId as string);
+      if ("harvestId" in result && result.harvestId) {
+        setHarvestId(result.harvestId as string);
+      }
+    }
+    setLoading(false);
+    savingRef.current = false;
+    setStep(photosStep);
+  }
+
   const handleNext = async () => {
-    // On the Confirm step, save the child profile before advancing to Photos
-    if (step === confirmStep && !childId) {
+    // Save profile at the step before photos
+    if (step === saveStep && !childId) {
+      const skipAddress = isAdditional; // additional children don't fill address
+      await handleSaveAndAdvance(skipAddress);
+      return;
+    }
+
+    // Submit memory drop
+    if (step === memoryDropStep && childId) {
+      if (savingRef.current) return;
+      savingRef.current = true;
       setError(null);
       setLoading(true);
-      const result = await saveChildProfile({
-        ...form,
-        subscriptionType,
-      });
+
+      // Upload any unsaved photos first
+      if (photoRef.current?.hasUnsavedPhotos()) {
+        const photoResult = await photoRef.current.upload();
+        if (!photoResult.success) {
+          // Stay on step — component shows its own error
+          setLoading(false);
+          savingRef.current = false;
+          return;
+        }
+      }
+
+      const result = await submitOnboardingMemoryDrop(childId, memoryDrop);
       if (result && "error" in result) {
         setError(result.error as string);
         setLoading(false);
+        savingRef.current = false;
         return;
       }
-      if (result && "childId" in result) {
-        setChildId(result.childId as string);
-      }
       setLoading(false);
+      savingRef.current = false;
+      setStep(confirmationStep);
+      return;
     }
+
+    // Confirmation step → go to dashboard
+    if (step === confirmationStep) {
+      router.push("/dashboard");
+      return;
+    }
+
     if (step < totalSteps) setStep(step + 1);
   };
 
@@ -692,17 +851,11 @@ function OnboardingWizard() {
     if (step > 1) setStep(step - 1);
   };
 
+  // Don't show nav buttons on photos step (StepPhotos has its own) or confirmation
+  const showNav = step !== photosStep && step !== confirmationStep;
+
   return (
     <div className="mx-auto max-w-lg px-6 pb-16">
-      {/* Paid banner */}
-      {isPaid && step === 1 && (
-        <div className="mb-6 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
-          <p className="font-sans text-sm text-green-700">
-            Payment confirmed — let&rsquo;s set up your child&rsquo;s story.
-          </p>
-        </div>
-      )}
-
       {/* Additional child banner */}
       {isAdditional && step === 1 && (
         <div className="mb-6 rounded-lg border border-gold/20 bg-gold/5 px-4 py-3">
@@ -729,8 +882,8 @@ function OnboardingWizard() {
 
         {getStepContent()}
 
-        {/* Navigation buttons — hidden on Photos step (StepPhotos has its own) */}
-        {!isPhotosStep && (
+        {/* Navigation buttons */}
+        {showNav && (
           <div className="mt-8 flex items-center gap-4">
             {step > 1 && (
               <button
@@ -756,9 +909,24 @@ function OnboardingWizard() {
                   </svg>
                   Saving...
                 </span>
+              ) : step === memoryDropStep ? (
+                "Submit"
               ) : (
                 "Next"
               )}
+            </button>
+          </div>
+        )}
+
+        {/* Confirmation step — go to dashboard */}
+        {step === confirmationStep && (
+          <div className="mt-8 flex justify-center">
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard")}
+              className="rounded-full bg-gold px-8 py-3.5 font-sans text-base font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg"
+            >
+              Go to your dashboard
             </button>
           </div>
         )}

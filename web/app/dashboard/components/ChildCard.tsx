@@ -36,7 +36,7 @@ function formatDate(dateStr: string): string {
 type MemoryStatus =
   | { type: "OPEN"; daysLeft: number; childId: string }
   | { type: "UPCOMING"; opensDate: string }
-  | { type: "SUBMITTED" }
+  | { type: "SUBMITTED"; childId: string; photoCount: number }
   | { type: "BOOK_SHIPPED"; trackingNumber: string | null }
   | { type: "BOOK_DELIVERED" }
   | { type: "NO_DATA" };
@@ -71,7 +71,11 @@ function getMemoryStatus(
       harvest.status === "processing" ||
       harvest.status === "complete"
     ) {
-      return { type: "SUBMITTED" };
+      return {
+        type: "SUBMITTED",
+        childId: child.id,
+        photoCount: harvest.photo_count ?? 0,
+      };
     }
 
     // Harvest is pending — check if window is open
@@ -154,6 +158,16 @@ export default function ChildCard({
       <div className="mt-6">
         <StatusDisplay status={status} />
       </div>
+
+      {/* Photo prompt for submitted memories with no photos */}
+      {status.type === "SUBMITTED" && status.photoCount === 0 && (
+        <Link
+          href={`/dashboard/memory-drop/${status.childId}`}
+          className="mt-2 block font-sans text-[13px] text-amber-600 transition-colors hover:text-amber-700"
+        >
+          Add photos to personalize your illustrations &rarr;
+        </Link>
+      )}
     </div>
   );
 }

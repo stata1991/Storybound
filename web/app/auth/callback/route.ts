@@ -54,8 +54,12 @@ export async function GET(request: Request) {
     .eq("id", data.user.id)
     .single();
 
+  // Support custom redirect (e.g. from magic link → preview page)
+  const next = searchParams.get("next");
+
   if (parent) {
-    return NextResponse.redirect(`${origin}/dashboard`);
+    const destination = next && next.startsWith("/") ? next : "/dashboard";
+    return NextResponse.redirect(`${origin}${destination}`);
   }
 
   return NextResponse.redirect(`${origin}/onboarding`);

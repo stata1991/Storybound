@@ -142,7 +142,9 @@ export type Database = {
           id: string
           illustration_paths: string[] | null
           illustration_status: Database["public"]["Enums"]["illustration_status_enum"]
+          parent_flag_message: string | null
           parent_note: string | null
+          preview_deadline: string | null
           print_approved_at: string | null
           print_file_path: string | null
           print_status: Database["public"]["Enums"]["print_status_enum"]
@@ -170,7 +172,9 @@ export type Database = {
           id?: string
           illustration_paths?: string[] | null
           illustration_status?: Database["public"]["Enums"]["illustration_status_enum"]
+          parent_flag_message?: string | null
           parent_note?: string | null
+          preview_deadline?: string | null
           print_approved_at?: string | null
           print_file_path?: string | null
           print_status?: Database["public"]["Enums"]["print_status_enum"]
@@ -198,7 +202,9 @@ export type Database = {
           id?: string
           illustration_paths?: string[] | null
           illustration_status?: Database["public"]["Enums"]["illustration_status_enum"]
+          parent_flag_message?: string | null
           parent_note?: string | null
+          preview_deadline?: string | null
           print_approved_at?: string | null
           print_file_path?: string | null
           print_status?: Database["public"]["Enums"]["print_status_enum"]
@@ -255,10 +261,11 @@ export type Database = {
           shipping_name: string | null
           state: string | null
           stripe_customer_id: string | null
+          subscription_plan: string | null
           subscription_price: number | null
           subscription_status: Database["public"]["Enums"]["subscription_status_enum"]
           subscription_tier: Database["public"]["Enums"]["subscription_tier_enum"]
-          subscription_type: Database["public"]["Enums"]["subscription_type_enum"]
+          subscription_type: string
           updated_at: string
           zip: string | null
         }
@@ -277,10 +284,11 @@ export type Database = {
           shipping_name?: string | null
           state?: string | null
           stripe_customer_id?: string | null
+          subscription_plan?: string | null
           subscription_price?: number | null
           subscription_status?: Database["public"]["Enums"]["subscription_status_enum"]
           subscription_tier?: Database["public"]["Enums"]["subscription_tier_enum"]
-          subscription_type?: Database["public"]["Enums"]["subscription_type_enum"]
+          subscription_type?: string
           updated_at?: string
           zip?: string | null
         }
@@ -299,10 +307,11 @@ export type Database = {
           shipping_name?: string | null
           state?: string | null
           stripe_customer_id?: string | null
+          subscription_plan?: string | null
           subscription_price?: number | null
           subscription_status?: Database["public"]["Enums"]["subscription_status_enum"]
           subscription_tier?: Database["public"]["Enums"]["subscription_tier_enum"]
-          subscription_type?: Database["public"]["Enums"]["subscription_type_enum"]
+          subscription_type?: string
           updated_at?: string
           zip?: string | null
         }
@@ -574,6 +583,9 @@ export type Database = {
         | "draft"
         | "story_review"
         | "illustration_review"
+        | "book_ready"
+        | "parent_approved"
+        | "parent_flagged"
         | "approved"
         | "printing"
         | "shipped"
@@ -611,8 +623,8 @@ export type Database = {
         | "past_due"
         | "canceled"
         | "paused"
-      subscription_tier_enum: "physical_digital" | "digital_only"
-      subscription_type_enum: "founding" | "standard" | "one_time" | "gift"
+      subscription_tier_enum: "physical_digital"
+      subscription_type_enum: "none" | "digital_only" | "physical_digital"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -744,6 +756,9 @@ export const Constants = {
         "draft",
         "story_review",
         "illustration_review",
+        "book_ready",
+        "parent_approved",
+        "parent_flagged",
         "approved",
         "printing",
         "shipped",
@@ -787,8 +802,8 @@ export const Constants = {
         "canceled",
         "paused",
       ],
-      subscription_tier_enum: ["physical_digital", "digital_only"],
-      subscription_type_enum: ["founding", "standard", "one_time", "gift"],
+      subscription_tier_enum: ["physical_digital"],
+      subscription_type_enum: ["none", "digital_only", "physical_digital"],
     },
   },
 } as const

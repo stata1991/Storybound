@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { logEvent } from "@/lib/audit";
 import { sendEmail } from "@/lib/email/resend";
+import { physicalSubscriptionConfirmed } from "@/lib/email/templates";
 
 /* ─── Stripe client (lazy init — avoids build-time error when key is absent) ── */
 
@@ -24,13 +25,10 @@ function getAdmin() {
 
 /* ─── Price ID → subscription mapping ──────────────────────────────────────── */
 
-const PRICE_ID_MAP: Record<string, { subscription_type: string; format: string }> = {
-  [process.env.STRIPE_PRICE_FOUNDING_PHYSICAL!]: { subscription_type: "founding", format: "physical" },
-  [process.env.STRIPE_PRICE_FOUNDING_DIGITAL!]: { subscription_type: "founding", format: "digital" },
-  [process.env.STRIPE_PRICE_GIFT_PHYSICAL!]: { subscription_type: "gift", format: "physical" },
-  [process.env.STRIPE_PRICE_GIFT_DIGITAL!]: { subscription_type: "gift", format: "digital" },
-  [process.env.STRIPE_PRICE_ONETIME_PHYSICAL!]: { subscription_type: "one_time", format: "physical" },
-  [process.env.STRIPE_PRICE_ONETIME_DIGITAL!]: { subscription_type: "one_time", format: "digital" },
+const PRICE_ID_MAP: Record<string, string> = {
+  [process.env.STRIPE_PRICE_FOUNDING_PHYSICAL!]: "founding",
+  [process.env.STRIPE_PRICE_GIFT_PHYSICAL!]: "gift",
+  [process.env.STRIPE_PRICE_ONETIME_PHYSICAL!]: "one_time",
 };
 
 const PRICE_AMOUNTS: Record<string, number> = {
@@ -39,16 +37,9 @@ const PRICE_AMOUNTS: Record<string, number> = {
   gift: 89.0,
 };
 
-const FORMAT_TO_TIER: Record<string, string> = {
-  physical: "physical_digital",
-  digital: "digital_only",
-};
-
-function resolvePriceId(
-  priceId: string | null
-): { subscription_type: string; format: string } {
+function resolvePriceId(priceId: string | null): string {
   if (priceId && PRICE_ID_MAP[priceId]) return PRICE_ID_MAP[priceId];
-  return { subscription_type: "founding", format: "physical" };
+  return "founding";
 }
 
 /* ─── Email helpers (inline — matches lib/email/templates.ts brand) ───────── */
@@ -151,8 +142,7 @@ export async function POST(request: Request) {
       // Fall through — resolvePriceId handles null
     }
 
-    const { subscription_type: subscriptionType, format } = resolvePriceId(priceId);
-    const tier = FORMAT_TO_TIER[format] ?? "physical_digital";
+    const subscriptionType = resolvePriceId(priceId);
     const isFounding = subscriptionType === "founding";
 
     if (!customerEmail) {
@@ -172,7 +162,7 @@ export async function POST(request: Request) {
       logEvent({
         event_type: "stripe.checkout",
         status: "error",
-        message: "No family found for checkout email",
+        message: "CRITICAL: payment received but no family record — customer needs manual resolution",
         metadata: { customer_email: customerEmail, price_id: priceId },
       });
       return NextResponse.json({ received: true, note: "No family found for email" });
@@ -180,13 +170,23 @@ export async function POST(request: Request) {
 
     familyId = existingParent.family_id;
 
-    // Activate the family and link Stripe customer if available
+    // Check previous subscription_type for upgrade detection
+    const { data: prevFamily } = await admin
+      .from("families")
+      .select("subscription_type")
+      .eq("id", familyId)
+      .single();
+    const previousType = (prevFamily?.subscription_type as string) ?? "none";
+
+    // Activate the family — all Stripe checkouts become physical_digital
     const updateFields: Record<string, unknown> = {
       subscription_status: "active",
-      subscription_type: subscriptionType,
-      subscription_tier: tier,
+      subscription_type: "physical_digital",
+      subscription_plan: subscriptionType, // preserve original plan (founding/gift/one_time)
+      subscription_tier: "physical_digital",
       subscription_price: PRICE_AMOUNTS[subscriptionType] ?? 89.0,
       is_founding_member: isFounding,
+      billing_cycle_start: new Date().toISOString().split("T")[0],
     };
     if (customerId) {
       updateFields.stripe_customer_id = customerId;
@@ -197,20 +197,89 @@ export async function POST(request: Request) {
       .update(updateFields)
       .eq("id", familyId);
 
+    const isUpgrade = previousType === "digital_only";
+    const eventType = isUpgrade
+      ? "subscription.upgraded_to_physical"
+      : "subscription.physical_chosen";
+
     logEvent({
-      event_type: "stripe.checkout",
+      event_type: eventType,
       status: "success",
-      family_id: familyId,
-      message: "Checkout session completed — family activated",
+      family_id: familyId ?? undefined,
+      message: isUpgrade
+        ? "Digital subscriber upgraded to physical"
+        : "Checkout session completed — family activated as physical",
       metadata: {
-        subscription_type: subscriptionType,
-        format,
-        tier,
+        subscription_plan: subscriptionType,
         price_id: priceId,
         customer_email: customerEmail,
         stripe_customer_id: customerId,
+        previous_type: previousType,
       },
     });
+
+    // Auto-approve most recent book_ready episode for this family
+    const { data: bookReadyEpisode } = await admin
+      .from("episodes")
+      .select("id, harvest_id, child_id")
+      .in(
+        "child_id",
+        (
+          await admin
+            .from("children")
+            .select("id")
+            .eq("family_id", familyId)
+        ).data?.map((c: { id: string }) => c.id) ?? []
+      )
+      .eq("status", "book_ready")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (bookReadyEpisode) {
+      await admin
+        .from("episodes")
+        .update({ status: "parent_approved" })
+        .eq("id", bookReadyEpisode.id);
+
+      await admin
+        .from("harvests")
+        .update({ status: "complete" })
+        .eq("id", bookReadyEpisode.harvest_id);
+
+      logEvent({
+        event_type: "episode.auto_approved",
+        status: "success",
+        family_id: familyId ?? undefined,
+        child_id: bookReadyEpisode.child_id,
+        message: "Book auto-approved after physical subscription payment",
+      });
+
+      // Send physical subscription confirmed email
+      const { data: childForEmail } = await admin
+        .from("children")
+        .select("name")
+        .eq("id", bookReadyEpisode.child_id)
+        .single();
+      const { data: harvestForEmail } = await admin
+        .from("harvests")
+        .select("season")
+        .eq("id", bookReadyEpisode.harvest_id)
+        .single();
+
+      if (childForEmail && harvestForEmail && customerEmail) {
+        const { subject: confirmSubject, html: confirmHtml } =
+          physicalSubscriptionConfirmed({
+            childName: childForEmail.name,
+            season: harvestForEmail.season,
+          });
+        sendEmail({
+          to: customerEmail,
+          subject: confirmSubject,
+          html: confirmHtml,
+        }).catch(() => {});
+      }
+    }
 
     // ── Gift claim token ──────────────────────────────────────────────────────
 
@@ -345,7 +414,6 @@ export async function POST(request: Request) {
       received: true,
       type: event.type,
       subscription_type: subscriptionType,
-      format,
       customer: customerEmail,
     });
   }

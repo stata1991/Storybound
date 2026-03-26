@@ -5,6 +5,7 @@ import {
   memoryDropOpen,
   memoryDropReminder,
   memoryDropFinal,
+  previewAutoApproved,
 } from "@/lib/email/templates";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
@@ -209,5 +210,106 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.json({ sent, errors });
+  // ── Auto-approve overdue previews ──────────────────────────────────────────
+
+  const autoApproved: { episodeId: string; childName: string; to: string }[] = [];
+  const autoApproveErrors: { episodeId: string; error: string }[] = [];
+
+  const { data: overdueEpisodes } = await admin
+    .from("episodes")
+    .select("id, child_id, harvest_id, status, preview_deadline")
+    .eq("status", "book_ready")
+    .lt("preview_deadline", new Date().toISOString());
+
+  if (overdueEpisodes && overdueEpisodes.length > 0) {
+    type OverdueEp = {
+      id: string;
+      child_id: string;
+      harvest_id: string;
+      status: string;
+      preview_deadline: string;
+    };
+
+    for (const raw of overdueEpisodes as unknown as OverdueEp[]) {
+      // Update status to parent_approved
+      const { error: updateErr } = await admin
+        .from("episodes")
+        .update({ status: "parent_approved" })
+        .eq("id", raw.id);
+
+      if (updateErr) {
+        autoApproveErrors.push({ episodeId: raw.id, error: updateErr.message });
+        continue;
+      }
+
+      // Audit log
+      await admin.from("audit_log").insert({
+        event_type: "preview.auto_approved",
+        status: "success",
+        harvest_id: raw.harvest_id,
+        child_id: raw.child_id,
+        message: `Preview deadline passed — auto-approved episode ${raw.id}`,
+      }).then(() => {});
+
+      // Send notification email
+      const { data: childRaw } = await admin
+        .from("children")
+        .select("name, family_id")
+        .eq("id", raw.child_id)
+        .single();
+
+      if (!childRaw) {
+        autoApproveErrors.push({ episodeId: raw.id, error: "Child not found" });
+        continue;
+      }
+
+      const child = childRaw as unknown as { name: string; family_id: string };
+
+      const { data: parentRaw } = await admin
+        .from("parents")
+        .select("email")
+        .eq("family_id", child.family_id)
+        .single();
+
+      if (!parentRaw) {
+        autoApproveErrors.push({ episodeId: raw.id, error: "Parent email not found" });
+        continue;
+      }
+
+      const parentEmail = (parentRaw as unknown as { email: string }).email;
+
+      // Get season from harvest
+      const { data: harvestRaw } = await admin
+        .from("harvests")
+        .select("season")
+        .eq("id", raw.harvest_id)
+        .single();
+
+      const season = (harvestRaw as unknown as { season: string } | null)?.season ?? "winter";
+
+      const template = previewAutoApproved({
+        childName: child.name,
+        season,
+      });
+
+      const emailResult = await sendEmail({
+        to: parentEmail,
+        subject: template.subject,
+        html: template.html,
+      });
+
+      if (emailResult.success) {
+        autoApproved.push({ episodeId: raw.id, childName: child.name, to: parentEmail });
+      } else {
+        autoApproveErrors.push({ episodeId: raw.id, error: emailResult.error });
+      }
+    }
+  }
+
+  return NextResponse.json({
+    sent,
+    errors,
+    autoApproved,
+    autoApproveErrors,
+  });
 }

@@ -5,6 +5,8 @@ const PUBLIC_ROUTES = [
   "/",
   "/auth",
   "/auth/callback",
+  "/auth/magic-link",
+  "/dashboard/preview",
   "/api/webhooks/stripe",
   "/api/cron/memory-drop-notifications",
 ];

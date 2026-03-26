@@ -6,7 +6,7 @@ import { join } from "path";
 /* ─── Embedded Nunito font (latin, woff2) ────────────────────────────────── */
 
 const nunitoBase64 = readFileSync(
-  join(process.cwd(), "web/lib/book/fonts/Nunito-Latin.woff2")
+  join(process.cwd(), "lib/book/fonts/Nunito-Latin.woff2")
 ).toString("base64");
 
 /* ─── Brand colors ────────────────────────────────────────────────────────── */
@@ -16,6 +16,7 @@ const GOLD = "#C8963E";
 const CREAM = "#FDF8F0";
 const MUTED = "#8A93A6";
 const WARM_WHITE = "#FFFDF7";
+const TEXT_DARK = "#2C2C2A";
 
 /* ─── Font stack ─────────────────────────────────────────────────────────── */
 
@@ -28,18 +29,17 @@ interface AgeProfile {
   label: string;
   minAge: number;
   maxAge: number;
-  layout: "overlay" | "sideBySide";
   fontSize: number;      // scene body text px
   lineHeight: number;    // unitless multiplier
-  chapterLabel: boolean; // show "Chapter N" header
+  chapterLabel: boolean; // show "Chapter N" header on text page
   wordsPerScene: number; // max words before truncation (safety net)
 }
 
 const AGE_PROFILES: AgeProfile[] = [
-  { label: "3-4", minAge: 3, maxAge: 4, layout: "overlay",    fontSize: 24, lineHeight: 1.9, chapterLabel: false, wordsPerScene: 40 },
-  { label: "5-6", minAge: 5, maxAge: 6, layout: "overlay",    fontSize: 20, lineHeight: 1.8, chapterLabel: false, wordsPerScene: 60 },
-  { label: "7-8", minAge: 7, maxAge: 8, layout: "sideBySide", fontSize: 16, lineHeight: 1.7, chapterLabel: true,  wordsPerScene: 120 },
-  { label: "9-10", minAge: 9, maxAge: 10, layout: "sideBySide", fontSize: 14, lineHeight: 1.65, chapterLabel: true,  wordsPerScene: 180 },
+  { label: "3-4", minAge: 3, maxAge: 4, fontSize: 24, lineHeight: 1.9, chapterLabel: false, wordsPerScene: 40 },
+  { label: "5-6", minAge: 5, maxAge: 6, fontSize: 20, lineHeight: 1.8, chapterLabel: false, wordsPerScene: 60 },
+  { label: "7-8", minAge: 7, maxAge: 8, fontSize: 16, lineHeight: 1.7, chapterLabel: true,  wordsPerScene: 120 },
+  { label: "9-10", minAge: 9, maxAge: 10, fontSize: 14, lineHeight: 1.65, chapterLabel: true,  wordsPerScene: 180 },
 ];
 
 function getAgeProfile(age: number): AgeProfile {
@@ -52,6 +52,7 @@ function getAgeProfile(age: number): AgeProfile {
 export interface BookParams {
   childName: string;
   age: number;
+  pronouns: string;
   season: string;
   year: number;
   title: string;
@@ -59,6 +60,14 @@ export interface BookParams {
   scenes: { number: number; text: string; imageBase64: string }[];
   coverImageBase64: string;
   finalPage: string;
+}
+
+/* ─── Pronoun helper ─────────────────────────────────────────────────────── */
+
+function objectPronoun(pronouns: string): string {
+  if (pronouns === "she_her") return "her";
+  if (pronouns === "he_him") return "him";
+  return "them";
 }
 
 /* ─── Page wrapper ────────────────────────────────────────────────────────── */
@@ -75,7 +84,7 @@ function page(content: string, bg = CREAM): string {
   ">${content}</div>`;
 }
 
-/* ─── Cover page ──────────────────────────────────────────────────────────── */
+/* ─── Cover page (Fix 5: all fonts → Nunito) ─────────────────────────────── */
 
 function coverPage(params: BookParams): string {
   return page(`
@@ -96,7 +105,7 @@ function coverPage(params: BookParams): string {
     ">
       <p style="
         margin: 0 0 4px 0;
-        font-family: ${SERIF};
+        font-family: ${NUNITO};
         font-size: 42px;
         font-weight: 700;
         color: #ffffff;
@@ -106,7 +115,7 @@ function coverPage(params: BookParams): string {
       ">${escapeHtml(params.title)}</p>
       <p style="
         margin: 0 0 12px 0;
-        font-family: ${SERIF};
+        font-family: ${NUNITO};
         font-size: 22px;
         color: ${GOLD};
         font-style: italic;
@@ -149,125 +158,123 @@ function dedicationPage(dedication: string): string {
   `);
 }
 
-/* ─── Scene page — overlay layout (ages 3–6) ─────────────────────────────── */
+/* ─── Scene pages — two-page-per-scene layout (Fix 4) ────────────────────── */
 
-function sceneOverlay(
-  scene: { number: number; text: string; imageBase64: string },
-  profile: AgeProfile
+function illustrationPage(
+  scene: { number: number; text: string; imageBase64: string }
 ): string {
-  const safeText = truncateToWords(scene.text, profile.wordsPerScene);
   return page(`
-    <img
-      src="data:image/png;base64,${scene.imageBase64}"
-      style="
-        position: absolute;
-        top: 0; left: 0;
-        width: 100%; height: 100%;
-        object-fit: cover;
-      "
-    />
     <div style="
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      padding: 40px 48px 48px;
-      background: linear-gradient(
-        to top,
-        rgba(255,253,247,0.97) 0%,
-        rgba(255,253,247,0.85) 35%,
-        transparent 60%,
-        transparent 100%
-      );
+      width: 100%;
+      height: 100%;
+      position: relative;
+      background: #000;
     ">
-      <p style="
-        margin: 0;
-        font-family: ${NUNITO};
-        font-size: ${profile.fontSize}px;
-        font-weight: 600;
-        color: ${NAVY};
-        line-height: ${profile.lineHeight};
-        text-align: left;
-      ">${escapeHtml(safeText)}</p>
+      <img
+        src="data:image/png;base64,${scene.imageBase64}"
+        style="
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          object-position: center;
+        "
+      />
     </div>
   `, "#000000");
 }
 
-/* ─── Scene page — side-by-side layout (ages 7–10) ───────────────────────── */
-
-function sceneSideBySide(
+function textPage(
   scene: { number: number; text: string; imageBase64: string },
-  profile: AgeProfile
+  profile: AgeProfile,
+  seasonLabel: string,
+  pageNumber: number
 ): string {
   const safeText = truncateToWords(scene.text, profile.wordsPerScene);
   return page(`
     <div style="
-      display: flex;
       width: 100%;
       height: 100%;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
     ">
+      <!-- Gold top bar -->
       <div style="
-        width: 50%;
-        height: 100%;
-        overflow: hidden;
-        position: relative;
+        width: 100%;
+        height: 3px;
+        background-color: ${GOLD};
+      "></div>
+      <!-- Season label -->
+      <div style="
+        padding: 16px 40px 0 0;
+        text-align: right;
       ">
-        <img
-          src="data:image/png;base64,${scene.imageBase64}"
-          style="
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            object-fit: cover;
-          "
-        />
+        <span style="
+          font-family: ${NUNITO};
+          font-size: 12px;
+          color: ${MUTED};
+          letter-spacing: 1px;
+        ">${escapeHtml(seasonLabel)}</span>
       </div>
+      <!-- Centered text body -->
       <div style="
-        width: 50%;
-        height: 100%;
+        flex: 1;
         display: flex;
-        flex-direction: column;
+        align-items: center;
         justify-content: center;
-        padding: 48px 40px;
+        padding: 0 60px;
         box-sizing: border-box;
-        background-color: ${CREAM};
       ">
-        ${profile.chapterLabel ? `
-        <p style="
-          margin: 0 0 16px 0;
+        <div style="max-width: 75%;">
+          ${profile.chapterLabel ? `
+          <p style="
+            margin: 0 0 16px 0;
+            font-family: ${NUNITO};
+            font-size: 11px;
+            font-weight: 700;
+            color: ${GOLD};
+            letter-spacing: 2px;
+            text-transform: uppercase;
+          ">Chapter ${scene.number}</p>` : ""}
+          <p style="
+            margin: 0;
+            font-family: ${NUNITO};
+            font-size: ${profile.fontSize}px;
+            font-weight: 400;
+            color: ${TEXT_DARK};
+            line-height: 1.8;
+            text-align: left;
+          ">${escapeHtml(safeText)}</p>
+        </div>
+      </div>
+      <!-- Page number -->
+      <div style="
+        padding: 0 0 24px 0;
+        text-align: center;
+      ">
+        <span style="
           font-family: ${NUNITO};
-          font-size: 11px;
-          font-weight: 700;
-          color: ${GOLD};
-          letter-spacing: 2px;
-          text-transform: uppercase;
-        ">Chapter ${scene.number}</p>` : ""}
-        <p style="
-          margin: 0;
-          font-family: ${NUNITO};
-          font-size: ${profile.fontSize}px;
-          font-weight: 400;
-          color: ${NAVY};
-          line-height: ${profile.lineHeight};
-          text-align: left;
-        ">${escapeHtml(safeText)}</p>
+          font-size: 12px;
+          color: ${MUTED};
+        ">${pageNumber}</span>
       </div>
     </div>
-  `);
+  `, WARM_WHITE);
 }
-
-/* ─── Scene page dispatcher ──────────────────────────────────────────────── */
 
 function scenePage(
   scene: { number: number; text: string; imageBase64: string },
-  profile: AgeProfile
+  profile: AgeProfile,
+  seasonLabel: string,
+  pageNumber: number
 ): string {
-  return profile.layout === "overlay"
-    ? sceneOverlay(scene, profile)
-    : sceneSideBySide(scene, profile);
+  return illustrationPage(scene) + textPage(scene, profile, seasonLabel, pageNumber);
 }
 
-/* ─── Back page ───────────────────────────────────────────────────────────── */
+/* ─── Back page (Fix 6: pronouns, Fix 7: warmer privacy text) ────────────── */
 
-function backPage(childName: string): string {
+function backPage(childName: string, pronouns: string): string {
+  const pronoun = objectPronoun(pronouns);
   return page(`
     <div style="
       display: flex;
@@ -293,7 +300,7 @@ function backPage(childName: string): string {
         font-size: 16px;
         color: ${MUTED};
         font-style: italic;
-      ">From the people who love them.</p>
+      ">From the people who love ${pronoun}.</p>
       <p style="
         margin: 0 0 48px 0;
         font-family: ${SERIF};
@@ -309,7 +316,7 @@ function backPage(childName: string): string {
         color: ${MUTED};
         line-height: 1.6;
         max-width: 4in;
-      ">Illustrations created on private servers. Photos permanently deleted. &copy; ${new Date().getFullYear()} Storybound</p>
+      ">Illustrated with AI. Your child&rsquo;s photos were used only to create this book and have been permanently deleted. &copy; ${new Date().getFullYear()} Storybound</p>
     </div>
   `);
 }
@@ -339,6 +346,7 @@ function truncateToWords(text: string, max: number): string {
 
 export function generateBookHTML(params: BookParams): string {
   const profile = getAgeProfile(params.age);
+  const seasonLabel = `${capitalize(params.season)} ${params.year}`;
   const pages: string[] = [];
 
   // 1. Cover
@@ -347,9 +355,12 @@ export function generateBookHTML(params: BookParams): string {
   // 2. Dedication
   pages.push(dedicationPage(params.dedication));
 
-  // 3. Scene pages (layout adapts by age)
+  // 3. Scene pages (two pages per scene: illustration + text)
+  // Page numbering: dedication is page 1, first illustration is page 2
+  let pageNum = 2;
   for (const scene of params.scenes) {
-    pages.push(scenePage(scene, profile));
+    pages.push(scenePage(scene, profile, seasonLabel, pageNum + 1));
+    pageNum += 2; // illustration page + text page
   }
 
   // 4. Final page
@@ -376,7 +387,7 @@ export function generateBookHTML(params: BookParams): string {
   `));
 
   // 5. Back page
-  pages.push(backPage(params.childName));
+  pages.push(backPage(params.childName, params.pronouns));
 
   return `<!DOCTYPE html>
 <html>
@@ -393,6 +404,12 @@ export function generateBookHTML(params: BookParams): string {
       font-family: 'Nunito';
       src: url('data:font/woff2;base64,${nunitoBase64}') format('woff2');
       font-weight: 600;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Nunito';
+      src: url('data:font/woff2;base64,${nunitoBase64}') format('woff2');
+      font-weight: 700;
       font-style: normal;
     }
     @page {

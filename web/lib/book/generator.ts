@@ -20,6 +20,7 @@ interface EpisodeRow {
 interface ChildRow {
   name: string;
   date_of_birth: string | null;
+  pronouns: string | null;
 }
 
 /* ─── Admin client ────────────────────────────────────────────────────────── */
@@ -89,7 +90,7 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
 
   const { data: childRaw } = await admin
     .from("children")
-    .select("name, date_of_birth")
+    .select("name, date_of_birth, pronouns")
     .eq("id", episode.child_id)
     .single();
 
@@ -144,7 +145,8 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
 
   // ── (d+e) Generate HTML ────────────────────────────────────────────────
 
-  const scenes = episode.scenes.slice(0, 8).map((scene, i) => ({
+  // Scene count is age-scaled (6–12 scenes). Match available illustrations.
+  const scenes = episode.scenes.slice(0, sceneImages.length).map((scene, i) => ({
     number: scene.number,
     text: scene.text,
     imageBase64: sceneImages[i] ?? sceneImages[sceneImages.length - 1],
@@ -153,6 +155,7 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
   const bookParams: BookParams = {
     childName: child.name,
     age: childAge,
+    pronouns: child.pronouns ?? "they_them",
     season: harvest.season,
     year: episode.year,
     title: episode.title,

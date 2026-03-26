@@ -1,0 +1,36 @@
+export const maxDuration = 300;
+
+import { NextRequest, NextResponse } from "next/server";
+import {
+  startFaceTraining,
+  triggerIllustrationPipeline,
+} from "@/app/admin/actions";
+
+export async function POST(req: NextRequest) {
+  const { harvestId, skipLora } = (await req.json()) as {
+    harvestId: string;
+    skipLora?: boolean;
+  };
+
+  if (skipLora) {
+    // Skip-LoRA path: run synchronously (no training needed)
+    const result = await triggerIllustrationPipeline(harvestId, true);
+    return NextResponse.json(result);
+  }
+
+  // Async path: kick off training, return 202
+  const trainResult = await startFaceTraining(harvestId);
+
+  if ("error" in trainResult) {
+    return NextResponse.json({ error: trainResult.error }, { status: 400 });
+  }
+
+  return NextResponse.json(
+    {
+      status: "training",
+      face_model_id: trainResult.face_model_id,
+      message: "LoRA training started. Illustrations will generate automatically on completion.",
+    },
+    { status: 202 }
+  );
+}

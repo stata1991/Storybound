@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { getChildAndHarvest } from "./actions";
+import { getChildAndHarvest, getHarvestPhotoUrls } from "./actions";
 import MemoryDropForm from "./MemoryDropForm";
+import PhotoSection from "./PhotoSection";
 
 export default async function MemoryDropPage({
   params,
@@ -34,6 +35,10 @@ export default async function MemoryDropPage({
   // Already submitted — show summary
   if (result.status === "submitted") {
     const { child, harvest } = result;
+    const photoCount = harvest.photo_count ?? 0;
+    const photoPaths = harvest.photo_paths ?? [];
+    const photoUrls = await getHarvestPhotoUrls(photoPaths);
+
     return (
       <div className="min-h-screen bg-cream">
         <header className="flex items-center justify-between px-6 py-5">
@@ -111,6 +116,14 @@ export default async function MemoryDropPage({
               </p>
             </div>
           </div>
+
+          {/* Photo section */}
+          <PhotoSection
+            childId={child.id}
+            harvestId={harvest.id}
+            photoCount={photoCount}
+            photoUrls={photoUrls}
+          />
 
           <div className="mt-8 text-center">
             <Link

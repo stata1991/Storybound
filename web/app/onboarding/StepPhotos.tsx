@@ -9,9 +9,11 @@ const MAX_PHOTOS = 15;
 export default function StepPhotos({
   childName,
   childId,
+  onComplete,
 }: {
   childName: string;
   childId: string;
+  onComplete?: () => void;
 }) {
   const [photos, setPhotos] = useState<{ file: File; preview: string }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -56,17 +58,49 @@ export default function StepPhotos({
     if (result?.error) {
       setError(result.error);
       setLoading(false);
+      return;
     }
-    // On success, uploadCharacterPhotos redirects to /dashboard
+    setLoading(false);
+    onComplete?.();
   }
 
   return (
     <div>
-      <p className="mb-6 font-sans text-sm leading-relaxed text-navy/50">
+      <p className="mb-4 font-sans text-sm leading-relaxed text-navy/50">
         Upload {MIN_PHOTOS}&ndash;{MAX_PHOTOS} clear photos so we can illustrate{" "}
-        {childName.charAt(0).toUpperCase() + childName.slice(1)} in every scene. Recent, front-facing, good lighting works
-        best.
+        {childName.charAt(0).toUpperCase() + childName.slice(1)} in every scene.
       </p>
+
+      <details className="mb-6 rounded-xl border border-gold/20 bg-gold/5">
+        <summary className="cursor-pointer px-4 py-3 font-sans text-sm font-semibold text-navy/70 select-none">
+          Better close-up photos = stronger likeness in the book
+        </summary>
+        <div className="grid gap-4 px-4 pb-4 pt-1 sm:grid-cols-2">
+          <div>
+            <p className="mb-1.5 font-sans text-xs font-semibold uppercase tracking-wide text-green-700/70">
+              Good photos
+            </p>
+            <ul className="space-y-1 font-sans text-xs leading-relaxed text-navy/50">
+              <li>Close-up face shots &mdash; face fills most of the frame</li>
+              <li>Multiple angles &mdash; front, slight left, slight right</li>
+              <li>Varied lighting &mdash; indoors and outdoors</li>
+              <li>Natural expressions &mdash; smiling, laughing, neutral</li>
+              <li>Recent photos &mdash; within the last 6 months</li>
+            </ul>
+          </div>
+          <div>
+            <p className="mb-1.5 font-sans text-xs font-semibold uppercase tracking-wide text-red-600/70">
+              Avoid
+            </p>
+            <ul className="space-y-1 font-sans text-xs leading-relaxed text-navy/50">
+              <li>Full-body shots where face appears small</li>
+              <li>Sunglasses, hats, or anything covering the face</li>
+              <li>Blurry or heavily filtered photos</li>
+              <li>Group photos</li>
+            </ul>
+          </div>
+        </div>
+      </details>
 
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
