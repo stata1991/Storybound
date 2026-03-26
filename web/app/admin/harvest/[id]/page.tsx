@@ -308,6 +308,7 @@ export default async function HarvestDetailPage({
   const bookGenerated = !!episode?.print_file_path;
   const photosDeletedNoIllustrations =
     !!child.character_photos_deleted_at &&
+    !harvest.face_ref_generated &&
     hasEpisode &&
     episode.illustration_status !== "review" &&
     episode.illustration_status !== "approved" &&

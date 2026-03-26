@@ -12,13 +12,14 @@ export async function POST(req: NextRequest) {
     skipLora?: boolean;
   };
 
-  if (skipLora) {
-    // Skip-LoRA path: run synchronously (no training needed)
-    const result = await triggerIllustrationPipeline(harvestId, true);
+  if (skipLora || process.env.NODE_ENV === "development") {
+    // Dev: full sync flow (no webhook needed)
+    // Skip-LoRA: no training needed
+    const result = await triggerIllustrationPipeline(harvestId, skipLora);
     return NextResponse.json(result);
   }
 
-  // Async path: kick off training, return 202
+  // Production: async path — kick off training, return 202
   const trainResult = await startFaceTraining(harvestId);
 
   if ("error" in trainResult) {

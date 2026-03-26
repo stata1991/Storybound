@@ -49,6 +49,7 @@ pipeline_image = (
     .apt_install(
         "libgl1-mesa-glx",
         "libglib2.0-0",
+        "git",
     )
     .pip_install(
         "torch>=2.0.0",
@@ -61,6 +62,9 @@ pipeline_image = (
         "fastapi[standard]",
         "opencv-python-headless>=4.8.0",
         "httpx>=0.27.0",
+        "git+https://github.com/tencent-ailab/IP-Adapter.git",
+        "insightface",
+        "onnxruntime",
     )
     .run_commands(
         # Pre-download SDXL base model into the image so cold starts
@@ -85,6 +89,20 @@ pipeline_image = (
         "urllib.request.urlretrieve("
         "'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth', "
         "'/root/.cache/realesrgan/realesr-animevideov3.pth'"
+        ")\"",
+        # Pre-download InsightFace buffalo_l model for face embedding extraction
+        "python -c \""
+        "from insightface.app import FaceAnalysis; "
+        "app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); "
+        "app.prepare(ctx_id=0, det_size=(640, 640))"
+        "\"",
+        # Pre-download IP-Adapter FaceID SDXL weights
+        "python -c \""
+        "from huggingface_hub import hf_hub_download; "
+        "hf_hub_download("
+        "repo_id='h94/IP-Adapter-FaceID', "
+        "filename='ip-adapter-faceid_sdxl.bin', "
+        f"local_dir='{MODEL_CACHE_PATH}'"
         ")\"",
     )
 )
@@ -466,6 +484,48 @@ async def train_face_model(req: Request):
 
     print(f"Preprocessed {n_cropped}/{len(photos_b64)} photos with face crops")
 
+    # ── Extract face embedding via InsightFace (for IP-Adapter at gen time) ─
+
+    from insightface.app import FaceAnalysis
+
+    face_app = FaceAnalysis(
+        name="buffalo_l",
+        providers=["CUDAExecutionProvider"],
+    )
+    face_app.prepare(ctx_id=0, det_size=(640, 640))
+
+    best_embedding = None
+    best_face_size = 0
+
+    for idx, img in enumerate(pil_images):
+        img_np = np.array(img)
+        faces = face_app.get(img_np)
+        if faces:
+            face = max(
+                faces,
+                key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+            )
+            face_size = (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1])
+            if face_size > best_face_size:
+                best_face_size = face_size
+                best_embedding = face.normed_embedding
+                print(f"Photo {idx}: InsightFace embedding extracted (face_size={face_size:.0f})")
+
+    # Save embedding to volume (done after LoRA save below)
+    # We store the raw numpy array for now, convert to tensor at save time
+    _face_embedding_np = best_embedding
+
+    if best_embedding is not None:
+        print(f"Best face embedding ready (size={best_face_size:.0f})")
+    else:
+        print("WARNING: No InsightFace embedding extracted from any photo")
+
+    # Free InsightFace from GPU
+    del face_app
+    gc.collect()
+    import torch
+    torch.cuda.empty_cache()
+
     # ── Load base model ─────────────────────────────────────────────────────
 
     pipe = StableDiffusionXLPipeline.from_pretrained(
@@ -644,6 +704,16 @@ async def train_face_model(req: Request):
 
     # Save only the LoRA adapter weights
     unet.save_pretrained(str(save_dir))
+
+    # Save face embedding alongside LoRA weights (for IP-Adapter at gen time)
+    if _face_embedding_np is not None:
+        embed_path = save_dir / "face_embedding.pt"
+        torch.save(
+            torch.from_numpy(_face_embedding_np).unsqueeze(0),
+            str(embed_path),
+        )
+        print(f"Face embedding saved: {embed_path}")
+
     await lora_volume.commit.aio()
 
     # Weight magnitude check — detect unstable LoRA weights
@@ -850,6 +920,32 @@ async def generate_illustrations(req: Request):
             print(f"ERROR loading LoRA: {e}")
             print("Proceeding without face conditioning")
 
+    # ── Load IP-Adapter FaceID (if face embedding exists) ──────────────────
+
+    import torch
+
+    face_embedding = None
+    ip_model = None
+
+    if not skip_lora and face_model_id:
+        embed_path = Path(LORA_VOLUME_PATH) / face_model_id / "face_embedding.pt"
+        if embed_path.exists():
+            face_embedding = torch.load(str(embed_path), map_location="cuda")
+            try:
+                from ip_adapter.ip_adapter_faceid import IPAdapterFaceIDXL
+
+                ip_model = IPAdapterFaceIDXL(
+                    pipe,
+                    f"{MODEL_CACHE_PATH}/ip-adapter-faceid_sdxl.bin",
+                    device="cuda",
+                )
+                print("IP-Adapter FaceID loaded with face embedding")
+            except Exception as e:
+                print(f"WARNING: Failed to load IP-Adapter FaceID: {e}")
+                ip_model = None
+        else:
+            print(f"No face embedding at {embed_path}, using LoRA only")
+
     # ── Build cover prompt (budget-aware) ────────────────────────────────
 
     illustrations = []
@@ -873,31 +969,50 @@ async def generate_illustrations(req: Request):
         print(f"WARNING: Cover prompt too long: {word_count} words")
     print(f"Cover prompt ({word_count} words): {styled_cover}")
 
-    result = pipe(
-        prompt=styled_cover,
-        negative_prompt=COVER_NEGATIVE_PROMPT,
-        width=1024,
-        height=1024,
-        num_inference_steps=40,
-        guidance_scale=8.5,
-        output_type="latent",
-    )
+    if ip_model is not None and face_embedding is not None:
+        images = ip_model.generate(
+            prompt=styled_cover,
+            negative_prompt=COVER_NEGATIVE_PROMPT,
+            faceid_embeds=face_embedding,
+            width=1024,
+            height=1024,
+            scale=0.8,
+            num_inference_steps=40,
+            guidance_scale=8.5,
+            num_images_per_prompt=1,
+        )
+        cover_image = images[0]
+        print("Cover generated with IP-Adapter FaceID")
+    else:
+        result = pipe(
+            prompt=styled_cover,
+            negative_prompt=COVER_NEGATIVE_PROMPT,
+            width=1024,
+            height=1024,
+            num_inference_steps=40,
+            guidance_scale=8.5,
+            output_type="latent",
+        )
 
-    # Clamp NaNs from UNet before decode
-    latents = result.images
-    latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
-    latents = latents.clamp(-4, 4)
+        # Clamp NaNs from UNet before decode
+        latents = result.images
+        latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
+        latents = latents.clamp(-4, 4)
 
-    # Unscale and decode with madebyollin fp16 VAE
-    latents = latents / pipe.vae.config.scaling_factor
-    with torch.no_grad():
-        decoded = pipe.vae.decode(latents, return_dict=False)[0]
-    cover_image = pipe.image_processor.postprocess(
-        decoded, output_type="pil"
-    )[0]
+        # Unscale and decode with madebyollin fp16 VAE
+        latents = latents / pipe.vae.config.scaling_factor
+        with torch.no_grad():
+            decoded = pipe.vae.decode(latents, return_dict=False)[0]
+        cover_image = pipe.image_processor.postprocess(
+            decoded, output_type="pil"
+        )[0]
+        print("Cover generated with LoRA only (no IP-Adapter)")
 
-    # Free SDXL pipe before loading Real-ESRGAN to avoid OOM
+    # Free SDXL pipe + IP-Adapter before loading Real-ESRGAN to avoid OOM
     del pipe
+    if ip_model is not None:
+        del ip_model
+        ip_model = None
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -956,6 +1071,22 @@ async def generate_illustrations(req: Request):
         except Exception as e:
             print(f"ERROR reloading LoRA for scenes: {e}")
 
+    # ── Reload IP-Adapter FaceID for scene generation ──────────────────────
+
+    if face_embedding is not None:
+        try:
+            from ip_adapter.ip_adapter_faceid import IPAdapterFaceIDXL
+
+            ip_model = IPAdapterFaceIDXL(
+                pipe,
+                f"{MODEL_CACHE_PATH}/ip-adapter-faceid_sdxl.bin",
+                device="cuda",
+            )
+            print("IP-Adapter FaceID reloaded for scene generation")
+        except Exception as e:
+            print(f"WARNING: Failed to reload IP-Adapter for scenes: {e}")
+            ip_model = None
+
     # ── Generate scene images (index 1+): 768×768 ───────────────────────
 
     for i, raw_prompt in enumerate(prompts):
@@ -974,28 +1105,42 @@ async def generate_illustrations(req: Request):
             print(f"WARNING: Scene {i+1} prompt too long: {word_count} words")
         print(f"Scene {i+1} prompt ({word_count} words): {styled_prompt[:200]}")
 
-        result = pipe(
-            prompt=styled_prompt,
-            negative_prompt=SCENE_NEGATIVE_PROMPT,
-            width=768,
-            height=768,
-            num_inference_steps=30,
-            guidance_scale=7.5,
-            output_type="latent",
-        )
+        if ip_model is not None and face_embedding is not None:
+            images = ip_model.generate(
+                prompt=styled_prompt,
+                negative_prompt=SCENE_NEGATIVE_PROMPT,
+                faceid_embeds=face_embedding,
+                width=768,
+                height=768,
+                scale=0.8,
+                num_inference_steps=30,
+                guidance_scale=7.5,
+                num_images_per_prompt=1,
+            )
+            image = images[0]
+        else:
+            result = pipe(
+                prompt=styled_prompt,
+                negative_prompt=SCENE_NEGATIVE_PROMPT,
+                width=768,
+                height=768,
+                num_inference_steps=30,
+                guidance_scale=7.5,
+                output_type="latent",
+            )
 
-        # Clamp NaNs from UNet before decode
-        latents = result.images
-        latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
-        latents = latents.clamp(-4, 4)
+            # Clamp NaNs from UNet before decode
+            latents = result.images
+            latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
+            latents = latents.clamp(-4, 4)
 
-        # Unscale and decode with madebyollin fp16 VAE
-        latents = latents / pipe.vae.config.scaling_factor
-        with torch.no_grad():
-            decoded = pipe.vae.decode(latents, return_dict=False)[0]
-        image = pipe.image_processor.postprocess(
-            decoded, output_type="pil"
-        )[0]
+            # Unscale and decode with madebyollin fp16 VAE
+            latents = latents / pipe.vae.config.scaling_factor
+            with torch.no_grad():
+                decoded = pipe.vae.decode(latents, return_dict=False)[0]
+            image = pipe.image_processor.postprocess(
+                decoded, output_type="pil"
+            )[0]
 
         buf = io.BytesIO()
         image.save(buf, format="PNG")
