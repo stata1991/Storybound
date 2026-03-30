@@ -12,6 +12,8 @@ export async function POST(req: NextRequest) {
     skipLora?: boolean;
   };
 
+  console.log("Generate illustrations called, NODE_ENV:", process.env.NODE_ENV, "harvestId:", harvestId, "skipLora:", skipLora);
+
   if (skipLora || process.env.NODE_ENV === "development") {
     // Dev: full sync flow (no webhook needed)
     // Skip-LoRA: no training needed

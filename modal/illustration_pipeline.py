@@ -49,7 +49,7 @@ pipeline_image = (
     .apt_install(
         "libgl1-mesa-glx",
         "libglib2.0-0",
-        "git",
+        "ffmpeg",
     )
     .pip_install(
         "torch>=2.0.0",
@@ -62,9 +62,8 @@ pipeline_image = (
         "fastapi[standard]",
         "opencv-python-headless>=4.8.0",
         "httpx>=0.27.0",
-        "git+https://github.com/tencent-ailab/IP-Adapter.git",
         "insightface",
-        "onnxruntime",
+        "onnxruntime-gpu",
     )
     .run_commands(
         # Pre-download SDXL base model into the image so cold starts
@@ -90,18 +89,18 @@ pipeline_image = (
         "'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth', "
         "'/root/.cache/realesrgan/realesr-animevideov3.pth'"
         ")\"",
-        # Pre-download InsightFace buffalo_l model for face embedding extraction
+        # Pre-download InsightFace buffalo_l model for face embedding extraction + swap
         "python -c \""
         "from insightface.app import FaceAnalysis; "
         "app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); "
         "app.prepare(ctx_id=0, det_size=(640, 640))"
         "\"",
-        # Pre-download IP-Adapter FaceID SDXL weights
+        # Pre-download inswapper_128 face swap model
         "python -c \""
         "from huggingface_hub import hf_hub_download; "
         "hf_hub_download("
-        "repo_id='h94/IP-Adapter-FaceID', "
-        "filename='ip-adapter-faceid_sdxl.bin', "
+        "repo_id='hacksider/deep-live-cam', "
+        "filename='inswapper_128_fp16.onnx', "
         f"local_dir='{MODEL_CACHE_PATH}'"
         ")\"",
     )
@@ -109,22 +108,28 @@ pipeline_image = (
 
 # ─── Style suffix ────────────────────────────────────────────────────────────
 
-# Kept short (~7 tokens) to stay within CLIP 77-token budget
-STYLE_SUFFIX = ", gouache illustration, children's book, warm colors"
-
-COVER_NEGATIVE_PROMPT = (
-    "text, title, logo, watermark, signature, words, letters, "
-    "blurry, deformed, extra limbs, cropped, "
-    "teenager, adult, woman, man, older person, "
-    "mature face, adult proportions"
+STYLE_SUFFIX = (
+    ", gouache illustration, children's book art, "
+    "soft painterly style, warm colors, "
+    "consistent character design, "
+    "same art style as cover illustration, "
+    "Studio Ghibli inspired, "
+    "detailed face, close-up character"
 )
 
-SCENE_NEGATIVE_PROMPT = (
+NEGATIVE_PROMPT = (
     "text, title, logo, watermark, signature, words, letters, "
     "blurry, deformed, extra limbs, cropped, "
     "teenager, adult, woman, man, older person, "
-    "mature face, adult proportions, earrings on adult, "
-    "adult jewelry"
+    "mature face, adult proportions, elongated face, "
+    "older child, school age child, "
+    "5 year old, 6 year old, 7 year old, 8 year old, "
+    "cartoon, anime, 3D render, photorealistic, "
+    "different art style, inconsistent style, "
+    "chibi, flat design, vector art, "
+    "character from behind, faceless, "
+    "full body shot with tiny character, "
+    "low quality face, blurry face"
 )
 
 
@@ -147,13 +152,13 @@ def get_age_prefix(age: int, pronouns: str = "they_them") -> str:
     clamped = max(3, min(10, age))
 
     if clamped <= 4:
-        return f"3-year-old toddler {word}"
+        return f"3-year-old toddler {word}, baby face, chubby cheeks, very young child"
     elif clamped <= 6:
-        return f"5-year-old little {word}"
+        return f"5-year-old little {word}, round face, chubby cheeks, young child"
     elif clamped <= 8:
-        return f"8-year-old {word}"
+        return f"8-year-old {word}, young face, child proportions"
     else:
-        return f"10-year-old preteen {word}"
+        return f"10-year-old preteen {word}, young face"
 
 
 def truncate_scene_description(prompt: str, max_words: int = 20) -> str:
@@ -170,16 +175,82 @@ def truncate_scene_description(prompt: str, max_words: int = 20) -> str:
 
 
 def extract_core_appearance(description: str, max_words: int = 10) -> str:
-    """Extract the 3 most distinctive visual features, max N words."""
+    """Extract physical features only (hair, eyes, skin). No clothing."""
     if not description:
         return ""
-    # Split on commas, take first 3 meaningful parts
+    clothing_words = {
+        "wear", "wears", "wearing", "dress", "dressed", "outfit",
+        "boots", "shirt", "pants", "skirt", "jacket", "hat", "headband",
+        "shoes", "socks", "coat", "hoodie", "sweater", "clothing",
+        "carries", "carry", "carrying", "backpack", "glasses",
+    }
     parts = [p.strip() for p in description.split(",") if p.strip()]
-    result = ", ".join(parts[:3])
+    filtered_out = [p for p in parts if any(w in p.lower().split() for w in clothing_words)]
+    physical = [
+        p for p in parts
+        if not any(w in p.lower().split() for w in clothing_words)
+    ]
+    print(f"extract_core_appearance input: {parts}")
+    print(f"extract_core_appearance filtered out (clothing): {filtered_out}")
+    print(f"extract_core_appearance kept (physical): {physical}")
+    result = ", ".join(physical[:3])
     words = result.split()
     if len(words) > max_words:
         result = " ".join(words[:max_words])
+    print(f"extract_core_appearance result: {result}")
     return result
+
+
+# ─── Face swap via inswapper_128 ──────────────────────────────────────────────
+
+
+def apply_face_swap(
+    source_face_path: str,
+    target_image,  # PIL Image
+    model_path: str,
+) -> "Image":
+    """Swap face from source photo onto target illustration using inswapper."""
+    import cv2
+    import numpy as np
+    from PIL import Image
+    from insightface.app import FaceAnalysis
+    from insightface.model_zoo import get_model
+
+    face_app = FaceAnalysis(
+        name="buffalo_l",
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    face_app.prepare(ctx_id=0, det_size=(640, 640))
+
+    swapper = get_model(model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+
+    # Get source face
+    source_img = cv2.imread(source_face_path)
+    source_faces = face_app.get(source_img)
+    if not source_faces:
+        print("WARNING: No face in source image, skipping swap")
+        return target_image
+    source_face = max(
+        source_faces,
+        key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+    )
+
+    # Get target face(s)
+    target_np = cv2.cvtColor(np.array(target_image), cv2.COLOR_RGB2BGR)
+    target_faces = face_app.get(target_np)
+    if not target_faces:
+        print("WARNING: No face in target illustration, skipping swap")
+        return target_image
+
+    # Swap the largest face in the target
+    target_face = max(
+        target_faces,
+        key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+    )
+
+    result = swapper.get(target_np, target_face, source_face, paste_back=True)
+    result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(result_rgb)
 
 
 # ─── Color mood from memory photos (Fix 8B) ─────────────────────────────────
@@ -479,10 +550,10 @@ async def train_face_model(req: Request):
             img = img.crop((left, top, left + side, top + side))
             print(f"Photo {i}: no face detected, using original")
 
-        img = img.resize((512, 512), Image.LANCZOS)
+        img = img.resize((1024, 1024), Image.LANCZOS)
         pil_images.append(img)
 
-    print(f"Preprocessed {n_cropped}/{len(photos_b64)} photos with face crops")
+    print(f"Preprocessed {n_cropped}/{len(photos_b64)} photos with face crops (1024x1024)")
 
     # ── Extract face embedding via InsightFace (for IP-Adapter at gen time) ─
 
@@ -494,7 +565,7 @@ async def train_face_model(req: Request):
     )
     face_app.prepare(ctx_id=0, det_size=(640, 640))
 
-    best_embedding = None
+    best_face_idx = -1
     best_face_size = 0
 
     for idx, img in enumerate(pil_images):
@@ -508,17 +579,13 @@ async def train_face_model(req: Request):
             face_size = (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1])
             if face_size > best_face_size:
                 best_face_size = face_size
-                best_embedding = face.normed_embedding
-                print(f"Photo {idx}: InsightFace embedding extracted (face_size={face_size:.0f})")
+                best_face_idx = idx
+            print(f"Photo {idx}: InsightFace face detected (face_size={face_size:.0f})")
 
-    # Save embedding to volume (done after LoRA save below)
-    # We store the raw numpy array for now, convert to tensor at save time
-    _face_embedding_np = best_embedding
-
-    if best_embedding is not None:
-        print(f"Best face embedding ready (size={best_face_size:.0f})")
+    if best_face_idx >= 0:
+        print(f"Best face crop: photo {best_face_idx} (face_size={best_face_size:.0f})")
     else:
-        print("WARNING: No InsightFace embedding extracted from any photo")
+        print("WARNING: No face detected in any photo by InsightFace")
 
     # Free InsightFace from GPU
     del face_app
@@ -546,7 +613,7 @@ async def train_face_model(req: Request):
     # ── Apply LoRA to UNet ──────────────────────────────────────────────────
 
     lora_config = LoraConfig(
-        r=16,
+        r=32,
         lora_alpha=16,
         target_modules=[
             "to_q",
@@ -621,6 +688,15 @@ async def train_face_model(req: Request):
             latent = vae.encode(img_tensor).latent_dist.sample() * vae.config.scaling_factor
             latents_list.append(latent)
 
+    # Save best face crop bytes before deleting source photos
+    _best_face_crop_bytes = None
+    if best_face_idx >= 0:
+        _face_buf = io.BytesIO()
+        pil_images[best_face_idx].save(_face_buf, format="JPEG", quality=95)
+        _best_face_crop_bytes = _face_buf.getvalue()
+        del _face_buf
+        print(f"Best face crop buffered ({len(_best_face_crop_bytes)} bytes)")
+
     # ── DELETE source photos from memory immediately after encoding ──────────
     # Privacy: constraint step 3 — source photos deleted from Modal memory
     del pil_images
@@ -637,14 +713,14 @@ async def train_face_model(req: Request):
     lora_params = [p for p in unet.parameters() if p.requires_grad]
     print(f"Trainable LoRA params: {len(lora_params)}")
     print(f"Total param tensors: {sum(1 for _ in unet.parameters())}")
-    print(f"Training config: steps=800, rank=16, lr=5e-5")
+    print(f"Training config: steps=1500, rank=32, lr=5e-5, resolution=1024")
 
-    num_steps = 800
+    num_steps = 1500
     num_images = len(latents_list)
 
     # SDXL additional conditioning: time_ids
     add_time_ids = torch.tensor(
-        [[512.0, 512.0, 0.0, 0.0, 512.0, 512.0]],
+        [[1024.0, 1024.0, 0.0, 0.0, 1024.0, 1024.0]],
         device="cuda",
         dtype=torch.bfloat16,
     )
@@ -678,8 +754,17 @@ async def train_face_model(req: Request):
                 added_cond_kwargs=added_cond_kwargs,
             ).sample
 
-            # MSE loss against actual noise
-            loss = torch.nn.functional.mse_loss(noise_pred, noise)
+            # MSE loss against actual noise (per-element, unreduced)
+            loss = torch.nn.functional.mse_loss(noise_pred, noise, reduction="none")
+            loss = loss.mean(dim=list(range(1, loss.ndim)))  # per-sample mean
+
+            # Min-SNR-gamma weighting (gamma=5.0) for stable training
+            alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=timesteps.device)
+            alpha_t = alphas_cumprod[timesteps]
+            snr = alpha_t / (1.0 - alpha_t)
+            snr_gamma = 5.0
+            mse_loss_weights = torch.clamp(snr, max=snr_gamma) / snr
+            loss = (loss * mse_loss_weights).mean()
 
         optimizer.zero_grad()
         loss.backward()
@@ -705,14 +790,12 @@ async def train_face_model(req: Request):
     # Save only the LoRA adapter weights
     unet.save_pretrained(str(save_dir))
 
-    # Save face embedding alongside LoRA weights (for IP-Adapter at gen time)
-    if _face_embedding_np is not None:
-        embed_path = save_dir / "face_embedding.pt"
-        torch.save(
-            torch.from_numpy(_face_embedding_np).unsqueeze(0),
-            str(embed_path),
-        )
-        print(f"Face embedding saved: {embed_path}")
+    # Save best face crop for face swap stage during generation
+    if _best_face_crop_bytes is not None:
+        face_crop_path = save_dir / "best_face_crop.jpg"
+        face_crop_path.write_bytes(_best_face_crop_bytes)
+        del _best_face_crop_bytes
+        print(f"Best face crop saved: {face_crop_path}")
 
     await lora_volume.commit.aio()
 
@@ -827,6 +910,7 @@ async def generate_illustrations(req: Request):
     child_age = body.get("age", 6)
     child_pronouns = body.get("pronouns", "they_them")
     character_description = body.get("character_description", "")
+    hair_description = body.get("hair_description", "")
     memory_photos_b64 = body.get("memory_photos_b64", [])
 
     if not skip_lora and not face_model_id:
@@ -844,6 +928,13 @@ async def generate_illustrations(req: Request):
     age_prefix = get_age_prefix(child_age, child_pronouns)
     core_appearance = extract_core_appearance(character_description)
     lora_token = "sks child"
+
+    # Use explicit hair_description if provided, otherwise fall back to core_appearance
+    if hair_description:
+        print(f"Hair description (from story bible): {hair_description}")
+        print(f"Core appearance (extracted): {core_appearance}")
+    else:
+        print(f"No explicit hair_description, using core_appearance: {core_appearance}")
 
     color_mood = ""
     if memory_photos_b64:
@@ -913,38 +1004,27 @@ async def generate_illustrations(req: Request):
                 save_file(remapped, remapped_path)
                 pipe.load_lora_weights(tmp_dir, weight_name="adapter_model.safetensors")
 
-            pipe.fuse_lora(lora_scale=0.7)
+            pipe.fuse_lora(lora_scale=0.6)
             lora_loaded = True
             print("LoRA loaded and fused successfully")
         except Exception as e:
             print(f"ERROR loading LoRA: {e}")
             print("Proceeding without face conditioning")
 
-    # ── Load IP-Adapter FaceID (if face embedding exists) ──────────────────
+    # ── Resolve face swap paths ────────────────────────────────────────────
 
     import torch
 
-    face_embedding = None
-    ip_model = None
+    source_face_path = None
+    swap_model_path = f"{MODEL_CACHE_PATH}/inswapper_128_fp16.onnx"
 
     if not skip_lora and face_model_id:
-        embed_path = Path(LORA_VOLUME_PATH) / face_model_id / "face_embedding.pt"
-        if embed_path.exists():
-            face_embedding = torch.load(str(embed_path), map_location="cuda")
-            try:
-                from ip_adapter.ip_adapter_faceid import IPAdapterFaceIDXL
-
-                ip_model = IPAdapterFaceIDXL(
-                    pipe,
-                    f"{MODEL_CACHE_PATH}/ip-adapter-faceid_sdxl.bin",
-                    device="cuda",
-                )
-                print("IP-Adapter FaceID loaded with face embedding")
-            except Exception as e:
-                print(f"WARNING: Failed to load IP-Adapter FaceID: {e}")
-                ip_model = None
+        candidate = str(Path(LORA_VOLUME_PATH) / face_model_id / "best_face_crop.jpg")
+        if os.path.exists(candidate) and os.path.exists(swap_model_path):
+            source_face_path = candidate
+            print(f"Face swap enabled: source={candidate}")
         else:
-            print(f"No face embedding at {embed_path}, using LoRA only")
+            print(f"Face swap disabled: crop={os.path.exists(candidate)}, model={os.path.exists(swap_model_path)}")
 
     # ── Build cover prompt (budget-aware) ────────────────────────────────
 
@@ -956,7 +1036,9 @@ async def generate_illustrations(req: Request):
     # Assemble cover prompt within CLIP token budget
     cover_scene_desc = truncate_scene_description(cover_prompt_text)
     cover_parts = [age_prefix, lora_token]
-    if core_appearance:
+    if hair_description:
+        cover_parts.append(hair_description)
+    elif core_appearance:
         cover_parts.append(core_appearance)
     cover_parts.append(cover_scene_desc)
     cover_parts.append(STYLE_SUFFIX.lstrip(", "))
@@ -969,52 +1051,43 @@ async def generate_illustrations(req: Request):
         print(f"WARNING: Cover prompt too long: {word_count} words")
     print(f"Cover prompt ({word_count} words): {styled_cover}")
 
-    if ip_model is not None and face_embedding is not None:
-        images = ip_model.generate(
-            prompt=styled_cover,
-            negative_prompt=COVER_NEGATIVE_PROMPT,
-            faceid_embeds=face_embedding,
-            width=1024,
-            height=1024,
-            scale=0.8,
-            num_inference_steps=40,
-            guidance_scale=8.5,
-            num_images_per_prompt=1,
-        )
-        cover_image = images[0]
-        print("Cover generated with IP-Adapter FaceID")
-    else:
-        result = pipe(
-            prompt=styled_cover,
-            negative_prompt=COVER_NEGATIVE_PROMPT,
-            width=1024,
-            height=1024,
-            num_inference_steps=40,
-            guidance_scale=8.5,
-            output_type="latent",
-        )
+    result = pipe(
+        prompt=styled_cover,
+        negative_prompt=NEGATIVE_PROMPT,
+        width=1024,
+        height=1024,
+        num_inference_steps=40,
+        guidance_scale=8.5,
+        output_type="latent",
+    )
 
-        # Clamp NaNs from UNet before decode
-        latents = result.images
-        latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
-        latents = latents.clamp(-4, 4)
+    # Clamp NaNs from UNet before decode
+    latents = result.images
+    latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
+    latents = latents.clamp(-4, 4)
 
-        # Unscale and decode with madebyollin fp16 VAE
-        latents = latents / pipe.vae.config.scaling_factor
-        with torch.no_grad():
-            decoded = pipe.vae.decode(latents, return_dict=False)[0]
-        cover_image = pipe.image_processor.postprocess(
-            decoded, output_type="pil"
-        )[0]
-        print("Cover generated with LoRA only (no IP-Adapter)")
+    # Unscale and decode with madebyollin fp16 VAE
+    latents = latents / pipe.vae.config.scaling_factor
+    with torch.no_grad():
+        decoded = pipe.vae.decode(latents, return_dict=False)[0]
+    cover_image = pipe.image_processor.postprocess(
+        decoded, output_type="pil"
+    )[0]
+    print("Cover generated with LoRA")
 
-    # Free SDXL pipe + IP-Adapter before loading Real-ESRGAN to avoid OOM
+    # Free SDXL pipe before loading Real-ESRGAN to avoid OOM
     del pipe
-    if ip_model is not None:
-        del ip_model
-        ip_model = None
     gc.collect()
     torch.cuda.empty_cache()
+
+    # Apply face swap to cover
+    if source_face_path:
+        print("Applying face swap to cover...")
+        try:
+            cover_image = apply_face_swap(source_face_path, cover_image, swap_model_path)
+            print("Cover face swap complete")
+        except Exception as e:
+            print(f"WARNING: Cover face swap failed: {e}")
 
     # Upscale cover 2x via Real-ESRGAN (~2048×2048)
     cover_image = upscale_with_realesrgan(cover_image)
@@ -1066,34 +1139,22 @@ async def generate_illustrations(req: Request):
                 save_file(remapped, remapped_path)
                 pipe.load_lora_weights(tmp_dir, weight_name="adapter_model.safetensors")
 
-            pipe.fuse_lora(lora_scale=0.7)
+            pipe.fuse_lora(lora_scale=0.6)
             print("LoRA reloaded for scene generation")
         except Exception as e:
             print(f"ERROR reloading LoRA for scenes: {e}")
-
-    # ── Reload IP-Adapter FaceID for scene generation ──────────────────────
-
-    if face_embedding is not None:
-        try:
-            from ip_adapter.ip_adapter_faceid import IPAdapterFaceIDXL
-
-            ip_model = IPAdapterFaceIDXL(
-                pipe,
-                f"{MODEL_CACHE_PATH}/ip-adapter-faceid_sdxl.bin",
-                device="cuda",
-            )
-            print("IP-Adapter FaceID reloaded for scene generation")
-        except Exception as e:
-            print(f"WARNING: Failed to reload IP-Adapter for scenes: {e}")
-            ip_model = None
 
     # ── Generate scene images (index 1+): 768×768 ───────────────────────
 
     for i, raw_prompt in enumerate(prompts):
         scene_desc = truncate_scene_description(raw_prompt)
         parts = [age_prefix, lora_token]
-        if core_appearance:
+        if hair_description:
+            parts.append(hair_description)
+        elif core_appearance:
             parts.append(core_appearance)
+        parts.append("child prominently featured in foreground")
+        parts.append("face clearly visible")
         parts.append(scene_desc)
         parts.append(STYLE_SUFFIX.lstrip(", "))
         if color_mood:
@@ -1105,42 +1166,37 @@ async def generate_illustrations(req: Request):
             print(f"WARNING: Scene {i+1} prompt too long: {word_count} words")
         print(f"Scene {i+1} prompt ({word_count} words): {styled_prompt[:200]}")
 
-        if ip_model is not None and face_embedding is not None:
-            images = ip_model.generate(
-                prompt=styled_prompt,
-                negative_prompt=SCENE_NEGATIVE_PROMPT,
-                faceid_embeds=face_embedding,
-                width=768,
-                height=768,
-                scale=0.8,
-                num_inference_steps=30,
-                guidance_scale=7.5,
-                num_images_per_prompt=1,
-            )
-            image = images[0]
-        else:
-            result = pipe(
-                prompt=styled_prompt,
-                negative_prompt=SCENE_NEGATIVE_PROMPT,
-                width=768,
-                height=768,
-                num_inference_steps=30,
-                guidance_scale=7.5,
-                output_type="latent",
-            )
+        result = pipe(
+            prompt=styled_prompt,
+            negative_prompt=NEGATIVE_PROMPT,
+            width=768,
+            height=768,
+            num_inference_steps=30,
+            guidance_scale=7.5,
+            output_type="latent",
+        )
 
-            # Clamp NaNs from UNet before decode
-            latents = result.images
-            latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
-            latents = latents.clamp(-4, 4)
+        # Clamp NaNs from UNet before decode
+        latents = result.images
+        latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
+        latents = latents.clamp(-4, 4)
 
-            # Unscale and decode with madebyollin fp16 VAE
-            latents = latents / pipe.vae.config.scaling_factor
-            with torch.no_grad():
-                decoded = pipe.vae.decode(latents, return_dict=False)[0]
-            image = pipe.image_processor.postprocess(
-                decoded, output_type="pil"
-            )[0]
+        # Unscale and decode with madebyollin fp16 VAE
+        latents = latents / pipe.vae.config.scaling_factor
+        with torch.no_grad():
+            decoded = pipe.vae.decode(latents, return_dict=False)[0]
+        image = pipe.image_processor.postprocess(
+            decoded, output_type="pil"
+        )[0]
+
+        # Apply face swap to scene
+        if source_face_path:
+            print(f"Applying face swap to scene {i+1}...")
+            try:
+                image = apply_face_swap(source_face_path, image, swap_model_path)
+                print(f"Scene {i+1} face swap complete")
+            except Exception as e:
+                print(f"WARNING: Scene {i+1} face swap failed: {e}")
 
         buf = io.BytesIO()
         image.save(buf, format="PNG")

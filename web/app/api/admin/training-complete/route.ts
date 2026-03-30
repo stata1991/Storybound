@@ -26,6 +26,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  console.log("Training complete webhook received:", JSON.stringify(body));
+
   if (body.status !== "ok") {
     return NextResponse.json(
       { error: `Training failed with status: ${body.status}` },

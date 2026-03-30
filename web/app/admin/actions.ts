@@ -561,6 +561,13 @@ export async function completeIllustrationGeneration(
   harvestId: string,
   faceModelId: string
 ): Promise<{ success: true } | { error: string }> {
+  console.log("completeIllustrationGeneration called", { harvestId, faceModelId });
+  logEvent({
+    event_type: "illustration.complete_start",
+    harvest_id: harvestId,
+    message: `completeIllustrationGeneration called (face_model_id: ${faceModelId})`,
+  });
+
   const supa = getAdmin();
 
   logEvent({
@@ -631,6 +638,7 @@ export async function completeIllustrationGeneration(
       | undefined;
     const traits = hero?.personality_traits as string[] | undefined;
 
+    const hairDescription = phys?.hair ?? "";
     const appearance = phys
       ? [phys.hair, phys.eyes, phys.skin_tone, phys.signature_look]
           .filter(Boolean)
@@ -644,6 +652,10 @@ export async function completeIllustrationGeneration(
       coverPrompt = buildCoverPrompt(appearance, personality, theme);
       characterDescription = appearance;
     }
+
+    console.log("Story bible physical_description:", JSON.stringify(phys));
+    console.log("characterDescription sent to Modal:", characterDescription);
+    console.log("hairDescription sent to Modal:", hairDescription);
   }
 
   // ── Build prompts ──────────────────────────────────────────────────────────
@@ -680,10 +692,15 @@ export async function completeIllustrationGeneration(
     }
   }
 
+  const hairDescription = characterDescription
+    ? characterDescription.split(",")[0]?.trim() ?? ""
+    : "";
+
   const modalSharedParams = {
     age: childAge,
     pronouns: child.pronouns ?? "they_them",
     ...(characterDescription ? { character_description: characterDescription } : {}),
+    ...(hairDescription ? { hair_description: hairDescription } : {}),
     ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
   };
 
@@ -715,9 +732,15 @@ export async function completeIllustrationGeneration(
   }
 
   // Delete LoRA weights
+  console.log("Attempting face model delete:", { faceModelId, MODAL_DELETE_URL: process.env.MODAL_DELETE_URL });
   await callModal(process.env.MODAL_DELETE_URL!, {
     face_model_id: faceModelId,
   }).catch(() => {});
+  logEvent({
+    event_type: "face_model_deleted",
+    harvest_id: harvestId,
+    message: `LoRA weights deleted (face_model_id: ${faceModelId})`,
+  });
 
   // ── Upload illustrations to Supabase Storage ───────────────────────────────
 
@@ -890,6 +913,9 @@ export async function triggerIllustrationPipeline(
       coverPrompt = buildCoverPrompt(appearance, personality, theme);
       characterDescription = appearance;
     }
+
+    console.log("[triggerPipeline] Story bible physical_description:", JSON.stringify(phys));
+    console.log("[triggerPipeline] characterDescription:", characterDescription);
   }
 
   // ── Build prompts ──────────────────────────────────────────────────────────
@@ -929,10 +955,15 @@ export async function triggerIllustrationPipeline(
     }
   }
 
+  const hairDescription = characterDescription
+    ? characterDescription.split(",")[0]?.trim() ?? ""
+    : "";
+
   const modalSharedParams = {
     age: childAge,
     pronouns: child.pronouns ?? "they_them",
     ...(characterDescription ? { character_description: characterDescription } : {}),
+    ...(hairDescription ? { hair_description: hairDescription } : {}),
     ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
   };
 
@@ -982,10 +1013,15 @@ export async function triggerIllustrationPipeline(
           ...modalSharedParams,
         }
       );
+      console.log("Modal generate_illustrations returned:", {
+        illustrationCount: genResult?.illustrations?.length,
+        faceModelId: trainResult.face_model_id,
+      });
     } catch (e) {
+      console.log("Modal generate_illustrations FAILED, deleting LoRA:", trainResult.face_model_id);
       await callModal(process.env.MODAL_DELETE_URL!, {
         face_model_id: trainResult.face_model_id,
-      }).catch(() => {});
+      }).catch((delErr) => console.error("Delete failed (error path):", delErr));
       const msg = e instanceof Error ? e.message : "Unknown error";
       logEvent({
         event_type: "illustration.pipeline",
@@ -996,9 +1032,14 @@ export async function triggerIllustrationPipeline(
       return { error: `Illustration generation failed: ${msg}` };
     }
 
+    console.log("PRE-DELETE: about to delete face model", {
+      faceModelId: trainResult.face_model_id,
+      hasDeleteUrl: !!process.env.MODAL_DELETE_URL,
+    });
     await callModal(process.env.MODAL_DELETE_URL!, {
       face_model_id: trainResult.face_model_id,
-    }).catch(() => {});
+    }).catch((e) => console.error("Delete failed (success path):", e));
+    console.log("POST-DELETE: face model delete called");
   }
 
   // ── Upload illustrations to Supabase Storage ───────────────────────────────
