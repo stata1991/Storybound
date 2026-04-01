@@ -214,7 +214,7 @@ export async function saveChildProfile(data: ChildProfileData) {
       }
 
       const adminEmail = process.env.ADMIN_EMAIL ?? "tatasupreeth@gmail.com";
-      const dashboardUrl = `https://storyboundapp.com/admin/harvest/${harvestRow.id}`;
+      const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL}/admin/harvest/${harvestRow.id}`;
 
       await sendEmail({
         to: adminEmail,
@@ -282,8 +282,8 @@ export async function uploadCharacterPhotos(childId: string, formData: FormData)
   });
 
   const photos = formData.getAll("photos") as File[];
-  if (photos.length < 8) return { error: "At least 8 photos required." };
-  if (photos.length > 15) return { error: "Maximum 15 photos allowed." };
+  if (photos.length < 5) return { error: "At least 5 photos required." };
+  if (photos.length > 10) return { error: "Maximum 10 photos allowed." };
 
   for (const photo of photos) {
     if (!photo.size) continue;
@@ -356,7 +356,6 @@ export async function submitOnboardingMemoryDrop(
   childId: string,
   data: {
     milestone: string;
-    currentInterests: string;
     notes: string;
     photos?: { path: string; caption: string }[];
   }
@@ -374,9 +373,6 @@ export async function submitOnboardingMemoryDrop(
   // Validate inputs
   if (!data.milestone || data.milestone.length > 500) {
     return { error: "Milestone is required (max 500 characters)." };
-  }
-  if (!data.currentInterests || data.currentInterests.length > 500) {
-    return { error: "Current interests are required (max 500 characters)." };
   }
   if (data.notes && data.notes.length > 1000) {
     return { error: "Notes must be 1000 characters or less." };
@@ -399,7 +395,7 @@ export async function submitOnboardingMemoryDrop(
 
   const { data: child } = await admin
     .from("children")
-    .select("id, name, family_id")
+    .select("id, name, family_id, interests")
     .eq("id", childId)
     .eq("family_id", parent.family_id)
     .single();
@@ -420,16 +416,13 @@ export async function submitOnboardingMemoryDrop(
     return { error: "No pending memory drop found." };
   }
 
-  // Update the harvest with memory drop data
-  const interestsList = data.currentInterests
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Auto-populate current_interests from child profile (set at onboarding Step 2)
+  const profileInterests: string[] = Array.isArray(child.interests) ? child.interests : [];
 
   // Belt-and-suspenders: include photos if the component passed them
   const updatePayload: Record<string, unknown> = {
     milestone_description: data.milestone,
-    current_interests: interestsList,
+    current_interests: profileInterests,
     notable_notes: data.notes || null,
     status: "submitted",
     submitted_at: new Date().toISOString(),
@@ -463,7 +456,7 @@ export async function submitOnboardingMemoryDrop(
     childName: child.name,
     season: harvest.season,
   });
-  sendEmail({ to: parent.email, subject, html }).catch(() => {});
+  sendEmail({ to: parent.email, subject, html }).catch((err) => console.error('[email] memory submitted:', err));
 
   return { success: true };
 }

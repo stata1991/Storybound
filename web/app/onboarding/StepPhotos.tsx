@@ -3,8 +3,8 @@
 import { useState, useRef } from "react";
 import { uploadCharacterPhotos } from "./actions";
 
-const MIN_PHOTOS = 8;
-const MAX_PHOTOS = 15;
+const MIN_PHOTOS = 5;
+const MAX_PHOTOS = 10;
 
 export default function StepPhotos({
   childName,
@@ -66,41 +66,36 @@ export default function StepPhotos({
 
   return (
     <div>
+      <p className="mb-1 font-sans text-base font-semibold text-navy/80">
+        Help us capture {childName.charAt(0).toUpperCase() + childName.slice(1)}&apos;s magic &#10024;
+      </p>
       <p className="mb-4 font-sans text-sm leading-relaxed text-navy/50">
-        Upload {MIN_PHOTOS}&ndash;{MAX_PHOTOS} clear photos so we can illustrate{" "}
-        {childName.charAt(0).toUpperCase() + childName.slice(1)} in every scene.
+        The closer and clearer the photo, the more{" "}
+        {childName.charAt(0).toUpperCase() + childName.slice(1)} will shine in their story.
       </p>
 
-      <details className="mb-6 rounded-xl border border-gold/20 bg-gold/5">
-        <summary className="cursor-pointer px-4 py-3 font-sans text-sm font-semibold text-navy/70 select-none">
-          Better close-up photos = stronger likeness in the book
-        </summary>
-        <div className="grid gap-4 px-4 pb-4 pt-1 sm:grid-cols-2">
-          <div>
-            <p className="mb-1.5 font-sans text-xs font-semibold uppercase tracking-wide text-green-700/70">
-              Good photos
-            </p>
-            <ul className="space-y-1 font-sans text-xs leading-relaxed text-navy/50">
-              <li>Close-up face shots &mdash; face fills most of the frame</li>
-              <li>Multiple angles &mdash; front, slight left, slight right</li>
-              <li>Varied lighting &mdash; indoors and outdoors</li>
-              <li>Natural expressions &mdash; smiling, laughing, neutral</li>
-              <li>Recent photos &mdash; within the last 6 months</li>
-            </ul>
-          </div>
-          <div>
-            <p className="mb-1.5 font-sans text-xs font-semibold uppercase tracking-wide text-red-600/70">
-              Avoid
-            </p>
-            <ul className="space-y-1 font-sans text-xs leading-relaxed text-navy/50">
-              <li>Full-body shots where face appears small</li>
-              <li>Sunglasses, hats, or anything covering the face</li>
-              <li>Blurry or heavily filtered photos</li>
-              <li>Group photos</li>
-            </ul>
-          </div>
+      <div className="mb-5 grid grid-cols-4 gap-2">
+        <div className="rounded-xl border-2 border-green-400/50 bg-green-50/50 px-2 py-2.5 text-center">
+          <span className="block text-xl leading-none">&#128522;</span>
+          <p className="mt-1.5 font-sans text-[11px] font-semibold text-green-700">Just their face</p>
+          <p className="mt-0.5 font-sans text-[10px] leading-tight text-green-600/70">Face fills most of the frame</p>
         </div>
-      </details>
+        <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
+          <span className="block text-xl leading-none">&#128104;&#8205;&#128105;&#8205;&#128103;</span>
+          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">One at a time</p>
+          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">Solo photos work best</p>
+        </div>
+        <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
+          <span className="block text-xl leading-none">&#129506;</span>
+          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Nothing covering their face</p>
+          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">No hats, hoods, or sunglasses</p>
+        </div>
+        <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
+          <span className="block text-xl leading-none">&#127774;</span>
+          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Bright and clear</p>
+          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">Good lighting helps us get it right</p>
+        </div>
+      </div>
 
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">

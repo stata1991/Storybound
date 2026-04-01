@@ -277,7 +277,7 @@ export async function POST(request: Request) {
           to: customerEmail,
           subject: confirmSubject,
           html: confirmHtml,
-        }).catch(() => {});
+        }).catch((err) => console.error('[email] subscription confirmed:', err));
       }
     }
 

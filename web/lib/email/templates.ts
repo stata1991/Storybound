@@ -30,7 +30,7 @@ function layout(body: string): string {
         <!-- Footer -->
         <tr><td style="padding:24px 32px;border-top:1px solid #E8E4DF;">
           <p style="margin:0 0 8px 0;font-size:13px;color:${MUTED};line-height:1.5;">
-            Questions? Reply to this email or contact us at storybound@gmail.com
+            Questions? Reply to this email or contact us at ${process.env.ADMIN_EMAIL ?? 'storyboundapp@gmail.com'}
           </p>
           <p style="margin:0;font-size:13px;color:${MUTED};line-height:1.5;">
             The Storybound team

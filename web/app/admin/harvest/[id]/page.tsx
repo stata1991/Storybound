@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 export const maxDuration = 300;
 
 import { redirect } from "next/navigation";
@@ -34,6 +36,7 @@ interface HarvestDetail {
   character_archetype: string | null;
   notable_notes: string | null;
   face_ref_generated: boolean;
+  face_ref_path: string | null;
   photos_deleted_at: string | null;
 }
 
@@ -203,7 +206,7 @@ export default async function HarvestDetailPage({
   const { data: harvestRaw } = await admin
     .from("harvests")
     .select(
-      "id, child_id, season, quarter, year, status, window_opens_at, window_closes_at, submitted_at, memory_1, memory_2, photo_count, photo_paths, photo_captions, current_interests, milestone_description, character_archetype, notable_notes, face_ref_generated, photos_deleted_at"
+      "id, child_id, season, quarter, year, status, window_opens_at, window_closes_at, submitted_at, memory_1, memory_2, photo_count, photo_paths, photo_captions, current_interests, milestone_description, character_archetype, notable_notes, face_ref_generated, face_ref_path, photos_deleted_at"
     )
     .eq("id", harvestId)
     .single();
@@ -306,6 +309,14 @@ export default async function HarvestDetailPage({
       episode.illustration_status === "approved" ||
       episode.illustration_status === "complete");
   const bookGenerated = !!episode?.print_file_path;
+  console.log("DEBUG harvest state:", {
+    character_photos_deleted_at: child.character_photos_deleted_at,
+    face_ref_generated: harvest.face_ref_generated,
+    face_ref_path: harvest.face_ref_path,
+    illustration_status: episode?.illustration_status,
+    hasEpisode,
+  });
+
   const photosDeletedNoIllustrations =
     !!child.character_photos_deleted_at &&
     !harvest.face_ref_generated &&
@@ -313,6 +324,21 @@ export default async function HarvestDetailPage({
     episode.illustration_status !== "review" &&
     episode.illustration_status !== "approved" &&
     episode.illustration_status !== "complete";
+
+  console.log("photosDeletedNoIllustrations:", photosDeletedNoIllustrations, {
+    hasPhotosDeleted: !!child.character_photos_deleted_at,
+    faceRefGenerated: !harvest.face_ref_generated,
+    hasEpisode,
+    illustrationStatus: episode?.illustration_status,
+  });
+  console.log("condition parts:", {
+    part1: !!child.character_photos_deleted_at,
+    part2: !harvest.face_ref_generated,
+    part3: hasEpisode,
+    part4: episode?.illustration_status !== "review",
+    part5: episode?.illustration_status !== "approved",
+    part6: episode?.illustration_status !== "complete",
+  });
 
   // ── Render ─────────────────────────────────────────────────────────────
 

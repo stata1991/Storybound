@@ -64,6 +64,8 @@ interface HarvestFullDbRow {
   status: string;
   milestone_description: string | null;
   current_interests: string[];
+  face_ref_generated?: boolean;
+  face_ref_path?: string | null;
 }
 
 interface ChildFullDbRow {
@@ -447,7 +449,7 @@ export async function startFaceTraining(
 
   const { data: harvestRaw } = await supa
     .from("harvests")
-    .select("id, child_id, season, photo_paths, status")
+    .select("id, child_id, season, photo_paths, status, face_ref_generated, face_ref_path")
     .eq("id", harvestId)
     .single();
 
@@ -469,7 +471,7 @@ export async function startFaceTraining(
   if (!childRaw) return { error: "Child not found." };
   const child = childRaw as unknown as ChildFullDbRow;
 
-  if (child.character_photos_deleted_at) {
+  if (child.character_photos_deleted_at && !harvest.face_ref_generated) {
     return { error: "Character photos already deleted. Use skip-LoRA path instead." };
   }
 
@@ -616,6 +618,7 @@ export async function completeIllustrationGeneration(
 
   let coverPrompt: string | undefined;
   let characterDescription = "";
+  let hairDescription = "";
 
   const { data: bibleRaw } = await supa
     .from("story_bibles")
@@ -638,7 +641,7 @@ export async function completeIllustrationGeneration(
       | undefined;
     const traits = hero?.personality_traits as string[] | undefined;
 
-    const hairDescription = phys?.hair ?? "";
+    hairDescription = phys?.hair ?? "";
     const appearance = phys
       ? [phys.hair, phys.eyes, phys.skin_tone, phys.signature_look]
           .filter(Boolean)
@@ -691,10 +694,6 @@ export async function completeIllustrationGeneration(
       }
     }
   }
-
-  const hairDescription = characterDescription
-    ? characterDescription.split(",")[0]?.trim() ?? ""
-    : "";
 
   const modalSharedParams = {
     age: childAge,
@@ -834,7 +833,7 @@ export async function triggerIllustrationPipeline(
   const { data: harvestRaw } = await supa
     .from("harvests")
     .select(
-      "id, child_id, season, photo_paths, status, milestone_description, current_interests"
+      "id, child_id, season, photo_paths, status, milestone_description, current_interests, face_ref_generated, face_ref_path"
     )
     .eq("id", harvestId)
     .single();
@@ -871,13 +870,28 @@ export async function triggerIllustrationPipeline(
     if (illStatus === "review" || illStatus === "approved" || illStatus === "complete") {
       return { error: "Illustrations already complete for this episode." };
     }
-    forceSkipLora = true;
+    // Only skip LoRA if training never succeeded (no face ref available)
+    // If face_ref_generated = true, training succeeded and LoRA weights exist — use them
+    if (harvest.face_ref_generated && harvest.face_ref_path) {
+      forceSkipLora = false;
+    } else {
+      forceSkipLora = true;
+    }
   }
+
+  console.log("skip_lora decision:", {
+    skipLora,
+    forceSkipLora,
+    characterPhotosDeletedAt: child.character_photos_deleted_at,
+    faceRefGenerated: harvest.face_ref_generated,
+    faceRefPath: harvest.face_ref_path,
+  });
 
   // ── Build cover prompt + character description ─────────────────────────────
 
   let coverPrompt: string | undefined;
   let characterDescription = "";
+  let hairDescription = "";
 
   const { data: bibleRaw } = await supa
     .from("story_bibles")
@@ -900,6 +914,7 @@ export async function triggerIllustrationPipeline(
       | undefined;
     const traits = hero?.personality_traits as string[] | undefined;
 
+    hairDescription = phys?.hair ?? "";
     const appearance = phys
       ? [phys.hair, phys.eyes, phys.skin_tone, phys.signature_look]
           .filter(Boolean)
@@ -916,6 +931,7 @@ export async function triggerIllustrationPipeline(
 
     console.log("[triggerPipeline] Story bible physical_description:", JSON.stringify(phys));
     console.log("[triggerPipeline] characterDescription:", characterDescription);
+    console.log("[triggerPipeline] hairDescription:", hairDescription);
   }
 
   // ── Build prompts ──────────────────────────────────────────────────────────
@@ -955,10 +971,6 @@ export async function triggerIllustrationPipeline(
     }
   }
 
-  const hairDescription = characterDescription
-    ? characterDescription.split(",")[0]?.trim() ?? ""
-    : "";
-
   const modalSharedParams = {
     age: childAge,
     pronouns: child.pronouns ?? "they_them",
@@ -995,6 +1007,67 @@ export async function triggerIllustrationPipeline(
       });
       return { error: `Illustration generation failed: ${msg}` };
     }
+  } else if (harvest.face_ref_generated && harvest.face_ref_path) {
+    // Existing LoRA — skip training, generate directly
+    const existingModelId = harvest.face_ref_path;
+    console.log("Skipping training — using existing LoRA:", existingModelId);
+
+    logEvent({
+      event_type: "illustration.pipeline",
+      status: "started",
+      harvest_id: harvestId,
+      message: `Using existing LoRA (face_model_id: ${existingModelId})`,
+    });
+
+    try {
+      genResult = await callModal<ModalGenerateResponse>(
+        process.env.MODAL_GENERATE_URL!,
+        {
+          face_model_id: existingModelId,
+          prompts,
+          ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
+          ...modalSharedParams,
+        }
+      );
+      console.log("Modal generate_illustrations returned:", {
+        illustrationCount: genResult?.illustrations?.length,
+        faceModelId: existingModelId,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      logEvent({
+        event_type: "illustration.pipeline",
+        status: "error",
+        harvest_id: harvestId,
+        message: `Illustration generation (existing LoRA) failed: ${msg}`,
+      });
+      return { error: `Illustration generation failed: ${msg}` };
+    }
+
+    // Delete LoRA weights after successful generation
+    try {
+      await callModal(process.env.MODAL_DELETE_URL!, {
+        face_model_id: existingModelId,
+      });
+      logEvent({
+        event_type: "face_model_deleted",
+        harvest_id: harvestId,
+        message: `LoRA weights deleted (face_model_id: ${existingModelId})`,
+      });
+    } catch (err) {
+      console.error("Failed to delete face model:", err);
+      logEvent({
+        event_type: "face_model_delete_failed",
+        harvest_id: harvestId,
+        message: `Failed to delete LoRA (face_model_id: ${existingModelId})`,
+      });
+    }
+
+    // Clear face ref from harvest
+    await supa
+      .from("harvests")
+      .update({ face_ref_generated: false, face_ref_path: null })
+      .eq("id", harvestId);
   } else {
     // Normal path: train + generate synchronously
     const trainResult = await startFaceTraining(harvestId);
@@ -1044,61 +1117,70 @@ export async function triggerIllustrationPipeline(
 
   // ── Upload illustrations to Supabase Storage ───────────────────────────────
 
-  await supa.storage.createBucket("illustrations", {
-    public: false,
-    allowedMimeTypes: ["image/png"],
-  });
+  try {
+    console.log("Modal raw result:", JSON.stringify(genResult).slice(0, 500));
 
-  const episodeId = episode?.id ?? "no-episode";
-  const illustrationPaths: string[] = [];
+    await supa.storage.createBucket("illustrations", {
+      public: false,
+      allowedMimeTypes: ["image/png"],
+    });
 
-  for (const ill of genResult.illustrations) {
-    const pngBuffer = Buffer.from(ill.data, "base64");
-    const storagePath = `${child.id}/${episodeId}/${ill.index}.png`;
+    const episodeId = episode?.id ?? "no-episode";
+    const illustrationPaths: string[] = [];
 
-    const { error: upErr } = await supa.storage
-      .from("illustrations")
-      .upload(storagePath, pngBuffer, {
-        contentType: "image/png",
-        upsert: true,
-      });
+    for (const ill of genResult.illustrations) {
+      const pngBuffer = Buffer.from(ill.data, "base64");
+      const storagePath = `${child.id}/${episodeId}/${ill.index}.png`;
 
-    if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
-    illustrationPaths.push(storagePath);
-  }
+      const { error: upErr } = await supa.storage
+        .from("illustrations")
+        .upload(storagePath, pngBuffer, {
+          contentType: "image/png",
+          upsert: true,
+        });
 
-  if (episode) {
-    await supa
-      .from("episodes")
-      .update({
-        illustration_paths: illustrationPaths,
-        illustration_status: "review",
-      })
-      .eq("id", episode.id);
-  }
-
-  if (harvest.photo_paths && harvest.photo_paths.length > 0) {
-    try {
-      await supa.storage.from("harvest-photos").remove(harvest.photo_paths);
-      await supa
-        .from("harvests")
-        .update({ photos_deleted_at: new Date().toISOString() })
-        .eq("id", harvestId);
-    } catch (cleanupErr) {
-      console.error("Harvest photo cleanup failed (non-blocking):", cleanupErr);
+      if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
+      illustrationPaths.push(storagePath);
     }
+
+    if (episode) {
+      await supa
+        .from("episodes")
+        .update({
+          illustration_paths: illustrationPaths,
+          illustration_status: "review",
+        })
+        .eq("id", episode.id);
+    }
+
+    if (harvest.photo_paths && harvest.photo_paths.length > 0) {
+      try {
+        await supa.storage.from("harvest-photos").remove(harvest.photo_paths);
+        await supa
+          .from("harvests")
+          .update({ photos_deleted_at: new Date().toISOString() })
+          .eq("id", harvestId);
+      } catch (cleanupErr) {
+        console.error("Harvest photo cleanup failed (non-blocking):", cleanupErr);
+      }
+    }
+
+    logEvent({
+      event_type: "illustration.pipeline",
+      status: "success",
+      harvest_id: harvestId,
+      child_id: childId,
+      message: "Illustration pipeline completed",
+      metadata: { illustration_count: illustrationPaths.length },
+    });
+
+    return { success: true };
+  } catch (e) {
+    console.error("triggerIllustrationPipeline post-generation error:", e);
+    console.error("genResult keys:", Object.keys(genResult ?? {}));
+    console.error("genResult.illustrations type:", typeof (genResult as Record<string, unknown>)?.illustrations);
+    throw e;
   }
-
-  logEvent({
-    event_type: "illustration.pipeline",
-    status: "success",
-    harvest_id: harvestId,
-    child_id: childId,
-    message: "Illustration pipeline completed",
-    metadata: { illustration_count: illustrationPaths.length },
-  });
-
-  return { success: true };
 }
 
 /* ─── Book generation ─────────────────────────────────────────────────────── */
@@ -1271,7 +1353,7 @@ export async function generateBook(
               Great news! ${childName}\u2019s personalized storybook is ready for you to preview.
             </p>
             <p style="margin:0 0 24px 0;">
-              <a href="https://storyboundapp.com/dashboard" style="display:inline-block;padding:14px 28px;background-color:#C8963E;color:#ffffff;font-weight:600;text-decoration:none;border-radius:8px;font-size:15px;">
+              <a href="${process.env.NEXT_PUBLIC_APP_URL}/dashboard" style="display:inline-block;padding:14px 28px;background-color:#C8963E;color:#ffffff;font-weight:600;text-decoration:none;border-radius:8px;font-size:15px;">
                 Preview Your Book \u2192
               </a>
             </p>
@@ -1383,7 +1465,7 @@ export async function resetToBookReady(
         parentEmail,
       });
 
-      sendEmail({ to: parentEmail, subject: email.subject, html: email.html });
+      await sendEmail({ to: parentEmail, subject: email.subject, html: email.html }).catch((err) => console.error('[email] book ready to preview:', err));
     }
   }
 
@@ -1587,7 +1669,8 @@ async function callClaude(
 
 function buildStoryBiblePrompt(
   child: ChildStoryDbRow,
-  age: number
+  age: number,
+  harvest: { season: string; milestone_description: string | null; current_interests: string[]; notable_notes: string | null; character_archetype: string | null }
 ): { system: string; user: string } {
   return {
     system: `You are a children's book author specializing in episodic adventure series for ages 3-10.
@@ -1619,6 +1702,14 @@ Child profile:
 - Fears to avoid: ${child.avoidances.length > 0 ? child.avoidances.join(", ") : "none specified"}
 - Reading level: ${child.reading_level.replace(/_/g, " ")}
 - Family context: ${child.family_notes ?? "Not provided"}${child.default_archetype ? `\n- Character inspiration: ${child.default_archetype} (reimagine as an original character — no trademarked names or likenesses)` : ""}
+
+This season's context (the emotional core of this book):
+- Season: ${harvest.season}
+- Milestone: ${harvest.milestone_description ?? "Not provided"}
+- Current interests (updated): ${harvest.current_interests.length > 0 ? harvest.current_interests.join(", ") : "Same as profile"}
+- Notes: ${harvest.notable_notes ?? "Nothing noted"}${harvest.character_archetype ? `\n- Character archetype: ${harvest.character_archetype} (reimagine as original — no trademarked names or likenesses)` : ""}
+
+The seasonal arc and episode outlines MUST grow from this milestone. It is the emotional backbone — the story's central challenge or triumph should echo this real moment in the child's life.
 
 Output this exact JSON structure:
 {
@@ -2289,7 +2380,7 @@ export async function generateStory(
     storyBible = reconstructStoryBible(bible);
   } else {
     // No story bible — generate via Pass 1
-    const biblePrompt = buildStoryBiblePrompt(child, age);
+    const biblePrompt = buildStoryBiblePrompt(child, age, harvest);
 
     let bibleResult: Record<string, unknown>;
     try {

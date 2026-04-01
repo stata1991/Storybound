@@ -63,7 +63,11 @@ pipeline_image = (
         "opencv-python-headless>=4.8.0",
         "httpx>=0.27.0",
         "insightface",
-        "onnxruntime-gpu",
+        "onnxruntime",
+        "ip-adapter",
+        "einops",
+        "supabase",
+        "storage3",
     )
     .run_commands(
         # Pre-download SDXL base model into the image so cold starts
@@ -103,32 +107,31 @@ pipeline_image = (
         "filename='inswapper_128_fp16.onnx', "
         f"local_dir='{MODEL_CACHE_PATH}'"
         ")\"",
+        # Pre-download IP-Adapter FaceID weights
+        "python -c \""
+        "from huggingface_hub import hf_hub_download; "
+        "hf_hub_download("
+        "repo_id='h94/IP-Adapter-FaceID', "
+        "filename='ip-adapter-faceid_sdxl.bin', "
+        f"local_dir='{MODEL_CACHE_PATH}'"
+        ")\"",
     )
 )
 
 # ─── Style suffix ────────────────────────────────────────────────────────────
 
 STYLE_SUFFIX = (
-    ", gouache illustration, children's book art, "
-    "soft painterly style, warm colors, "
-    "consistent character design, "
-    "same art style as cover illustration, "
-    "Studio Ghibli inspired, "
-    "detailed face, close-up character"
+    ", gouache illustration, children's book, "
+    "soft colors, Studio Ghibli"
 )
 
 NEGATIVE_PROMPT = (
-    "text, title, logo, watermark, signature, words, letters, "
-    "blurry, deformed, extra limbs, cropped, "
-    "teenager, adult, woman, man, older person, "
-    "mature face, adult proportions, elongated face, "
-    "older child, school age child, "
-    "5 year old, 6 year old, 7 year old, 8 year old, "
-    "cartoon, anime, 3D render, photorealistic, "
-    "different art style, inconsistent style, "
-    "chibi, flat design, vector art, "
-    "character from behind, faceless, "
-    "full body shot with tiny character, "
+    "oil painting, photorealistic, photograph, realistic rendering, "
+    "back of head, facing away, looking away, turned away, "
+    "black and white, monochrome, sketch, line art, coloring book, "
+    "text, watermark, signature, "
+    "blurry, deformed, extra limbs, "
+    "adult, teenager, older person, "
     "low quality face, blurry face"
 )
 
@@ -136,11 +139,12 @@ NEGATIVE_PROMPT = (
 # ─── Age prefix (Fix 1) ─────────────────────────────────────────────────────
 
 
-def get_age_prefix(age: int, pronouns: str = "they_them") -> str:
+def get_age_prefix(age: int, pronouns: str = "they_them", lora_active: bool = False) -> str:
     """
-    Short age-anchoring prefix for SDXL prompts (~4 tokens).
-    Must come FIRST — before LoRA token and scene description.
-    Kept minimal to stay within CLIP 77-token budget.
+    Short age-anchoring prefix for SDXL prompts.
+    When LoRA is active, keep it minimal — just age + gender word.
+    The LoRA already encodes the child's real facial structure.
+    When skip-lora, add facial descriptors to guide the base model.
     """
     if "she" in pronouns.lower() or pronouns == "she_her":
         word = "girl"
@@ -151,14 +155,26 @@ def get_age_prefix(age: int, pronouns: str = "they_them") -> str:
 
     clamped = max(3, min(10, age))
 
-    if clamped <= 4:
-        return f"3-year-old toddler {word}, baby face, chubby cheeks, very young child"
-    elif clamped <= 6:
-        return f"5-year-old little {word}, round face, chubby cheeks, young child"
-    elif clamped <= 8:
-        return f"8-year-old {word}, young face, child proportions"
+    if lora_active:
+        # Minimal — LoRA handles facial structure
+        if clamped <= 4:
+            return f"3-year-old toddler {word}"
+        elif clamped <= 6:
+            return f"5-year-old young {word}"
+        elif clamped <= 8:
+            return f"8-year-old {word}"
+        else:
+            return f"10-year-old {word}"
     else:
-        return f"10-year-old preteen {word}, young face"
+        # Skip-lora — base model needs facial guidance
+        if clamped <= 4:
+            return f"3-year-old toddler {word}, baby face, chubby cheeks, very young child"
+        elif clamped <= 6:
+            return f"5-year-old little {word}, round face, chubby cheeks, young child"
+        elif clamped <= 8:
+            return f"8-year-old {word}, young face, child proportions"
+        else:
+            return f"10-year-old preteen {word}, young face"
 
 
 def truncate_scene_description(prompt: str, max_words: int = 20) -> str:
@@ -166,6 +182,15 @@ def truncate_scene_description(prompt: str, max_words: int = 20) -> str:
     import re
     # Remove [FACE REF: ...] tags — SDXL can't use text as image references
     prompt = re.sub(r"\[FACE REF[^\]]*\]", "", prompt).strip()
+    # Remove child name references (e.g. "Samarth with wavy hair...")
+    # Replace "Name with/and [physical desc]" with just the action
+    prompt = re.sub(r'\b[A-Z][a-z]+\s+(with|and)\s+[^,\.]+[,\.]?', '', prompt)
+    # Remove any remaining standalone proper names at sentence start
+    prompt = re.sub(r'^[A-Z][a-z]+\s+', '', prompt.strip())
+    # Replace directional movement phrases that cause rear-facing composition
+    prompt = re.sub(r'\b(walking toward|running toward|moving toward|heading toward)\b',
+                    'standing near', prompt, flags=re.IGNORECASE)
+    prompt = prompt.strip().lstrip(',').strip()
     # Take first sentence
     first_sentence = prompt.split(".")[0].strip()
     words = first_sentence.split()
@@ -216,17 +241,18 @@ def apply_face_swap(
     from insightface.app import FaceAnalysis
     from insightface.model_zoo import get_model
 
-    face_app = FaceAnalysis(
+    # Source face detector — high res, real photo
+    source_app = FaceAnalysis(
         name="buffalo_l",
         providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
     )
-    face_app.prepare(ctx_id=0, det_size=(640, 640))
+    source_app.prepare(ctx_id=0, det_size=(640, 640))
 
     swapper = get_model(model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
 
     # Get source face
     source_img = cv2.imread(source_face_path)
-    source_faces = face_app.get(source_img)
+    source_faces = source_app.get(source_img)
     if not source_faces:
         print("WARNING: No face in source image, skipping swap")
         return target_image
@@ -234,12 +260,23 @@ def apply_face_swap(
         source_faces,
         key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
     )
+    print(f"Source face detected: bbox size {(source_face.bbox[2]-source_face.bbox[0]):.0f}x{(source_face.bbox[3]-source_face.bbox[1]):.0f}")
 
-    # Get target face(s)
+    # Convert target illustration to BGR for InsightFace
     target_np = cv2.cvtColor(np.array(target_image), cv2.COLOR_RGB2BGR)
-    target_faces = face_app.get(target_np)
+
+    target_app = FaceAnalysis(
+        name="buffalo_l",
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    # Use strict threshold — illustrated faces should pass this or not be swapped.
+    # Do NOT lower this. False positives at low thresholds destroy illustrations.
+    target_app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.55)
+    target_faces = target_app.get(target_np)
+    print(f"Target face detection (640, thresh=0.55): found {len(target_faces)} faces in illustration")
+
     if not target_faces:
-        print("WARNING: No face in target illustration, skipping swap")
+        print("No face detected in target illustration — skipping swap (illustration preserved as-is)")
         return target_image
 
     # Swap the largest face in the target
@@ -247,6 +284,18 @@ def apply_face_swap(
         target_faces,
         key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
     )
+    print(f"Target face selected: bbox size {(target_face.bbox[2]-target_face.bbox[0]):.0f}x{(target_face.bbox[3]-target_face.bbox[1]):.0f}")
+
+    # Quality gate: skip swap if detected face bbox is implausibly small
+    # (likely a false positive artifact, not a real illustrated face)
+    face_w = target_face.bbox[2] - target_face.bbox[0]
+    face_h = target_face.bbox[3] - target_face.bbox[1]
+    img_w, img_h = target_image.size
+    face_area_pct = (face_w * face_h) / (img_w * img_h)
+    if face_area_pct < 0.08:  # face must be at least 8% of image area
+        print(f"WARNING: Detected face too small ({face_area_pct:.3%} of image) — likely false positive, skipping swap")
+        return target_image
+    print(f"Face area: {face_area_pct:.1%} of image — proceeding with swap")
 
     result = swapper.get(target_np, target_face, source_face, paste_back=True)
     result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
@@ -291,13 +340,24 @@ def get_dominant_color_mood(photos_b64: list) -> str:
 # ─── Cover helpers ────────────────────────────────────────────────────────────
 
 
-def build_cover_prompt(character_sheet: str = "") -> str:
-    """Build a dedicated cover prompt using the character identity token."""
-    base = (
-        "A full-body portrait of sks child standing in a magical storybook "
-        "landscape, looking at the viewer with a warm smile, golden hour lighting"
+def build_cover_prompt(age_prefix: str = "", hair: str = "") -> str:
+    """Build a dedicated cover prompt — self-contained, under 60 words."""
+    parts = []
+    if age_prefix:
+        parts.append(age_prefix)
+    parts.append("sks child")
+    if hair:
+        # Truncate hair to first 6 words max
+        hair_words = hair.split()
+        parts.append(" ".join(hair_words[:6]))
+    parts.append("portrait, magical storybook world")
+    parts.append("looking at viewer, warm smile")
+    parts.append(
+        "gouache illustration, children's picture book art, "
+        "soft warm painterly style, Studio Ghibli inspired, "
+        "NOT photorealistic, NOT oil painting"
     )
-    return base + STYLE_SUFFIX
+    return ", ".join(parts)
 
 
 def upscale_with_realesrgan(image: "Image.Image") -> "Image.Image":
@@ -550,10 +610,10 @@ async def train_face_model(req: Request):
             img = img.crop((left, top, left + side, top + side))
             print(f"Photo {i}: no face detected, using original")
 
-        img = img.resize((1024, 1024), Image.LANCZOS)
+        img = img.resize((512, 512), Image.LANCZOS)
         pil_images.append(img)
 
-    print(f"Preprocessed {n_cropped}/{len(photos_b64)} photos with face crops (1024x1024)")
+    print(f"Preprocessed {n_cropped}/{len(photos_b64)} photos with face crops (512x512)")
 
     # ── Extract face embedding via InsightFace (for IP-Adapter at gen time) ─
 
@@ -567,6 +627,8 @@ async def train_face_model(req: Request):
 
     best_face_idx = -1
     best_face_size = 0
+    import torch as _torch
+    face_embeddings = []
 
     for idx, img in enumerate(pil_images):
         img_np = np.array(img)
@@ -580,12 +642,21 @@ async def train_face_model(req: Request):
             if face_size > best_face_size:
                 best_face_size = face_size
                 best_face_idx = idx
+            face_embeddings.append(_torch.from_numpy(face.normed_embedding).unsqueeze(0))
             print(f"Photo {idx}: InsightFace face detected (face_size={face_size:.0f})")
 
     if best_face_idx >= 0:
         print(f"Best face crop: photo {best_face_idx} (face_size={best_face_size:.0f})")
     else:
         print("WARNING: No face detected in any photo by InsightFace")
+
+    # Average face embeddings for IP-Adapter FaceID conditioning at generation
+    if face_embeddings:
+        avg_embedding = _torch.cat(face_embeddings, dim=0).mean(dim=0, keepdim=True)
+        print(f"Face embedding extracted: averaged across {len(face_embeddings)} photos, shape={avg_embedding.shape}")
+    else:
+        avg_embedding = None
+        print("WARNING: No face embeddings extracted — IP-Adapter will be skipped at generation")
 
     # Free InsightFace from GPU
     del face_app
@@ -708,19 +779,19 @@ async def train_face_model(req: Request):
 
     # ── Training loop ───────────────────────────────────────────────────────
 
-    optimizer = torch.optim.AdamW(unet.parameters(), lr=5e-5, weight_decay=1e-2)
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=1e-5, weight_decay=1e-2)
 
     lora_params = [p for p in unet.parameters() if p.requires_grad]
     print(f"Trainable LoRA params: {len(lora_params)}")
     print(f"Total param tensors: {sum(1 for _ in unet.parameters())}")
-    print(f"Training config: steps=1500, rank=32, lr=5e-5, resolution=1024")
+    print(f"Training config: steps=1500, rank=32, lr=1e-5, resolution=512")
 
     num_steps = 1500
     num_images = len(latents_list)
 
     # SDXL additional conditioning: time_ids
     add_time_ids = torch.tensor(
-        [[1024.0, 1024.0, 0.0, 0.0, 1024.0, 1024.0]],
+        [[512.0, 512.0, 0.0, 0.0, 512.0, 512.0]],
         device="cuda",
         dtype=torch.bfloat16,
     )
@@ -768,6 +839,10 @@ async def train_face_model(req: Request):
 
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            [p for p in unet.parameters() if p.requires_grad],
+            max_norm=1.0,
+        )
         optimizer.step()
 
     # ── Save LoRA weights to Volume (not source photos) ─────────────────────
@@ -787,7 +862,6 @@ async def train_face_model(req: Request):
                     "Aborting to prevent corrupted checkpoint."
                 )
 
-    # Save only the LoRA adapter weights
     unet.save_pretrained(str(save_dir))
 
     # Save best face crop for face swap stage during generation
@@ -797,15 +871,64 @@ async def train_face_model(req: Request):
         del _best_face_crop_bytes
         print(f"Best face crop saved: {face_crop_path}")
 
+    # Save averaged face embedding for IP-Adapter FaceID conditioning
+    if avg_embedding is not None:
+        embedding_path = save_dir / "face_embedding.pt"
+        _torch.save(avg_embedding, str(embedding_path))
+        print(f"Face embedding saved: {embedding_path}")
+
     await lora_volume.commit.aio()
+
+    # ── Upload LoRA to Supabase Storage (primary persistence) ────────────
+    try:
+        from supabase import create_client as _create_sb
+
+        _sb_url = os.environ.get("SUPABASE_URL")
+        _sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        _sb = _create_sb(_sb_url, _sb_key)
+
+        for filename in ["adapter_model.safetensors", "adapter_config.json", "README.md"]:
+            filepath = save_dir / filename
+            if filepath.exists():
+                with open(filepath, "rb") as f:
+                    _sb.storage.from_("lora-weights").upload(
+                        f"{face_model_id}/{filename}",
+                        f.read(),
+                        {"content-type": "application/octet-stream", "upsert": "true"},
+                    )
+
+        face_crop_sb = save_dir / "best_face_crop.jpg"
+        if face_crop_sb.exists():
+            with open(face_crop_sb, "rb") as f:
+                _sb.storage.from_("lora-weights").upload(
+                    f"{face_model_id}/best_face_crop.jpg",
+                    f.read(),
+                    {"content-type": "image/jpeg", "upsert": "true"},
+                )
+
+        embedding_path_sb = save_dir / "face_embedding.pt"
+        if embedding_path_sb.exists():
+            with open(embedding_path_sb, "rb") as f:
+                _sb.storage.from_("lora-weights").upload(
+                    f"{face_model_id}/face_embedding.pt",
+                    f.read(),
+                    {"content-type": "application/octet-stream", "upsert": "true"},
+                )
+
+        print(f"LoRA uploaded to Supabase Storage: lora-weights/{face_model_id}/")
+    except Exception as e:
+        print(f"WARNING: Supabase upload failed (volume backup still exists): {e}")
 
     # Weight magnitude check — detect unstable LoRA weights
     lora_weights = [p for p in unet.parameters() if p.requires_grad]
     if lora_weights:
         max_val = max(p.abs().max().item() for p in lora_weights)
         print(f"LoRA weight max absolute value: {max_val:.4f}")
-        if max_val > 2.0:
-            print(f"WARNING: LoRA weights are unstable (max={max_val:.4f} > 2.0)")
+        if max_val > 1.5:
+            raise RuntimeError(
+                f"LoRA weights exploded (max={max_val:.4f} > 1.5). "
+                "Aborting — lr still too high or grad clip not working."
+            )
     else:
         print("WARNING: No trainable LoRA parameters found")
 
@@ -912,6 +1035,11 @@ async def generate_illustrations(req: Request):
     character_description = body.get("character_description", "")
     hair_description = body.get("hair_description", "")
     memory_photos_b64 = body.get("memory_photos_b64", [])
+    episode_seed = body.get("episode_seed", None)
+    if episode_seed is None:
+        import hashlib
+        episode_seed = int(hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16)
+        print(f"No episode_seed provided — derived from face_model_id: {episode_seed}")
 
     if not skip_lora and not face_model_id:
         web_error({"error": "face_model_id required (or set skip_lora: true)"})
@@ -925,12 +1053,19 @@ async def generate_illustrations(req: Request):
 
     # ── Build prompt components ─────────────────────────────────────────────
 
-    age_prefix = get_age_prefix(child_age, child_pronouns)
+    lora_active = not skip_lora and bool(face_model_id)
+    age_prefix = get_age_prefix(child_age, child_pronouns, lora_active=lora_active)
     core_appearance = extract_core_appearance(character_description)
     lora_token = "sks child"
 
-    # Use explicit hair_description if provided, otherwise fall back to core_appearance
-    if hair_description:
+    # When LoRA is active, it already encodes the child's real appearance from photos.
+    # Story bible hair/appearance descriptions are fabricated (no photo access) and fight the LoRA.
+    # Only use them as fallback for skip-lora mode.
+    if not skip_lora and face_model_id:
+        print(f"LoRA active — ignoring story bible hair_description ({hair_description!r}) and core_appearance ({core_appearance!r})")
+        hair_description = ""
+        core_appearance = ""
+    elif hair_description:
         print(f"Hair description (from story bible): {hair_description}")
         print(f"Core appearance (extracted): {core_appearance}")
     else:
@@ -950,22 +1085,42 @@ async def generate_illustrations(req: Request):
     if skip_lora:
         print("Skipping LoRA — running with base model only (no face conditioning)")
     else:
-        lora_dir = Path(LORA_VOLUME_PATH) / face_model_id
-        print(f"Loading LoRA for face_model_id: {face_model_id}")
-        print(f"Looking for LoRA at: {lora_dir}")
+        # Download LoRA from Supabase Storage
+        import tempfile
+        from supabase import create_client as _create_sb_gen
 
-        if not lora_dir.exists():
-            print(f"LoRA not found — listing volume root:")
-            root_contents = (
-                os.listdir(LORA_VOLUME_PATH)
-                if os.path.exists(LORA_VOLUME_PATH)
-                else "volume not mounted"
-            )
-            print(f"Volume contents: {root_contents}")
-            print("Proceeding WITHOUT face conditioning")
+        _sb_url = os.environ.get("SUPABASE_URL")
+        _sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        _sb = _create_sb_gen(_sb_url, _sb_key)
+
+        lora_dir = Path(tempfile.mkdtemp()) / face_model_id
+        lora_dir.mkdir(parents=True, exist_ok=True)
+
+        files_to_download = [
+            "adapter_model.safetensors",
+            "adapter_config.json",
+            "README.md",
+            "best_face_crop.jpg",
+            "face_embedding.pt",
+        ]
+
+        downloaded = []
+        for filename in files_to_download:
+            try:
+                data = _sb.storage.from_("lora-weights").download(
+                    f"{face_model_id}/{filename}"
+                )
+                (lora_dir / filename).write_bytes(data)
+                downloaded.append(filename)
+            except Exception as e:
+                print(f"Could not download {filename}: {e}")
+
+        if "adapter_model.safetensors" not in downloaded:
+            print(f"ERROR: LoRA adapter not found in Supabase for {face_model_id}")
+            print("Proceeding without face conditioning")
+            lora_dir = None
         else:
-            lora_files = os.listdir(str(lora_dir))
-            print(f"Found LoRA files: {lora_files}")
+            print(f"LoRA downloaded from Supabase: {downloaded}")
 
     from diffusers import AutoencoderKL
 
@@ -1004,61 +1159,83 @@ async def generate_illustrations(req: Request):
                 save_file(remapped, remapped_path)
                 pipe.load_lora_weights(tmp_dir, weight_name="adapter_model.safetensors")
 
-            pipe.fuse_lora(lora_scale=0.6)
+            pipe.fuse_lora(lora_scale=0.4)
             lora_loaded = True
             print("LoRA loaded and fused successfully")
         except Exception as e:
             print(f"ERROR loading LoRA: {e}")
             print("Proceeding without face conditioning")
 
-    # ── Resolve face swap paths ────────────────────────────────────────────
+    # Load face embedding for IP-Adapter FaceID conditioning
+    face_embedding = None
+    if not skip_lora and lora_dir and lora_dir.exists():
+        embedding_path = lora_dir / "face_embedding.pt"
+        if embedding_path.exists():
+            import torch as _torch
+            face_embedding = _torch.load(str(embedding_path), map_location="cuda")
+            print(f"Face embedding loaded: shape={face_embedding.shape}")
+        else:
+            print("No face_embedding.pt found — IP-Adapter conditioning disabled")
 
     import torch
 
-    source_face_path = None
-    swap_model_path = f"{MODEL_CACHE_PATH}/inswapper_128_fp16.onnx"
+    ip_adapter_embeds = None
+    ip_adapter_path = f"{MODEL_CACHE_PATH}/ip-adapter-faceid_sdxl.bin"
 
-    if not skip_lora and face_model_id:
-        candidate = str(Path(LORA_VOLUME_PATH) / face_model_id / "best_face_crop.jpg")
-        if os.path.exists(candidate) and os.path.exists(swap_model_path):
-            source_face_path = candidate
-            print(f"Face swap enabled: source={candidate}")
-        else:
-            print(f"Face swap disabled: crop={os.path.exists(candidate)}, model={os.path.exists(swap_model_path)}")
+    if face_embedding is not None and os.path.exists(ip_adapter_path):
+        try:
+            pipe.load_ip_adapter(
+                "h94/IP-Adapter-FaceID",
+                subfolder=None,
+                weight_name="ip-adapter-faceid_sdxl.bin",
+                image_encoder_folder=None,
+            )
+            pipe.set_ip_adapter_scale(0.2)
+            ip_adapter_embeds = face_embedding.to("cuda", dtype=torch.float16)
+            # SDXL expects ip_adapter_image_embeds as list of 3D tensors [batch, num_tokens, dim]
+            # face_embedding is [1, 512] — unsqueeze to [1, 1, 512]
+            ip_adapter_embeds = ip_adapter_embeds.unsqueeze(1)
+            # SDXL CFG requires both negative and positive ip_adapter embeds
+            # Stack zeros (negative/unconditional) with face embedding (positive)
+            negative_embeds = torch.zeros_like(ip_adapter_embeds)
+            ip_adapter_embeds = torch.cat([negative_embeds, ip_adapter_embeds], dim=0)
+            print(f"IP-Adapter embeds shape (neg+pos): {ip_adapter_embeds.shape}")
+            # Expected: torch.Size([2, 1, 512])
+            print("IP-Adapter loaded via pipe.load_ip_adapter, scale=0.2")
+        except Exception as e:
+            print(f"WARNING: IP-Adapter load failed: {e}")
+            ip_adapter_embeds = None
+    else:
+        print("IP-Adapter skipped: no embedding or weights not found")
 
     # ── Build cover prompt (budget-aware) ────────────────────────────────
 
     illustrations = []
 
-    if not cover_prompt_text:
-        cover_prompt_text = build_cover_prompt()
-
-    # Assemble cover prompt within CLIP token budget
-    cover_scene_desc = truncate_scene_description(cover_prompt_text)
-    cover_parts = [age_prefix, lora_token]
-    if hair_description:
-        cover_parts.append(hair_description)
-    elif core_appearance:
-        cover_parts.append(core_appearance)
-    cover_parts.append(cover_scene_desc)
-    cover_parts.append(STYLE_SUFFIX.lstrip(", "))
-    if color_mood:
-        cover_parts.append(color_mood)
-    styled_cover = ", ".join(cover_parts)
+    styled_cover = build_cover_prompt(
+        age_prefix=age_prefix,
+        hair=hair_description if hair_description else core_appearance,
+    )
 
     word_count = len(styled_cover.split())
-    if word_count > 60:
+    if word_count > 50:
         print(f"WARNING: Cover prompt too long: {word_count} words")
     print(f"Cover prompt ({word_count} words): {styled_cover}")
 
+    generator = torch.Generator(device="cuda").manual_seed(episode_seed) if episode_seed is not None else None
+
+    cover_negative = NEGATIVE_PROMPT + ", photograph, photo, realistic, photorealistic, blurry, out of focus"
+
     result = pipe(
         prompt=styled_cover,
-        negative_prompt=NEGATIVE_PROMPT,
+        negative_prompt=cover_negative,
         width=1024,
         height=1024,
         num_inference_steps=40,
         guidance_scale=8.5,
         output_type="latent",
+        generator=generator,
+        ip_adapter_image_embeds=[ip_adapter_embeds] if ip_adapter_embeds is not None else None,
     )
 
     # Clamp NaNs from UNet before decode
@@ -1079,15 +1256,6 @@ async def generate_illustrations(req: Request):
     del pipe
     gc.collect()
     torch.cuda.empty_cache()
-
-    # Apply face swap to cover
-    if source_face_path:
-        print("Applying face swap to cover...")
-        try:
-            cover_image = apply_face_swap(source_face_path, cover_image, swap_model_path)
-            print("Cover face swap complete")
-        except Exception as e:
-            print(f"WARNING: Cover face swap failed: {e}")
 
     # Upscale cover 2x via Real-ESRGAN (~2048×2048)
     cover_image = upscale_with_realesrgan(cover_image)
@@ -1139,10 +1307,25 @@ async def generate_illustrations(req: Request):
                 save_file(remapped, remapped_path)
                 pipe.load_lora_weights(tmp_dir, weight_name="adapter_model.safetensors")
 
-            pipe.fuse_lora(lora_scale=0.6)
+            pipe.fuse_lora(lora_scale=0.4)
             print("LoRA reloaded for scene generation")
         except Exception as e:
             print(f"ERROR reloading LoRA for scenes: {e}")
+
+    # Re-load IP-Adapter for scene pipe
+    if ip_adapter_embeds is not None:
+        try:
+            pipe.load_ip_adapter(
+                "h94/IP-Adapter-FaceID",
+                subfolder=None,
+                weight_name="ip-adapter-faceid_sdxl.bin",
+                image_encoder_folder=None,
+            )
+            pipe.set_ip_adapter_scale(0.2)
+            print("IP-Adapter reloaded for scenes via pipe.load_ip_adapter, scale=0.2")
+        except Exception as e:
+            print(f"WARNING: IP-Adapter reload for scenes failed: {e}")
+            ip_adapter_embeds = None
 
     # ── Generate scene images (index 1+): 768×768 ───────────────────────
 
@@ -1153,8 +1336,7 @@ async def generate_illustrations(req: Request):
             parts.append(hair_description)
         elif core_appearance:
             parts.append(core_appearance)
-        parts.append("child prominently featured in foreground")
-        parts.append("face clearly visible")
+        parts.append("foreground, facing camera")
         parts.append(scene_desc)
         parts.append(STYLE_SUFFIX.lstrip(", "))
         if color_mood:
@@ -1162,7 +1344,7 @@ async def generate_illustrations(req: Request):
         styled_prompt = ", ".join(parts)
 
         word_count = len(styled_prompt.split())
-        if word_count > 60:
+        if word_count > 50:
             print(f"WARNING: Scene {i+1} prompt too long: {word_count} words")
         print(f"Scene {i+1} prompt ({word_count} words): {styled_prompt[:200]}")
 
@@ -1171,10 +1353,13 @@ async def generate_illustrations(req: Request):
             negative_prompt=NEGATIVE_PROMPT,
             width=768,
             height=768,
-            num_inference_steps=30,
+            num_inference_steps=40,
             guidance_scale=7.5,
             output_type="latent",
+            generator=generator,
+            ip_adapter_image_embeds=[ip_adapter_embeds] if ip_adapter_embeds is not None else None,
         )
+        print(f"Scene {i+1} generated" + (" with IP-Adapter (scale=0.3)" if ip_adapter_embeds is not None else ""))
 
         # Clamp NaNs from UNet before decode
         latents = result.images
@@ -1188,15 +1373,6 @@ async def generate_illustrations(req: Request):
         image = pipe.image_processor.postprocess(
             decoded, output_type="pil"
         )[0]
-
-        # Apply face swap to scene
-        if source_face_path:
-            print(f"Applying face swap to scene {i+1}...")
-            try:
-                image = apply_face_swap(source_face_path, image, swap_model_path)
-                print(f"Scene {i+1} face swap complete")
-            except Exception as e:
-                print(f"WARNING: Scene {i+1} face swap failed: {e}")
 
         buf = io.BytesIO()
         image.save(buf, format="PNG")
@@ -1250,21 +1426,43 @@ async def delete_face_model(req: Request):
     if not face_model_id:
         web_error({"error": "face_model_id required"})
 
-    lora_dir = Path(LORA_VOLUME_PATH) / face_model_id
+    # 1. Delete from Supabase Storage (primary store)
+    supabase_deleted = 0
+    try:
+        from supabase import create_client as _create_sb_del
+        _sb = _create_sb_del(
+            os.environ.get("SUPABASE_URL"),
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY"),
+        )
+        listed = _sb.storage.from_("lora-weights").list(face_model_id)
+        if listed:
+            paths = [f"{face_model_id}/{f['name']}" for f in listed]
+            _sb.storage.from_("lora-weights").remove(paths)
+            supabase_deleted = len(paths)
+            print(f"Supabase lora-weights: deleted {supabase_deleted} files for {face_model_id}")
+    except Exception as e:
+        print(f"WARNING: Supabase lora-weights cleanup failed (continuing): {e}")
 
-    if not lora_dir.exists():
+    # 2. Delete from Modal Volume (backup store)
+    lora_dir = Path(LORA_VOLUME_PATH) / face_model_id
+    volume_deleted = False
+    if lora_dir.exists():
+        shutil.rmtree(str(lora_dir))
+        await lora_volume.commit.aio()
+        volume_deleted = True
+
+    if not volume_deleted and supabase_deleted == 0:
         return {
             "deleted": False,
             "face_model_id": face_model_id,
             "note": "Not found — may have already been deleted",
         }
 
-    shutil.rmtree(str(lora_dir))
-    await lora_volume.commit.aio()
-
     return {
         "deleted": True,
         "face_model_id": face_model_id,
+        "supabase_files_deleted": supabase_deleted,
+        "volume_deleted": volume_deleted,
     }
 
 

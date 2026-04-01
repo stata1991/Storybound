@@ -322,7 +322,7 @@ export async function chooseDigitalOnly(
       season: harvest.season,
       harvestId,
     });
-    sendEmail({ to: parent.email, subject, html }).catch(() => {});
+    sendEmail({ to: parent.email, subject, html }).catch((err) => console.error('[email] digital book ready:', err));
   }
 
   return { success: true };

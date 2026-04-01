@@ -1,5 +1,4 @@
 import { createClient as createAdminClient } from "@supabase/supabase-js";
-import puppeteer from "puppeteer";
 import { generateBookHTML } from "./template";
 import type { BookParams } from "./template";
 
@@ -167,29 +166,29 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
 
   const html = generateBookHTML(bookParams);
 
-  // ── (f) Puppeteer PDF generation ───────────────────────────────────────
+  // ── (f) Render PDF via Modal ─────────────────────────────────────────
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  const pdfUrl = process.env.MODAL_PDF_URL;
+  if (!pdfUrl) throw new Error("MODAL_PDF_URL is not configured.");
+
+  const res = await fetch(pdfUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.MODAL_AUTH_TOKEN}`,
+    },
+    body: JSON.stringify({ html, episode_id: episodeId }),
+    signal: AbortSignal.timeout(120_000),
   });
 
-  try {
-    const page = await browser.newPage();
-
-    await page.setContent(html, { waitUntil: "networkidle0" });
-
-    const pdfBuffer = await page.pdf({
-      width: "8.5in",
-      height: "8.5in",
-      printBackground: true,
-      margin: { top: "0", right: "0", bottom: "0", left: "0" },
-    });
-
-    // ── (g) Return PDF as Buffer ───────────────────────────────────────
-
-    return Buffer.from(pdfBuffer);
-  } finally {
-    await browser.close();
+  if (!res.ok) {
+    const text = await res.text().catch(() => "No response body");
+    throw new Error(`Modal PDF returned ${res.status}: ${text}`);
   }
+
+  const result = await res.json();
+
+  // ── (g) Return PDF as Buffer ─────────────────────────────────────────
+
+  return Buffer.from(result.pdf_base64, "base64");
 }

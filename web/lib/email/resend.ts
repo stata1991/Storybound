@@ -22,7 +22,7 @@ export async function sendEmail(
   params: SendEmailParams
 ): Promise<SendEmailResult | SendEmailError> {
   const { data, error } = await resend.emails.send({
-    from: "Storybound <onboarding@resend.dev>",
+    from: `Storybound <${process.env.RESEND_FROM_EMAIL ?? 'onboarding@resend.dev'}>`,
     to: params.to,
     subject: params.subject,
     html: params.html,

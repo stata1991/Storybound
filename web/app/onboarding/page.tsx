@@ -32,7 +32,6 @@ interface FormState {
 
 interface MemoryDropState {
   milestone: string;
-  currentInterests: string;
   notes: string;
 }
 
@@ -56,7 +55,6 @@ const INITIAL_STATE: FormState = {
 
 const INITIAL_MEMORY_DROP: MemoryDropState = {
   milestone: "",
-  currentInterests: "",
   notes: "",
 };
 
@@ -499,19 +497,6 @@ function StepMemoryDrop({
 
       <div>
         <label className="mb-2 block font-sans text-sm font-medium text-navy">
-          What are they obsessed with right now?
-        </label>
-        <textarea
-          value={memoryDrop.currentInterests}
-          onChange={(e) => onChange({ currentInterests: e.target.value })}
-          placeholder="dinosaurs, building forts, a specific song they play on repeat..."
-          rows={3}
-          className="w-full rounded-2xl border border-navy/15 bg-white px-6 py-4 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm resize-none"
-        />
-      </div>
-
-      <div>
-        <label className="mb-2 block font-sans text-sm font-medium text-navy">
           Anything else we should know?{" "}
           <span className="font-normal text-navy/40">(optional)</span>
         </label>
@@ -738,7 +723,7 @@ function OnboardingWizard() {
 
   function canProceed(): boolean {
     if (step === memoryDropStep) {
-      return Boolean(memoryDrop.milestone && memoryDrop.currentInterests);
+      return Boolean(memoryDrop.milestone);
     }
 
     if (isAdditional) {
