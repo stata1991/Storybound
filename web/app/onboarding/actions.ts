@@ -61,12 +61,18 @@ export async function saveChildProfile(data: ChildProfileData) {
   if (interestsList.some((i) => i.length > 100)) {
     return { error: "Each interest must be 100 characters or less." };
   }
+  if (interestsList.some((i) => /[\n\r]/.test(i))) {
+    return { error: "Interests must not contain line breaks." };
+  }
   const avoidancesList = parseCommaSeparated(data.avoidances);
   if (avoidancesList.length > 10) {
     return { error: "Maximum 10 avoidances allowed." };
   }
   if (avoidancesList.some((a) => a.length > 100)) {
     return { error: "Each avoidance must be 100 characters or less." };
+  }
+  if (avoidancesList.some((a) => /[\n\r]/.test(a))) {
+    return { error: "Avoidances must not contain line breaks." };
   }
   // Service role client bypasses RLS for record creation
   const admin = createAdminClient(

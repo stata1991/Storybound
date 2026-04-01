@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   generateStory,
-  generateBook,
   updateHarvestStatus,
   getPrintDetails,
   markSentToPrint,
@@ -363,17 +362,28 @@ export function GenerateBookButton({
     setLoading(true);
     setError(null);
 
-    const result = await generateBook(harvestId);
+    try {
+      const res = await fetch("/api/admin/generate-book", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harvestId }),
+      });
 
-    setLoading(false);
+      const result = await res.json();
 
-    if ("error" in result) {
-      setError(result.error);
-      return;
+      if ("error" in result) {
+        setError(result.error);
+        setLoading(false);
+        return;
+      }
+
+      setDone(true);
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Request failed");
     }
 
-    setDone(true);
-    router.refresh();
+    setLoading(false);
   }
 
   if (done) {

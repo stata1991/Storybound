@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { logEvent } from "@/lib/audit";
 import { buildCoverPrompt } from "@/lib/book/cover-prompt";
+import { sanitizeForPrompt, sanitizeArrayForPrompt } from "@/lib/utils/sanitize";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -1682,11 +1683,11 @@ The Story Bible is the single source of truth for this child's character across 
 Every field you output — especially physical descriptions, personality traits, and supporting characters — will be injected verbatim into every future episode prompt. Be specific and detailed.
 
 Rules:
-- The child IS the hero. Not a character inspired by them. Them.${child.preferred_name ? `\n- The hero's name in the story should be "${child.preferred_name}" (their preferred name).` : ""}
+- The child IS the hero. Not a character inspired by them. Them.${child.preferred_name ? `\n- The hero's name in the story should be "${sanitizeForPrompt(child.preferred_name, 50)}" (their preferred name).` : ""}
 - The world is fictional. No real locations, schools, or identifiable details.
 - Four episodes per year form one Season. Each episode is self-contained but threads the arc.
 - Episode 4 is ALWAYS the Birthday Episode — the emotional climax of the season.
-- Avoid: ${child.avoidances.length > 0 ? child.avoidances.join(", ") : "nothing specifically noted"}.
+- Avoid: ${child.avoidances.length > 0 ? sanitizeArrayForPrompt(child.avoidances).join(", ") : "nothing specifically noted"}.
 - Include: the child's actual interests, age-appropriate challenges, humor, wonder.
 - Tone: warm, adventurous, imaginative. Think Studio Ghibli, not Disney action.
 
@@ -1694,20 +1695,20 @@ Output format: valid JSON only. No preamble, no markdown fences, no trailing com
     user: `Generate a Story Bible for this child:
 
 Child profile:
-- Name: ${child.name}${child.preferred_name ? `\n- Goes by: ${child.preferred_name}` : ""}
+- Name: ${sanitizeForPrompt(child.name, 50)}${child.preferred_name ? `\n- Goes by: ${sanitizeForPrompt(child.preferred_name, 50)}` : ""}
 - Age: ${age}
 - Pronouns: ${pronounLabel(child.pronouns, child.pronouns_other)}
-- Interests: ${child.interests.join(", ")}
-- Favorite things: ${Object.entries(child.favorites ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ")}
-- Fears to avoid: ${child.avoidances.length > 0 ? child.avoidances.join(", ") : "none specified"}
+- Interests: ${sanitizeArrayForPrompt(child.interests).join(", ")}
+- Favorite things: ${Object.entries(child.favorites ?? {}).map(([k, v]) => `${sanitizeForPrompt(k, 50)}: ${sanitizeForPrompt(String(v), 100)}`).join(", ")}
+- Fears to avoid: ${child.avoidances.length > 0 ? sanitizeArrayForPrompt(child.avoidances).join(", ") : "none specified"}
 - Reading level: ${child.reading_level.replace(/_/g, " ")}
-- Family context: ${child.family_notes ?? "Not provided"}${child.default_archetype ? `\n- Character inspiration: ${child.default_archetype} (reimagine as an original character — no trademarked names or likenesses)` : ""}
+- Family context: ${sanitizeForPrompt(child.family_notes ?? "Not provided")}${child.default_archetype ? `\n- Character inspiration: ${sanitizeForPrompt(child.default_archetype, 100)} (reimagine as an original character — no trademarked names or likenesses)` : ""}
 
 This season's context (the emotional core of this book):
 - Season: ${harvest.season}
-- Milestone: ${harvest.milestone_description ?? "Not provided"}
-- Current interests (updated): ${harvest.current_interests.length > 0 ? harvest.current_interests.join(", ") : "Same as profile"}
-- Notes: ${harvest.notable_notes ?? "Nothing noted"}${harvest.character_archetype ? `\n- Character archetype: ${harvest.character_archetype} (reimagine as original — no trademarked names or likenesses)` : ""}
+- Milestone: ${sanitizeForPrompt(harvest.milestone_description ?? "Not provided")}
+- Current interests (updated): ${harvest.current_interests.length > 0 ? sanitizeArrayForPrompt(harvest.current_interests).join(", ") : "Same as profile"}
+- Notes: ${sanitizeForPrompt(harvest.notable_notes ?? "Nothing noted")}${harvest.character_archetype ? `\n- Character archetype: ${sanitizeForPrompt(harvest.character_archetype, 100)} (reimagine as original — no trademarked names or likenesses)` : ""}
 
 The seasonal arc and episode outlines MUST grow from this milestone. It is the emotional backbone — the story's central challenge or triumph should echo this real moment in the child's life.
 
@@ -1880,6 +1881,15 @@ function buildEpisodePrompt(
   const episodeNumber = harvest.quarter;
   const isEp4 = episodeNumber === 4;
 
+  // Sanitize user-provided fields before prompt interpolation
+  const heroName = sanitizeForPrompt(child.preferred_name ?? child.name, 50);
+  const safeAvoidances = sanitizeArrayForPrompt(child.avoidances);
+  const safeMilestone = harvest.milestone_description ? sanitizeForPrompt(harvest.milestone_description) : "Not provided";
+  const safeCaptions = sanitizeArrayForPrompt(harvest.photo_captions, 200);
+  const safeInterests = sanitizeArrayForPrompt(harvest.current_interests);
+  const safeArchetype = harvest.character_archetype ? sanitizeForPrompt(harvest.character_archetype, 100) : null;
+  const safeNotes = harvest.notable_notes ? sanitizeForPrompt(harvest.notable_notes) : "Nothing noted";
+
   // Build continuity section from actual generated episodes (not just Story Bible outlines)
   let continuitySection = "";
   if (previousEpisodes.length > 0) {
@@ -1922,7 +1932,7 @@ function buildEpisodePrompt(
   const personalityDesc = heroTraits?.join(", ") ?? "see character block";
 
   return {
-    system: `You are writing a personalized children's storybook for ${child.preferred_name ?? child.name}, age ${age}.
+    system: `You are writing a personalized children's storybook for ${heroName}, age ${age}.
 
 Writing style rules — follow these exactly:
 - Each scene must be ${style.wordsPerScene} words or fewer
@@ -1930,7 +1940,7 @@ Writing style rules — follow these exactly:
 - Vocabulary level: ${style.vocabulary}
 - Tone: ${style.tone}
 - Tension level: ${style.tension}
-${style.catchphrase ? `- Give ${child.preferred_name ?? child.name} a short personal catchphrase they repeat at exciting moments (1 line, invented for this child based on their traits)` : "- No catchphrase needed at this age"}
+${style.catchphrase ? `- Give ${heroName} a short personal catchphrase they repeat at exciting moments (1 line, invented for this child based on their traits)` : "- No catchphrase needed at this age"}
 
 Emotional arc for this age: ${style.emotionalArc}
 The story must follow this arc. Do not skip the middle — the resolution only lands if the struggle is real first.
@@ -1940,7 +1950,7 @@ Example of the correct sentence style for this age:
 
 Never write above this reading level. If a sentence feels too complex, break it into two.
 
-The child hero is ${child.preferred_name ?? child.name}. Physical description: ${physDesc}.
+The child hero is ${heroName}. Physical description: ${physDesc}.
 Personality: ${personalityDesc}.
 Pronouns: ${pronounLabel(child.pronouns, child.pronouns_other)}.
 Make these traits visible through actions and dialogue, not just narration.
@@ -1966,21 +1976,21 @@ Content safety:
 - No violence, blood, death, or injury
 - No scary darkness or isolation
 - No separation from parents as a threat
-- Respect all parent-specified avoidances: ${child.avoidances.length > 0 ? child.avoidances.join(", ") : "none specified"}
+- Respect all parent-specified avoidances: ${safeAvoidances.length > 0 ? safeAvoidances.join(", ") : "none specified"}
 - Positive resolution required. Challenge is emotional, not dangerous.
 
 Output format: valid JSON only. No preamble, no markdown fences, no trailing commas, no comments. Every string value must be properly escaped.`,
-    user: `Generate Episode ${episodeNumber} for ${child.preferred_name ?? child.name}.
+    user: `Generate Episode ${episodeNumber} for ${heroName}.
 ${characterBlock}
 Story Bible:
 ${JSON.stringify(storyBible, null, 2)}
 
 This quarter's harvest data:
 - Season: ${harvest.season}
-- Milestone this season: ${harvest.milestone_description ?? "Not provided"} — THIS is the emotional core of the episode. The story's central challenge or triumph should grow from this real moment.
-- Photo descriptions: ${harvest.photo_captions.length > 0 ? harvest.photo_captions.join("; ") : "None available"}
-- Current interests (updated): ${harvest.current_interests.length > 0 ? harvest.current_interests.join(", ") : "Same as profile"}${harvest.character_archetype ? `\n- Character inspiration this season: ${harvest.character_archetype} (reimagine as original — no trademarked names or likenesses)` : ""}
-- Anything new or notable: ${harvest.notable_notes ?? "Nothing noted"}
+- Milestone this season: ${safeMilestone} — THIS is the emotional core of the episode. The story's central challenge or triumph should grow from this real moment.
+- Photo descriptions: ${safeCaptions.length > 0 ? safeCaptions.join("; ") : "None available"}
+- Current interests (updated): ${safeInterests.length > 0 ? safeInterests.join(", ") : "Same as profile"}${safeArchetype ? `\n- Character inspiration this season: ${safeArchetype} (reimagine as original — no trademarked names or likenesses)` : ""}
+- Anything new or notable: ${safeNotes}
 ${continuitySection}
 
 Output this exact JSON structure:
@@ -2004,7 +2014,7 @@ Output this exact JSON structure:
   }
 }
 
-Remember: exactly ${sceneCount} scenes. Each illustration_prompt must describe ${child.preferred_name ?? child.name} using the exact physical details from the Characters block. Keep each illustration_prompt under 20 words.`,
+Remember: exactly ${sceneCount} scenes. Each illustration_prompt must describe ${heroName} using the exact physical details from the Characters block. Keep each illustration_prompt under 20 words.`,
   };
 }
 

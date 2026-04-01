@@ -192,6 +192,10 @@ export async function submitMemoryDrop(
   if (archetype && archetype.length > 100) {
     return { error: "Archetype must be 100 characters or less." };
   }
+  // Reject embedded newlines in single-line fields
+  if (archetype && /[\n\r]/.test(archetype)) {
+    return { error: "Archetype must not contain line breaks." };
+  }
   const parsedInterests = interests
     .split(",")
     .map((s) => s.trim())
@@ -202,9 +206,15 @@ export async function submitMemoryDrop(
   if (parsedInterests.some((i) => i.length > 100)) {
     return { error: "Each interest must be 100 characters or less." };
   }
+  if (parsedInterests.some((i) => /[\n\r]/.test(i))) {
+    return { error: "Interests must not contain line breaks." };
+  }
   for (const cap of captions) {
-    if (cap.length > 200) {
-      return { error: "Each photo caption must be 200 characters or less." };
+    if (cap.length > 150) {
+      return { error: "Each photo caption must be 150 characters or less." };
+    }
+    if (/[\n\r]/.test(cap)) {
+      return { error: "Photo captions must not contain line breaks." };
     }
   }
 
