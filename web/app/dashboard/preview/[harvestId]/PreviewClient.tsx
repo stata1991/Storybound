@@ -33,11 +33,11 @@ export default function PreviewClient({
   season,
   episodeStatus,
   pdfUrl,
-  flagMessage,
+  _flagMessage,
   previewDeadline,
   subscriptionType,
   hasShippingAddress,
-  parentEmail,
+  _parentEmail,
 }: PreviewClientProps) {
   const router = useRouter();
   const [status, setStatus] = useState(episodeStatus);
