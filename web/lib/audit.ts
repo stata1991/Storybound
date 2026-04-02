@@ -25,17 +25,19 @@ function getAuditClient() {
  */
 export function logEvent(params: LogEventParams): void {
   try {
-    getAuditClient()
-      .from("audit_log")
-      .insert({
-        event_type: params.event_type,
-        status: params.status,
-        message: params.message ?? null,
-        harvest_id: params.harvest_id ?? null,
-        family_id: params.family_id ?? null,
-        child_id: params.child_id ?? null,
-        metadata: params.metadata ?? null,
-      })
+    Promise.resolve(
+      getAuditClient()
+        .from("audit_log")
+        .insert({
+          event_type: params.event_type,
+          status: params.status,
+          message: params.message ?? null,
+          harvest_id: params.harvest_id ?? null,
+          family_id: params.family_id ?? null,
+          child_id: params.child_id ?? null,
+          metadata: params.metadata ?? null,
+        })
+    )
       .then(({ error }) => {
         if (error) {
           console.error("audit_log insert failed:", error.message);

@@ -564,9 +564,9 @@ export async function completeIllustrationGeneration(
   harvestId: string,
   faceModelId: string
 ): Promise<{ success: true } | { error: string }> {
-  console.log("completeIllustrationGeneration called", { harvestId, faceModelId });
   logEvent({
     event_type: "illustration.complete_start",
+    status: "started",
     harvest_id: harvestId,
     message: `completeIllustrationGeneration called (face_model_id: ${faceModelId})`,
   });
@@ -732,12 +732,12 @@ export async function completeIllustrationGeneration(
   }
 
   // Delete LoRA weights
-  console.log("Attempting face model delete:", { faceModelId, MODAL_DELETE_URL: process.env.MODAL_DELETE_URL });
   await callModal(process.env.MODAL_DELETE_URL!, {
     face_model_id: faceModelId,
   }).catch(() => {});
   logEvent({
     event_type: "face_model_deleted",
+    status: "success",
     harvest_id: harvestId,
     message: `LoRA weights deleted (face_model_id: ${faceModelId})`,
   });
@@ -1052,6 +1052,7 @@ export async function triggerIllustrationPipeline(
       });
       logEvent({
         event_type: "face_model_deleted",
+        status: "success",
         harvest_id: harvestId,
         message: `LoRA weights deleted (face_model_id: ${existingModelId})`,
       });
@@ -1059,6 +1060,7 @@ export async function triggerIllustrationPipeline(
       console.error("Failed to delete face model:", err);
       logEvent({
         event_type: "face_model_delete_failed",
+        status: "error",
         harvest_id: harvestId,
         message: `Failed to delete LoRA (face_model_id: ${existingModelId})`,
       });
@@ -1178,8 +1180,6 @@ export async function triggerIllustrationPipeline(
     return { success: true };
   } catch (e) {
     console.error("triggerIllustrationPipeline post-generation error:", e);
-    console.error("genResult keys:", Object.keys(genResult ?? {}));
-    console.error("genResult.illustrations type:", typeof (genResult as Record<string, unknown>)?.illustrations);
     throw e;
   }
 }
