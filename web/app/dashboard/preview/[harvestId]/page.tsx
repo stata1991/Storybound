@@ -77,7 +77,6 @@ export default async function PreviewPage({ params }: Props) {
 
   let subscriptionType = "none";
   let hasShippingAddress = false;
-  const parentEmail = parentRecord?.email ?? "";
 
   if (parentRecord?.family_id) {
     const { data: familyRecord } = await admin
@@ -147,11 +146,9 @@ export default async function PreviewPage({ params }: Props) {
       season={harvest.season}
       episodeStatus={episode.status}
       pdfUrl={pdfUrl}
-      flagMessage={episode.parent_flag_message}
       previewDeadline={episode.preview_deadline}
       subscriptionType={subscriptionType}
       hasShippingAddress={hasShippingAddress}
-      parentEmail={parentEmail}
     />
   );
 }

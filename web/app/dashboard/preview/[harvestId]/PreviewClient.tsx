@@ -16,11 +16,9 @@ interface PreviewClientProps {
   season: string;
   episodeStatus: string;
   pdfUrl: string | null;
-  flagMessage: string | null;
   previewDeadline: string | null;
   subscriptionType: string;
   hasShippingAddress: boolean;
-  parentEmail: string;
 }
 
 const NAVY = "#1B2A4A";
@@ -33,11 +31,9 @@ export default function PreviewClient({
   season,
   episodeStatus,
   pdfUrl,
-  _flagMessage,
   previewDeadline,
   subscriptionType,
   hasShippingAddress,
-  _parentEmail,
 }: PreviewClientProps) {
   const router = useRouter();
   const [status, setStatus] = useState(episodeStatus);
