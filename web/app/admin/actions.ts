@@ -451,8 +451,9 @@ export async function startFaceTraining(
   if (!harvestRaw) return { error: "Harvest not found." };
   const harvest = harvestRaw as unknown as HarvestFullDbRow;
 
-  if (harvest.status !== "processing") {
-    return { error: `Harvest status is '${harvest.status}', expected 'processing'.` };
+  // Allow "training" status for retries after timeout failures
+  if (harvest.status !== "processing" && harvest.status !== "training") {
+    return { error: `Harvest status is '${harvest.status}', expected 'processing' or 'training'.` };
   }
 
   const childId = harvest.child_id;
@@ -528,7 +529,7 @@ export async function startFaceTraining(
         child_id: childId,
         harvest_id: harvestId,
       }),
-      signal: AbortSignal.timeout(30_000), // 30s — enough to confirm Modal accepted
+      signal: AbortSignal.timeout(120_000), // 120s — Modal cold starts can take 60-90s
     });
 
     if (!res.ok) {
