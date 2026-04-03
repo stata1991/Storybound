@@ -1,6 +1,7 @@
 export const maxDuration = 300;
 
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { createClient } from "@supabase/supabase-js";
 import { createClient as createAuthClient } from "@/lib/supabase/server";
 import {
@@ -47,11 +48,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result);
   }
 
-  // Production: fire-and-forget — kick off training, return 202 immediately
+  // Production: return 202 immediately, run training in background
+  // waitUntil keeps the Vercel function alive until the promise settles (up to maxDuration)
   // Training completion arrives via /api/admin/training-complete webhook
-  startFaceTraining(harvestId).catch((err) => {
-    console.error("startFaceTraining background error:", err);
-  });
+  waitUntil(
+    startFaceTraining(harvestId).catch((err) => {
+      console.error("startFaceTraining background error:", err);
+    })
+  );
 
   return NextResponse.json(
     {
