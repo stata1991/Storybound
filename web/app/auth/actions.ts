@@ -7,7 +7,7 @@ import { headers } from "next/headers";
 
 export async function signInWithGoogle() {
   const supabase = await createClient();
-  const origin = (await headers()).get("origin");
+  const origin = process.env.NEXT_PUBLIC_APP_URL ?? (await headers()).get("origin");
 
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
@@ -59,7 +59,7 @@ export async function signInWithEmail(formData: FormData) {
 
 export async function signUpWithEmail(formData: FormData) {
   const supabase = await createClient();
-  const origin = (await headers()).get("origin");
+  const origin = process.env.NEXT_PUBLIC_APP_URL ?? (await headers()).get("origin");
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
 
