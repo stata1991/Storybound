@@ -84,12 +84,6 @@ interface EpisodeDbRow {
   scenes: { number: number; text: string; illustration_prompt: string }[] | null;
 }
 
-interface ModalTrainResponse {
-  face_model_id: string;
-  steps: number;
-  status: string;
-}
-
 interface ModalGenerateResponse {
   face_model_id: string;
   illustrations: { index: number; data: string; prompt: string }[];
@@ -442,7 +436,7 @@ function buildDefaultPrompts(
 
 export async function startFaceTraining(
   harvestId: string
-): Promise<{ success: true; face_model_id: string } | { error: string }> {
+): Promise<{ success: true } | { error: string }> {
   const auth = await verifyAdmin();
   if ("error" in auth) return { error: auth.error };
 
@@ -497,12 +491,20 @@ export async function startFaceTraining(
     photosBase64.push(Buffer.from(arrayBuf).toString("base64"));
   }
 
-  // Build callback URL for async completion
+  // Build callback URL — Modal will POST here when training completes
   const callbackUrl = process.env.NEXT_PUBLIC_APP_URL
     ? `${process.env.NEXT_PUBLIC_APP_URL}/api/admin/training-complete`
     : undefined;
 
-  // Kick off training on Modal
+  // Mark harvest as training BEFORE firing Modal (pre-training DB update)
+  await supa
+    .from("harvests")
+    .update({
+      face_ref_generated: true,
+      status: "training",
+    })
+    .eq("id", harvestId);
+
   logEvent({
     event_type: "illustration.training",
     status: "started",
@@ -511,37 +513,43 @@ export async function startFaceTraining(
     message: "LoRA face training started",
   });
 
-  let trainResult: ModalTrainResponse;
+  // Fire Modal train request — short timeout just to confirm Modal accepted the job
+  // Training runs async on Modal; completion arrives via /api/admin/training-complete webhook
   try {
-    trainResult = await callModal<ModalTrainResponse>(
-      process.env.MODAL_TRAIN_URL!,
-      {
+    const res = await fetch(process.env.MODAL_TRAIN_URL!, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.MODAL_AUTH_TOKEN}`,
+      },
+      body: JSON.stringify({
         photos: photosBase64,
         callback_url: callbackUrl,
         child_id: childId,
         harvest_id: harvestId,
-      }
-    );
+      }),
+      signal: AbortSignal.timeout(30_000), // 30s — enough to confirm Modal accepted
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "No response body");
+      throw new Error(`Modal returned ${res.status}: ${text}`);
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
+    // Revert harvest status on failure
+    await supa
+      .from("harvests")
+      .update({ status: "processing" })
+      .eq("id", harvestId);
     logEvent({
       event_type: "illustration.training",
       status: "error",
       harvest_id: harvestId,
-      message: `Face training failed: ${msg}`,
+      message: `Face training request failed: ${msg}`,
     });
-    return { error: `Face training failed: ${msg}` };
+    return { error: `Face training request failed: ${msg}` };
   }
-
-  // Update harvest with face ref and set status to training
-  await supa
-    .from("harvests")
-    .update({
-      face_ref_generated: true,
-      face_ref_path: trainResult.face_model_id,
-      status: "training",
-    })
-    .eq("id", harvestId);
 
   // Delete character photos from bucket — Modal has them in memory now
   try {
@@ -555,7 +563,7 @@ export async function startFaceTraining(
     console.error("Character photo cleanup failed (non-blocking):", cleanupErr);
   }
 
-  return { success: true, face_model_id: trainResult.face_model_id };
+  return { success: true };
 }
 
 /* ─── completeIllustrationGeneration — post-training generation ───────────── */
@@ -1072,50 +1080,9 @@ export async function triggerIllustrationPipeline(
       .update({ face_ref_generated: false, face_ref_path: null })
       .eq("id", harvestId);
   } else {
-    // Normal path: train + generate synchronously
-    const trainResult = await startFaceTraining(harvestId);
-    if ("error" in trainResult) return trainResult;
-
-    // Reset status back to processing for the generation phase
-    await supa.from("harvests").update({ status: "processing" }).eq("id", harvestId);
-
-    try {
-      genResult = await callModal<ModalGenerateResponse>(
-        process.env.MODAL_GENERATE_URL!,
-        {
-          face_model_id: trainResult.face_model_id,
-          prompts,
-          ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
-          ...modalSharedParams,
-        }
-      );
-      console.log("Modal generate_illustrations returned:", {
-        illustrationCount: genResult?.illustrations?.length,
-        faceModelId: trainResult.face_model_id,
-      });
-    } catch (e) {
-      console.log("Modal generate_illustrations FAILED, deleting LoRA:", trainResult.face_model_id);
-      await callModal(process.env.MODAL_DELETE_URL!, {
-        face_model_id: trainResult.face_model_id,
-      }).catch((delErr) => console.error("Delete failed (error path):", delErr));
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      logEvent({
-        event_type: "illustration.pipeline",
-        status: "error",
-        harvest_id: harvestId,
-        message: `Illustration generation failed: ${msg}`,
-      });
-      return { error: `Illustration generation failed: ${msg}` };
-    }
-
-    console.log("PRE-DELETE: about to delete face model", {
-      faceModelId: trainResult.face_model_id,
-      hasDeleteUrl: !!process.env.MODAL_DELETE_URL,
-    });
-    await callModal(process.env.MODAL_DELETE_URL!, {
-      face_model_id: trainResult.face_model_id,
-    }).catch((e) => console.error("Delete failed (success path):", e));
-    console.log("POST-DELETE: face model delete called");
+    // Training is now async — use the generate-illustrations route which fires
+    // startFaceTraining + webhook. This sync path should not be reached.
+    return { error: "No LoRA model found. Use the async training path (generate-illustrations route) instead." };
   }
 
   // ── Upload illustrations to Supabase Storage ───────────────────────────────

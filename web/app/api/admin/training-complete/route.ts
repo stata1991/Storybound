@@ -1,6 +1,7 @@
 export const maxDuration = 300;
 
 import { NextRequest, NextResponse } from "next/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { completeIllustrationGeneration } from "@/app/admin/actions";
 
 export async function POST(req: NextRequest) {
@@ -32,6 +33,17 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+
+  // Store face_model_id on harvest (startFaceTraining fires before training completes)
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+  await admin
+    .from("harvests")
+    .update({ face_ref_path: body.face_model_id })
+    .eq("id", body.harvest_id);
 
   // Fire off illustration generation (runs in this request's context)
   const result = await completeIllustrationGeneration(
