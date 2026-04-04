@@ -436,7 +436,7 @@ function buildDefaultPrompts(
 
 export async function startFaceTraining(
   harvestId: string
-): Promise<{ success: true } | { error: string }> {
+): Promise<{ success: true; message?: string } | { error: string }> {
   const auth = await verifyAdmin();
   if ("error" in auth) return { error: auth.error };
 
@@ -537,8 +537,27 @@ export async function startFaceTraining(
       throw new Error(`Modal returned ${res.status}: ${text}`);
     }
   } catch (e) {
+    const isTimeout =
+      e instanceof Error &&
+      (e.name === "AbortError" || e.message.includes("timeout"));
+
+    if (isTimeout) {
+      // Timeout = client gave up waiting, but Modal accepted the job and is training.
+      // Do NOT revert harvest status — training is running on Modal.
+      logEvent({
+        event_type: "illustration.training",
+        status: "started",
+        harvest_id: harvestId,
+        message: "Training request timed out (120s) — Modal is still training. Webhook will complete the flow.",
+      });
+      return {
+        success: true,
+        message: "Training started — this takes ~10 minutes. The page will update automatically when complete.",
+      };
+    }
+
     const msg = e instanceof Error ? e.message : "Unknown error";
-    // Revert harvest status on failure
+    // Revert harvest status on real failure (network down, Modal rejected, etc.)
     await supa
       .from("harvests")
       .update({ status: "processing" })

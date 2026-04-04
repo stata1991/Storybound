@@ -959,10 +959,12 @@ async def train_face_model(req: Request):
         import httpx
 
         webhook_secret = os.environ.get("WEBHOOK_SECRET", "")
+        print(f"Firing webhook to {callback_url} (harvest_id={harvest_id}, face_model_id={face_model_id})")
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                await client.post(
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
                     callback_url,
+                    follow_redirects=True,
                     json={
                         "harvest_id": harvest_id,
                         "child_id": child_id,
@@ -974,9 +976,10 @@ async def train_face_model(req: Request):
                         "Content-Type": "application/json",
                     },
                 )
-            print(f"Webhook callback sent to {callback_url}")
+                print(f"Webhook response: {resp.status_code} — {resp.text[:500]}")
+                resp.raise_for_status()
         except Exception as e:
-            print(f"Webhook callback failed (non-blocking): {e}")
+            print(f"Webhook callback failed: {e}")
 
     return {
         "face_model_id": face_model_id,

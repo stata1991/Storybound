@@ -209,6 +209,7 @@ export function RunIllustrationsButton({
   const [phase, setPhase] = useState<"idle" | "training" | "generating">(
     "idle"
   );
+  const [trainingMessage, setTrainingMessage] = useState<string | null>(null);
   const elapsed = useElapsedTimer(loading);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inFlightRef = useRef(false);
@@ -261,6 +262,7 @@ export function RunIllustrationsButton({
       if (res.status === 202) {
         // Async training started — poll for completion
         setPhase("training");
+        if (result.message) setTrainingMessage(result.message);
         pollRef.current = setInterval(pollHarvestStatus, 15_000);
         inFlightRef.current = false;
         return;
@@ -314,7 +316,7 @@ export function RunIllustrationsButton({
         <div className="mb-4 rounded bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
           <p className="font-medium">LoRA face training in progress</p>
           <p className="mt-1 text-xs text-indigo-500">
-            Illustrations will generate automatically when training completes.
+            {trainingMessage ?? "Illustrations will generate automatically when training completes."}{" "}
             Polling every 15s.
           </p>
         </div>

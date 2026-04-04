@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(
     {
       status: "training",
-      message: "Training started, webhook will notify when complete.",
+      message: trainResult.message ?? "Training started, webhook will notify when complete.",
     },
     { status: 202 }
   );
