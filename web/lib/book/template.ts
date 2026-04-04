@@ -1,13 +1,6 @@
 /* ─── Storybound Book HTML Template ────────────────────────────────────────── */
 
-import { readFileSync } from "fs";
-import { join } from "path";
-
-/* ─── Embedded Nunito font (latin, woff2) ────────────────────────────────── */
-
-const nunitoBase64 = readFileSync(
-  join(process.cwd(), "lib/book/fonts/Nunito-Latin.woff2")
-).toString("base64");
+import { NUNITO_BASE64 as nunitoBase64 } from "./font-data";
 
 /* ─── Brand colors ────────────────────────────────────────────────────────── */
 

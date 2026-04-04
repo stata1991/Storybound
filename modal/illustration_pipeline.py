@@ -340,12 +340,14 @@ def get_dominant_color_mood(photos_b64: list) -> str:
 # ─── Cover helpers ────────────────────────────────────────────────────────────
 
 
-def build_cover_prompt(age_prefix: str = "", hair: str = "") -> str:
+def build_cover_prompt(age_prefix: str = "", hair: str = "", skin_tone: str = "") -> str:
     """Build a dedicated cover prompt — self-contained, under 60 words."""
     parts = []
     if age_prefix:
         parts.append(age_prefix)
     parts.append("sks child")
+    if skin_tone:
+        parts.append(skin_tone)
     if hair:
         # Truncate hair to first 6 words max
         hair_words = hair.split()
@@ -525,10 +527,18 @@ async def train_face_model(req: Request):
     Response:
       { "face_model_id": "uuid", "steps": 150, "status": "ok" }
     """
+    # Read body IMMEDIATELY — before any other processing.
+    # Vercel may disconnect after 120s; reading the body first ensures
+    # we have the payload before the client hangs up.
+    from starlette.requests import ClientDisconnect
+
+    try:
+        body = await req.json()
+    except ClientDisconnect:
+        return {"error": "Client disconnected before body was read"}
+
     if not verify_auth(req):
         auth_error()
-
-    body = await req.json()
 
     # ── Parse webhook callback params (optional — enables async flow) ──────
     callback_url = body.get("callback_url")
@@ -1068,7 +1078,24 @@ async def generate_illustrations(req: Request):
         print(f"LoRA active — ignoring story bible hair_description ({hair_description!r}) and core_appearance ({core_appearance!r})")
         hair_description = ""
         core_appearance = ""
-    elif hair_description:
+
+    # Keep skin tone hint even when LoRA active — helps override SDXL's
+    # base model bias toward lighter skin tones
+    skin_tone_hint = ""
+    if not skip_lora and face_model_id and character_description:
+        desc_lower = character_description.lower()
+        if "dark brown" in desc_lower or "deep brown" in desc_lower:
+            skin_tone_hint = "dark brown skin"
+        elif "warm brown" in desc_lower or "golden brown" in desc_lower:
+            skin_tone_hint = "warm brown skin"
+        elif "light brown" in desc_lower or "fair" in desc_lower:
+            skin_tone_hint = "light brown skin"
+        elif "brown skin" in desc_lower:
+            skin_tone_hint = "brown skin"
+        if skin_tone_hint:
+            print(f"Skin tone hint (LoRA active): {skin_tone_hint}")
+
+    if hair_description:
         print(f"Hair description (from story bible): {hair_description}")
         print(f"Core appearance (extracted): {core_appearance}")
     else:
@@ -1218,6 +1245,7 @@ async def generate_illustrations(req: Request):
     styled_cover = build_cover_prompt(
         age_prefix=age_prefix,
         hair=hair_description if hair_description else core_appearance,
+        skin_tone=skin_tone_hint,
     )
 
     word_count = len(styled_cover.split())
@@ -1335,6 +1363,8 @@ async def generate_illustrations(req: Request):
     for i, raw_prompt in enumerate(prompts):
         scene_desc = truncate_scene_description(raw_prompt)
         parts = [age_prefix, lora_token]
+        if skin_tone_hint:
+            parts.append(skin_tone_hint)
         if hair_description:
             parts.append(hair_description)
         elif core_appearance:
