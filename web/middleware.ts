@@ -9,6 +9,7 @@ const PUBLIC_ROUTES = [
   "/dashboard/preview",
   "/api/webhooks/stripe",
   "/api/cron/memory-drop-notifications",
+  "/api/admin/training-complete",
 ];
 
 function isPublicRoute(pathname: string): boolean {
