@@ -292,7 +292,7 @@ def apply_face_swap(
     face_h = target_face.bbox[3] - target_face.bbox[1]
     img_w, img_h = target_image.size
     face_area_pct = (face_w * face_h) / (img_w * img_h)
-    if face_area_pct < 0.08:  # face must be at least 8% of image area
+    if face_area_pct < 0.10:  # face must be at least 10% of image area
         print(f"WARNING: Detected face too small ({face_area_pct:.3%} of image) — likely false positive, skipping swap")
         return target_image
     print(f"Face area: {face_area_pct:.1%} of image — proceeding with swap")
@@ -460,7 +460,7 @@ def upscale_with_realesrgan(image: "Image.Image") -> "Image.Image":
 
     with torch.no_grad():
         if torch.cuda.is_available():
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast("cuda"):
                 output_4x = model(img_tensor)
         else:
             output_4x = model(img_tensor)
@@ -511,7 +511,7 @@ def web_error(body: dict, status: int = 400):
 @app.function(
     image=pipeline_image,
     gpu="A10G",
-    timeout=900,  # 15 min max for training
+    timeout=2400,  # 40 min max for training (1024px @ 2000 steps)
     volumes={LORA_VOLUME_PATH: lora_volume},
     secrets=[secrets],
 )
@@ -620,7 +620,7 @@ async def train_face_model(req: Request):
             img = img.crop((left, top, left + side, top + side))
             print(f"Photo {i}: no face detected, using original")
 
-        img = img.resize((512, 512), Image.LANCZOS)
+        img = img.resize((1024, 1024), Image.LANCZOS)
         pil_images.append(img)
 
     print(f"Preprocessed {n_cropped}/{len(photos_b64)} photos with face crops (512x512)")
@@ -794,14 +794,14 @@ async def train_face_model(req: Request):
     lora_params = [p for p in unet.parameters() if p.requires_grad]
     print(f"Trainable LoRA params: {len(lora_params)}")
     print(f"Total param tensors: {sum(1 for _ in unet.parameters())}")
-    print(f"Training config: steps=1500, rank=32, lr=1e-5, resolution=512")
+    print(f"Training config: steps=2000, rank=32, lr=1e-5, resolution=1024")
 
-    num_steps = 1500
+    num_steps = 2000
     num_images = len(latents_list)
 
     # SDXL additional conditioning: time_ids
     add_time_ids = torch.tensor(
-        [[512.0, 512.0, 0.0, 0.0, 512.0, 512.0]],
+        [[1024.0, 1024.0, 0.0, 0.0, 1024.0, 1024.0]],
         device="cuda",
         dtype=torch.bfloat16,
     )
@@ -1207,6 +1207,19 @@ async def generate_illustrations(req: Request):
         else:
             print("No face_embedding.pt found — IP-Adapter conditioning disabled")
 
+    # Resolve face swap source
+    source_face_path = None
+    swap_model_path = f"{MODEL_CACHE_PATH}/inswapper_128_fp16.onnx"
+
+    if not skip_lora and lora_dir and lora_dir.exists():
+        candidate_crop = str(lora_dir / "best_face_crop.jpg")
+        if os.path.exists(candidate_crop) and os.path.exists(swap_model_path):
+            source_face_path = candidate_crop
+            print(f"Face swap enabled: {source_face_path}")
+        else:
+            print(f"Face swap disabled: crop={os.path.exists(candidate_crop)}, "
+                  f"model={os.path.exists(swap_model_path)}")
+
     import torch
 
     ip_adapter_embeds = None
@@ -1282,6 +1295,15 @@ async def generate_illustrations(req: Request):
         decoded, output_type="pil"
     )[0]
     print("Cover generated with LoRA")
+
+    if source_face_path:
+        try:
+            cover_image = apply_face_swap(
+                source_face_path, cover_image, swap_model_path
+            )
+            print("Cover face swap applied")
+        except Exception as e:
+            print(f"Cover face swap failed ({e}), keeping original")
 
     # Free SDXL pipe before loading Real-ESRGAN to avoid OOM
     del pipe
@@ -1390,22 +1412,82 @@ async def generate_illustrations(req: Request):
             guidance_scale=7.5,
             output_type="latent",
             generator=generator,
+            num_images_per_prompt=3,
             ip_adapter_image_embeds=[ip_adapter_embeds] if ip_adapter_embeds is not None else None,
         )
-        print(f"Scene {i+1} generated" + (" with IP-Adapter (scale=0.3)" if ip_adapter_embeds is not None else ""))
+        print(f"Scene {i+1}: 3 candidates generated" + (" with IP-Adapter" if ip_adapter_embeds is not None else ""))
 
         # Clamp NaNs from UNet before decode
         latents = result.images
         latents = torch.nan_to_num(latents, nan=0.0, posinf=1.0, neginf=-1.0)
         latents = latents.clamp(-4, 4)
 
-        # Unscale and decode with madebyollin fp16 VAE
-        latents = latents / pipe.vae.config.scaling_factor
-        with torch.no_grad():
-            decoded = pipe.vae.decode(latents, return_dict=False)[0]
-        image = pipe.image_processor.postprocess(
-            decoded, output_type="pil"
-        )[0]
+        # Decode all 3 candidates
+        candidates = []
+        for j in range(3):
+            single_latent = latents[j:j+1] / pipe.vae.config.scaling_factor
+            with torch.no_grad():
+                decoded = pipe.vae.decode(single_latent, return_dict=False)[0]
+            candidate = pipe.image_processor.postprocess(decoded, output_type="pil")[0]
+            candidates.append(candidate)
+
+        # Rerank by face similarity to reference embedding
+        best_image = candidates[0]  # fallback
+        best_score = -1.0
+
+        if face_embedding is not None:
+            try:
+                import cv2
+                import numpy as np
+                from insightface.app import FaceAnalysis
+
+                rank_app = FaceAnalysis(
+                    name="buffalo_l",
+                    providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+                )
+                rank_app.prepare(ctx_id=0, det_size=(640, 640))
+
+                # face_embedding is [1, 512] — the raw reference
+                ref_emb = face_embedding.cpu().float()
+
+                for idx, candidate in enumerate(candidates):
+                    candidate_np = cv2.cvtColor(
+                        np.array(candidate), cv2.COLOR_RGB2BGR
+                    )
+                    faces = rank_app.get(candidate_np)
+                    if not faces:
+                        print(f"  Scene {i+1} candidate {idx}: no face detected")
+                        continue
+                    face = max(
+                        faces,
+                        key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+                    )
+                    gen_emb = torch.from_numpy(
+                        face.normed_embedding
+                    ).unsqueeze(0).float()  # [1, 512]
+                    score = torch.nn.functional.cosine_similarity(
+                        ref_emb, gen_emb, dim=1
+                    ).item()
+                    print(f"  Scene {i+1} candidate {idx}: cosine={score:.3f}")
+                    if score > best_score:
+                        best_score = score
+                        best_image = candidate
+
+                del rank_app
+                print(f"Scene {i+1} reranking: best_score={best_score:.3f}")
+
+            except Exception as e:
+                print(f"Scene {i+1} reranking failed ({e}), using first candidate")
+
+        image = best_image
+
+        # Stage 2: Apply face swap to best reranked candidate
+        if source_face_path:
+            try:
+                image = apply_face_swap(source_face_path, image, swap_model_path)
+                print(f"Scene {i+1} face swap applied")
+            except Exception as e:
+                print(f"Scene {i+1} face swap failed ({e}), keeping reranked image")
 
         buf = io.BytesIO()
         image.save(buf, format="PNG")
