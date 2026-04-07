@@ -132,7 +132,8 @@ NEGATIVE_PROMPT = (
     "text, watermark, signature, "
     "blurry, deformed, extra limbs, "
     "adult, teenager, older person, "
-    "low quality face, blurry face"
+    "low quality face, blurry face, "
+    "overly dark skin, too dark complexion"
 )
 
 
@@ -1084,14 +1085,14 @@ async def generate_illustrations(req: Request):
     skin_tone_hint = ""
     if not skip_lora and face_model_id and character_description:
         desc_lower = character_description.lower()
-        if "dark brown" in desc_lower or "deep brown" in desc_lower:
-            skin_tone_hint = "dark brown skin"
+        if "dark brown" in desc_lower:
+            skin_tone_hint = "medium brown skin tone"
         elif "warm brown" in desc_lower or "golden brown" in desc_lower:
-            skin_tone_hint = "warm brown skin"
+            skin_tone_hint = "warm medium brown skin, South Asian skin tone"
+        elif "brown skin" in desc_lower:
+            skin_tone_hint = "medium brown skin"
         elif "light brown" in desc_lower or "fair" in desc_lower:
             skin_tone_hint = "light brown skin"
-        elif "brown skin" in desc_lower:
-            skin_tone_hint = "brown skin"
         if skin_tone_hint:
             print(f"Skin tone hint (LoRA active): {skin_tone_hint}")
 
@@ -1296,14 +1297,15 @@ async def generate_illustrations(req: Request):
     )[0]
     print("Cover generated with LoRA")
 
-    if source_face_path:
-        try:
-            cover_image = apply_face_swap(
-                source_face_path, cover_image, swap_model_path
-            )
-            print("Cover face swap applied")
-        except Exception as e:
-            print(f"Cover face swap failed ({e}), keeping original")
+    # Face swap temporarily disabled — re-enable after tuning
+    # if source_face_path:
+    #     try:
+    #         cover_image = apply_face_swap(
+    #             source_face_path, cover_image, swap_model_path
+    #         )
+    #         print("Cover face swap applied")
+    #     except Exception as e:
+    #         print(f"Cover face swap failed ({e}), keeping original")
 
     # Free SDXL pipe before loading Real-ESRGAN to avoid OOM
     del pipe
@@ -1481,13 +1483,13 @@ async def generate_illustrations(req: Request):
 
         image = best_image
 
-        # Stage 2: Apply face swap to best reranked candidate
-        if source_face_path:
-            try:
-                image = apply_face_swap(source_face_path, image, swap_model_path)
-                print(f"Scene {i+1} face swap applied")
-            except Exception as e:
-                print(f"Scene {i+1} face swap failed ({e}), keeping reranked image")
+        # Face swap temporarily disabled — re-enable after tuning
+        # if source_face_path:
+        #     try:
+        #         image = apply_face_swap(source_face_path, image, swap_model_path)
+        #         print(f"Scene {i+1} face swap applied")
+        #     except Exception as e:
+        #         print(f"Scene {i+1} face swap failed ({e}), keeping reranked image")
 
         buf = io.BytesIO()
         image.save(buf, format="PNG")
