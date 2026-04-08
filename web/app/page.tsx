@@ -51,6 +51,10 @@ function Hero() {
         >
           Just want one book? Try a single story — $29
         </a>
+        <p className="text-center text-sm text-navy/50 mt-3">
+          ✦ <span className="text-navy/70 font-medium">Digital books are always free.</span>
+          {" "}Physical books from $89/year.
+        </p>
       </div>
     </section>
   );
@@ -176,7 +180,44 @@ function Pricing() {
         <h2 className="text-center font-serif text-3xl font-bold text-navy md:text-4xl">
           Simple pricing
         </h2>
-        <div className="mt-16 grid gap-8 lg:grid-cols-3">
+        <div className="mt-16 grid gap-8 md:grid-cols-2 lg:grid-cols-4">
+          {/* Digital Free column */}
+          <div className="flex flex-col gap-4">
+            <div className="rounded-2xl border border-navy/10 bg-cream p-8 relative">
+              <p className="text-xs font-semibold tracking-widest text-navy/40 uppercase mb-3">
+                Digital — Always Free
+              </p>
+              <div className="flex items-baseline gap-1 mb-1">
+                <span className="font-serif text-5xl font-bold text-navy">Free</span>
+              </div>
+              <p className="text-navy/50 text-sm mb-6">Read online, anytime.</p>
+              <a
+                href="/auth"
+                className="block w-full py-3 rounded-full border border-navy/20 text-center text-navy/60 font-medium text-sm mb-6"
+              >
+                Get started free
+              </a>
+              <ul className="space-y-3 text-sm text-navy/60">
+                <li className="flex items-start gap-2">
+                  <span className="text-navy/30 mt-0.5">✓</span>
+                  Digital illustrated books
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-navy/30 mt-0.5">✓</span>
+                  Child is the hero
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-navy/30 mt-0.5">✓</span>
+                  Read on any device
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-navy/30 mt-0.5">✓</span>
+                  No credit card needed
+                </li>
+              </ul>
+            </div>
+          </div>
+
           {/* Founding Member column */}
           <div className="flex flex-col gap-4">
             <div className="relative overflow-hidden rounded-2xl border-2 border-gold bg-white p-8 shadow-warm-lg md:p-10">
