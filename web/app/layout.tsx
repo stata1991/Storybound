@@ -18,6 +18,10 @@ export const metadata: Metadata = {
   title: "Storybound — Your child's story, growing with them",
   description:
     "A quarterly personalized storybook subscription where your child is the actual hero. 4 illustrated chapter books a year, built from their photos, milestones, and favorite characters.",
+  icons: {
+    icon: { url: "/icon.png", type: "image/png" },
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export default function RootLayout({

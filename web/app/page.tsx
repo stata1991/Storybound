@@ -62,9 +62,9 @@ const STEPS = [
   },
   {
     number: "03",
-    title: "It arrives on their birthday",
+    title: "It arrives every season",
     description:
-      "Every year, the most special book lands at their door 1\u20132 weeks before their birthday. Timed to the day.",
+      "Four beautifully illustrated books a year \u2014 one per season, delivered to their door. Each one a new chapter in their story.",
   },
 ];
 
