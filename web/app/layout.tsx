@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   description:
     "A quarterly personalized storybook subscription where your child is the actual hero. 4 illustrated chapter books a year, built from their photos, milestones, and favorite characters.",
   icons: {
-    icon: { url: "/icon.png", type: "image/png" },
+    icon: "/icon.png",
     apple: "/apple-touch-icon.png",
   },
 };
