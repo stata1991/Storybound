@@ -692,27 +692,51 @@ async def train_face_model(req: Request):
     tokenizer_2 = pipe.tokenizer_2
     noise_scheduler = pipe.scheduler
 
-    # ── Apply LoRA to UNet ──────────────────────────────────────────────────
+    # ── Apply LoRA to UNet + text encoders ──────────────────────────────────
 
-    lora_config = LoraConfig(
+    # UNet LoRA — identity geometry
+    unet_lora_config = LoraConfig(
         r=32,
         lora_alpha=16,
-        target_modules=[
-            "to_q",
-            "to_k",
-            "to_v",
-            "to_out.0",
-        ],
+        target_modules=["to_q", "to_k", "to_v", "to_out.0"],
         lora_dropout=0.0,
     )
-    unet = get_peft_model(unet, lora_config)
+    unet = get_peft_model(unet, unet_lora_config)
     unet.to(torch.bfloat16)
     unet.train()
 
-    # Freeze everything except LoRA
+    # Text encoder LoRA — binds "sks child" token to this child's identity
+    # Lower rank and LR than UNet — text encoder is more sensitive
+    text_encoder_lora_config = LoraConfig(
+        r=16,
+        lora_alpha=8,
+        target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+        lora_dropout=0.0,
+    )
+    text_encoder = get_peft_model(text_encoder, text_encoder_lora_config)
+    text_encoder.to(torch.bfloat16)
+    text_encoder.train()
+
+    text_encoder_2_lora_config = LoraConfig(
+        r=16,
+        lora_alpha=8,
+        target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+        lora_dropout=0.0,
+    )
+    text_encoder_2 = get_peft_model(text_encoder_2, text_encoder_2_lora_config)
+    text_encoder_2.to(torch.bfloat16)
+    text_encoder_2.train()
+
+    # Freeze VAE entirely; text encoder base weights frozen, only LoRA params trainable
     vae.requires_grad_(False)
-    text_encoder.requires_grad_(False)
-    text_encoder_2.requires_grad_(False)
+    # Text encoders trained via LoRA — base weights frozen,
+    # only LoRA params are trainable
+    for name, param in text_encoder.named_parameters():
+        if "lora" not in name.lower():
+            param.requires_grad_(False)
+    for name, param in text_encoder_2.named_parameters():
+        if "lora" not in name.lower():
+            param.requires_grad_(False)
 
     # ── Prepare training data ───────────────────────────────────────────────
 
@@ -735,23 +759,8 @@ async def train_face_model(req: Request):
         return_tensors="pt",
     ).input_ids.to("cuda")
 
-    # Encode text once (frozen encoders)
-    with torch.no_grad():
-        encoder_hidden_states = text_encoder(tokens_1)[0]
-        pooled_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
-        encoder_hidden_states_2 = pooled_output_2.hidden_states[-1]
-        pooled_prompt_embeds = pooled_output_2.text_embeds
-
-        # Ensure both have batch dimension (3D) before concatenating
-        if encoder_hidden_states.dim() == 2:
-            encoder_hidden_states = encoder_hidden_states.unsqueeze(0)
-        if encoder_hidden_states_2.dim() == 2:
-            encoder_hidden_states_2 = encoder_hidden_states_2.unsqueeze(0)
-
-        # Concatenate text encoder outputs
-        prompt_embeds = torch.cat(
-            [encoder_hidden_states, encoder_hidden_states_2], dim=-1
-        )
+    # Text embeddings computed dynamically inside training loop
+    # (text encoders are now trainable via LoRA)
 
     # Encode images with VAE
     import torchvision.transforms as T
@@ -790,12 +799,23 @@ async def train_face_model(req: Request):
 
     # ── Training loop ───────────────────────────────────────────────────────
 
-    optimizer = torch.optim.AdamW(unet.parameters(), lr=1e-5, weight_decay=1e-2)
+    # Collect trainable params with per-group learning rates
+    # UNet LoRA: 1e-5, Text encoder LoRA: 5e-6 (more conservative)
+    unet_lora_params = [p for n, p in unet.named_parameters()
+                        if p.requires_grad]
+    te1_lora_params = [p for n, p in text_encoder.named_parameters()
+                       if p.requires_grad]
+    te2_lora_params = [p for n, p in text_encoder_2.named_parameters()
+                       if p.requires_grad]
 
-    lora_params = [p for p in unet.parameters() if p.requires_grad]
-    print(f"Trainable LoRA params: {len(lora_params)}")
-    print(f"Total param tensors: {sum(1 for _ in unet.parameters())}")
-    print(f"Training config: steps=2000, rank=32, lr=1e-5, resolution=1024")
+    optimizer = torch.optim.AdamW([
+        {"params": unet_lora_params, "lr": 1e-5},
+        {"params": te1_lora_params, "lr": 5e-6},
+        {"params": te2_lora_params, "lr": 5e-6},
+    ], weight_decay=1e-2)
+
+    print(f"Trainable LoRA params: UNet={len(unet_lora_params)}, TE1={len(te1_lora_params)}, TE2={len(te2_lora_params)}")
+    print(f"Training config: steps=2000, rank=32 (unet) / rank=16 (te), lr=1e-5 (unet) / 5e-6 (te), resolution=1024")
 
     num_steps = 2000
     num_images = len(latents_list)
@@ -822,6 +842,21 @@ async def train_face_model(req: Request):
 
         # Add noise to latent
         noisy_latent = noise_scheduler.add_noise(latent, noise, timesteps)
+
+        # Recompute text embeddings each step (text encoders are trainable)
+        encoder_hidden_states = text_encoder(tokens_1)[0]
+        pooled_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
+        encoder_hidden_states_2 = pooled_output_2.hidden_states[-1]
+        pooled_prompt_embeds = pooled_output_2.text_embeds
+
+        if encoder_hidden_states.dim() == 2:
+            encoder_hidden_states = encoder_hidden_states.unsqueeze(0)
+        if encoder_hidden_states_2.dim() == 2:
+            encoder_hidden_states_2 = encoder_hidden_states_2.unsqueeze(0)
+
+        prompt_embeds = torch.cat(
+            [encoder_hidden_states, encoder_hidden_states_2], dim=-1
+        )
 
         # Forward pass in bf16 autocast (optimizer stays float32)
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
@@ -850,10 +885,12 @@ async def train_face_model(req: Request):
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            [p for p in unet.parameters() if p.requires_grad],
-            max_norm=1.0,
+        all_trainable = (
+            [p for p in unet.parameters() if p.requires_grad]
+            + [p for p in text_encoder.parameters() if p.requires_grad]
+            + [p for p in text_encoder_2.parameters() if p.requires_grad]
         )
+        torch.nn.utils.clip_grad_norm_(all_trainable, max_norm=1.0)
         optimizer.step()
 
     # ── Save LoRA weights to Volume (not source photos) ─────────────────────
@@ -874,6 +911,10 @@ async def train_face_model(req: Request):
                 )
 
     unet.save_pretrained(str(save_dir))
+
+    text_encoder.save_pretrained(str(save_dir / "text_encoder"))
+    text_encoder_2.save_pretrained(str(save_dir / "text_encoder_2"))
+    print("Text encoder LoRA weights saved")
 
     # Save best face crop for face swap stage during generation
     if _best_face_crop_bytes is not None:
@@ -926,6 +967,22 @@ async def train_face_model(req: Request):
                     {"content-type": "application/octet-stream", "upsert": "true"},
                 )
 
+        # Upload text encoder LoRA weights
+        for te_dir in ["text_encoder", "text_encoder_2"]:
+            te_path = save_dir / te_dir
+            if te_path.exists():
+                for fname in os.listdir(str(te_path)):
+                    fpath = te_path / fname
+                    if fpath.is_file():
+                        with open(str(fpath), "rb") as f:
+                            _sb.storage.from_("lora-weights").upload(
+                                f"{face_model_id}/{te_dir}/{fname}",
+                                f.read(),
+                                {"content-type": "application/octet-stream",
+                                 "upsert": "true"}
+                            )
+        print(f"Text encoder LoRA uploaded to Supabase")
+
         print(f"LoRA uploaded to Supabase Storage: lora-weights/{face_model_id}/")
     except Exception as e:
         print(f"WARNING: Supabase upload failed (volume backup still exists): {e}")
@@ -934,14 +991,26 @@ async def train_face_model(req: Request):
     lora_weights = [p for p in unet.parameters() if p.requires_grad]
     if lora_weights:
         max_val = max(p.abs().max().item() for p in lora_weights)
-        print(f"LoRA weight max absolute value: {max_val:.4f}")
+        print(f"UNet LoRA weight max absolute value: {max_val:.4f}")
         if max_val > 1.5:
             raise RuntimeError(
-                f"LoRA weights exploded (max={max_val:.4f} > 1.5). "
+                f"UNet LoRA weights exploded (max={max_val:.4f} > 1.5). "
                 "Aborting — lr still too high or grad clip not working."
             )
     else:
-        print("WARNING: No trainable LoRA parameters found")
+        print("WARNING: No trainable UNet LoRA parameters found")
+
+    te_weights = [p for p in text_encoder.parameters() if p.requires_grad]
+    te2_weights = [p for p in text_encoder_2.parameters() if p.requires_grad]
+    all_te_weights = te_weights + te2_weights
+    if all_te_weights:
+        te_max = max(p.abs().max().item() for p in all_te_weights)
+        print(f"Text encoder LoRA weight max: {te_max:.4f}")
+        if te_max > 0.5:
+            raise RuntimeError(
+                f"Text encoder LoRA weights unstable (max={te_max:.4f} > 0.5). "
+                "Lower text encoder LR."
+            )
 
     # Verify weights were actually saved
     volume_path = str(save_dir)
@@ -1146,6 +1215,23 @@ async def generate_illustrations(req: Request):
             except Exception as e:
                 print(f"Could not download {filename}: {e}")
 
+        # Download text encoder LoRA weights
+        for te_subdir in ["text_encoder", "text_encoder_2"]:
+            try:
+                te_files = ["adapter_model.safetensors", "adapter_config.json"]
+                te_local = lora_dir / te_subdir
+                te_local.mkdir(exist_ok=True)
+                for fname in te_files:
+                    try:
+                        data = _sb.storage.from_("lora-weights").download(
+                            f"{face_model_id}/{te_subdir}/{fname}"
+                        )
+                        (te_local / fname).write_bytes(data)
+                    except:
+                        pass  # file may not exist
+            except Exception as e:
+                print(f"Text encoder download skipped: {e}")
+
         if "adapter_model.safetensors" not in downloaded:
             print(f"ERROR: LoRA adapter not found in Supabase for {face_model_id}")
             print("Proceeding without face conditioning")
@@ -1192,10 +1278,33 @@ async def generate_illustrations(req: Request):
 
             pipe.fuse_lora(lora_scale=0.4)
             lora_loaded = True
-            print("LoRA loaded and fused successfully")
+            print("UNet LoRA loaded and fused successfully")
         except Exception as e:
-            print(f"ERROR loading LoRA: {e}")
+            print(f"ERROR loading UNet LoRA: {e}")
             print("Proceeding without face conditioning")
+
+    # Load text encoder LoRA if saved
+    if not skip_lora and lora_dir and lora_dir.exists():
+        te1_dir = lora_dir / "text_encoder"
+        te2_dir = lora_dir / "text_encoder_2"
+
+        if te1_dir.exists() and te2_dir.exists():
+            try:
+                from peft import PeftModel
+                pipe.text_encoder = PeftModel.from_pretrained(
+                    pipe.text_encoder, str(te1_dir)
+                )
+                pipe.text_encoder_2 = PeftModel.from_pretrained(
+                    pipe.text_encoder_2, str(te2_dir)
+                )
+                # Fuse text encoder LoRA
+                pipe.text_encoder = pipe.text_encoder.merge_and_unload()
+                pipe.text_encoder_2 = pipe.text_encoder_2.merge_and_unload()
+                print("Text encoder LoRA loaded and fused")
+            except Exception as e:
+                print(f"Text encoder LoRA load failed ({e}), using base encoders")
+        else:
+            print("No text encoder LoRA found, using base encoders")
 
     # Load face embedding for IP-Adapter FaceID conditioning
     face_embedding = None
@@ -1363,9 +1472,28 @@ async def generate_illustrations(req: Request):
                 pipe.load_lora_weights(tmp_dir, weight_name="adapter_model.safetensors")
 
             pipe.fuse_lora(lora_scale=0.4)
-            print("LoRA reloaded for scene generation")
+            print("UNet LoRA reloaded for scene generation")
         except Exception as e:
-            print(f"ERROR reloading LoRA for scenes: {e}")
+            print(f"ERROR reloading UNet LoRA for scenes: {e}")
+
+    # Reload text encoder LoRA for scenes
+    if lora_loaded and lora_dir and lora_dir.exists():
+        te1_dir = lora_dir / "text_encoder"
+        te2_dir = lora_dir / "text_encoder_2"
+        if te1_dir.exists() and te2_dir.exists():
+            try:
+                from peft import PeftModel
+                pipe.text_encoder = PeftModel.from_pretrained(
+                    pipe.text_encoder, str(te1_dir)
+                )
+                pipe.text_encoder_2 = PeftModel.from_pretrained(
+                    pipe.text_encoder_2, str(te2_dir)
+                )
+                pipe.text_encoder = pipe.text_encoder.merge_and_unload()
+                pipe.text_encoder_2 = pipe.text_encoder_2.merge_and_unload()
+                print("Text encoder LoRA reloaded and fused for scenes")
+            except Exception as e:
+                print(f"Text encoder LoRA reload failed for scenes ({e})")
 
     # Re-load IP-Adapter for scene pipe
     if ip_adapter_embeds is not None:
