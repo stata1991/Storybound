@@ -23,26 +23,29 @@ export async function POST(req: NextRequest) {
     skipLora?: boolean;
   };
 
-  // Server is source of truth for skip_lora — override client if DB says LoRA exists
+  // Server is source of truth — check DB for LoRA state
   let skipLora = clientSkipLora ?? false;
 
-  if (skipLora) {
-    const admin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-    const { data: harvest } = await admin
-      .from("harvests")
-      .select("face_ref_generated, face_ref_path")
-      .eq("id", harvestId)
-      .single();
+  const admin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+  const { data: harvest } = await admin
+    .from("harvests")
+    .select("face_ref_generated, face_ref_path")
+    .eq("id", harvestId)
+    .single();
 
-    if (harvest?.face_ref_generated && harvest?.face_ref_path) {
-      skipLora = false;
-    }
+  // If client says skipLora but LoRA exists, use the LoRA
+  if (skipLora && harvest?.face_ref_generated && harvest?.face_ref_path) {
+    skipLora = false;
   }
 
-  if (skipLora || process.env.NODE_ENV === "development") {
+  // If LoRA already trained, go straight to illustration generation
+  // (photos may be deleted per privacy contract — don't re-train)
+  const loraExists = harvest?.face_ref_generated && harvest?.face_ref_path;
+
+  if (skipLora || loraExists || process.env.NODE_ENV === "development") {
     const result = await triggerIllustrationPipeline(harvestId, skipLora);
     return NextResponse.json(result);
   }
