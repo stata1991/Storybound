@@ -1525,11 +1525,11 @@ async def generate_illustrations(req: Request):
 @modal.fastapi_endpoint(method="POST")
 async def delete_face_model(req: Request):
     """
-    Delete LoRA weights from Modal Volume after book generation is complete.
-    Maps to constraint step 5: "Book generation complete → LoRA weights deleted"
+    Delete LoRA weights and character photos after book generation is complete.
+    Maps to privacy constraint steps 4-5.
 
     Request body:
-      { "face_model_id": "uuid" }
+      { "face_model_id": "uuid", "child_id": "uuid" }
 
     Response:
       { "deleted": true, "face_model_id": "uuid" }
@@ -1540,17 +1540,19 @@ async def delete_face_model(req: Request):
     body = await req.json()
 
     face_model_id = body.get("face_model_id", "")
+    child_id = body.get("child_id", "")
     if not face_model_id:
         web_error({"error": "face_model_id required"})
 
-    # 1. Delete from Supabase Storage (primary store)
+    from supabase import create_client as _create_sb_del
+    _sb = _create_sb_del(
+        os.environ.get("SUPABASE_URL"),
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY"),
+    )
+
+    # 1. Delete LoRA weights from Supabase Storage
     supabase_deleted = 0
     try:
-        from supabase import create_client as _create_sb_del
-        _sb = _create_sb_del(
-            os.environ.get("SUPABASE_URL"),
-            os.environ.get("SUPABASE_SERVICE_ROLE_KEY"),
-        )
         listed = _sb.storage.from_("lora-weights").list(face_model_id)
         if listed:
             paths = [f"{face_model_id}/{f['name']}" for f in listed]
@@ -1560,7 +1562,23 @@ async def delete_face_model(req: Request):
     except Exception as e:
         print(f"WARNING: Supabase lora-weights cleanup failed (continuing): {e}")
 
-    # 2. Delete from Modal Volume (backup store)
+    # 2. Delete character photos from Supabase Storage
+    photos_deleted = 0
+    if child_id:
+        try:
+            listed = _sb.storage.from_("character-photos").list(child_id)
+            if listed:
+                paths = [f"{child_id}/{f['name']}" for f in listed if f.get("name")]
+                if paths:
+                    _sb.storage.from_("character-photos").remove(paths)
+                    photos_deleted = len(paths)
+                    print(f"Supabase character-photos: deleted {photos_deleted} files for child {child_id}")
+        except Exception as e:
+            print(f"WARNING: Supabase character-photos cleanup failed (continuing): {e}")
+    else:
+        print("WARNING: No child_id provided — skipping character-photos cleanup")
+
+    # 3. Delete from Modal Volume (backup store)
     lora_dir = Path(LORA_VOLUME_PATH) / face_model_id
     volume_deleted = False
     if lora_dir.exists():
@@ -1568,7 +1586,7 @@ async def delete_face_model(req: Request):
         await lora_volume.commit.aio()
         volume_deleted = True
 
-    if not volume_deleted and supabase_deleted == 0:
+    if not volume_deleted and supabase_deleted == 0 and photos_deleted == 0:
         return {
             "deleted": False,
             "face_model_id": face_model_id,
@@ -1579,6 +1597,7 @@ async def delete_face_model(req: Request):
         "deleted": True,
         "face_model_id": face_model_id,
         "supabase_files_deleted": supabase_deleted,
+        "character_photos_deleted": photos_deleted,
         "volume_deleted": volume_deleted,
     }
 

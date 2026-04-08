@@ -759,9 +759,10 @@ export async function completeIllustrationGeneration(
     return { error: `Illustration generation failed: ${msg}` };
   }
 
-  // Delete LoRA weights
+  // Delete LoRA weights + character photos
   await callModal(process.env.MODAL_DELETE_URL!, {
     face_model_id: faceModelId,
+    child_id: harvest.child_id,
   }).catch(() => {});
   logEvent({
     event_type: "face_model_deleted",
@@ -1073,10 +1074,11 @@ export async function triggerIllustrationPipeline(
       return { error: `Illustration generation failed: ${msg}` };
     }
 
-    // Delete LoRA weights after successful generation
+    // Delete LoRA weights + character photos after successful generation
     try {
       await callModal(process.env.MODAL_DELETE_URL!, {
         face_model_id: existingModelId,
+        child_id: harvest.child_id,
       });
       logEvent({
         event_type: "face_model_deleted",
