@@ -13,11 +13,11 @@ function Hero() {
         <Image
           src="/icon.png"
           alt="Storybound"
-          width={96}
-          height={96}
-          className="rounded-2xl shadow-warm mx-auto"
+          width={160}
+          height={160}
+          className="rounded-3xl shadow-warm mx-auto mb-6"
         />
-        <p className="mt-4 font-serif text-lg italic text-navy/70">
+        <p className="font-serif text-lg italic text-navy/70">
           Where your child&rsquo;s world becomes their greatest adventure
         </p>
         <p className="mt-6 mb-4 font-sans text-sm font-medium uppercase tracking-widest text-gold">
