@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 
 
 /* ─── Hero ─────────────────────────────────────────────────────────────────── */
@@ -9,7 +10,17 @@ function Hero() {
   return (
     <section className="bg-cream px-6 py-24 md:py-32 lg:py-40">
       <div className="mx-auto max-w-3xl text-center">
-        <p className="mb-4 font-sans text-sm font-medium uppercase tracking-widest text-gold">
+        <Image
+          src="/icon.png"
+          alt="Storybound"
+          width={96}
+          height={96}
+          className="rounded-2xl shadow-warm mx-auto"
+        />
+        <p className="mt-4 font-serif text-lg italic text-navy/70">
+          Where your child&rsquo;s world becomes their greatest adventure
+        </p>
+        <p className="mt-6 mb-4 font-sans text-sm font-medium uppercase tracking-widest text-gold">
           A quarterly storybook subscription
         </p>
         <h1 className="font-serif text-4xl font-bold leading-tight text-navy md:text-5xl lg:text-6xl">
