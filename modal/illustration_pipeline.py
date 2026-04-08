@@ -1130,9 +1130,17 @@ async def generate_illustrations(req: Request):
     if not prompts or len(prompts) > 12:
         web_error({"error": "Between 1 and 12 prompts required"})
 
+    # Resolve gender word from pronouns — used in prompts and negatives
+    if "she" in child_pronouns.lower() or child_pronouns == "she_her":
+        gender_word = "girl"
+    elif "he" in child_pronouns.lower() or child_pronouns == "he_him":
+        gender_word = "boy"
+    else:
+        gender_word = "child"
+
     print(f"Received {len(prompts)} scene prompts")
     print(f"Generating {len(prompts)} scenes + 1 cover")
-    print(f"Child age: {child_age}, pronouns: {child_pronouns}")
+    print(f"Child age: {child_age}, pronouns: {child_pronouns}, gender_word: {gender_word}")
 
     # ── Build prompt components ─────────────────────────────────────────────
 
@@ -1164,6 +1172,17 @@ async def generate_illustrations(req: Request):
             skin_tone_hint = "light brown skin"
         if skin_tone_hint:
             print(f"Skin tone hint (LoRA active): {skin_tone_hint}")
+
+    # Gender-specific negative prompt additions
+    if gender_word == "boy":
+        gender_negative = "girl, female, feminine, pigtails, dress, skirt"
+    elif gender_word == "girl":
+        gender_negative = "boy, male, masculine"
+    else:
+        gender_negative = ""
+
+    scene_negative = (gender_negative + ", " + NEGATIVE_PROMPT) if gender_negative else NEGATIVE_PROMPT
+    print(f"Gender negative: {gender_negative or '(none)'}")
 
     if hair_description:
         print(f"Hair description (from story bible): {hair_description}")
@@ -1378,7 +1397,7 @@ async def generate_illustrations(req: Request):
 
     generator = torch.Generator(device="cuda").manual_seed(episode_seed) if episode_seed is not None else None
 
-    cover_negative = NEGATIVE_PROMPT + ", photograph, photo, realistic, photorealistic, blurry, out of focus"
+    cover_negative = scene_negative + ", photograph, photo, realistic, photorealistic, blurry, out of focus"
 
     result = pipe(
         prompt=styled_cover,
@@ -1515,6 +1534,8 @@ async def generate_illustrations(req: Request):
     for i, raw_prompt in enumerate(prompts):
         scene_desc = truncate_scene_description(raw_prompt)
         parts = [age_prefix, lora_token]
+        if gender_word in ("boy", "girl"):
+            parts.append(gender_word)
         if skin_tone_hint:
             parts.append(skin_tone_hint)
         if hair_description:
@@ -1535,7 +1556,7 @@ async def generate_illustrations(req: Request):
 
         result = pipe(
             prompt=styled_prompt,
-            negative_prompt=NEGATIVE_PROMPT,
+            negative_prompt=scene_negative,
             width=768,
             height=768,
             num_inference_steps=40,
