@@ -519,6 +519,7 @@ def generate_flux_illustrations(body: dict) -> dict:
     import os
     import gc
     import hashlib
+    import requests
     import torch
     import numpy as np
     import cv2
@@ -878,6 +879,25 @@ def generate_flux_illustrations(body: dict) -> dict:
             }).eq("id", episode_id).execute()
 
             print(f"All {len(all_images)} illustrations uploaded")
+
+            # Fire webhook callback to notify web app
+            callback_url = body.get("callback_url")
+            if callback_url:
+                try:
+                    requests.post(
+                        callback_url,
+                        json={"harvest_id": harvest_id, "status": "complete"},
+                        headers={
+                            "x-webhook-secret": body.get("webhook_secret", ""),
+                            "Content-Type": "application/json",
+                        },
+                        timeout=30,
+                        allow_redirects=True,
+                    )
+                    print(f"Webhook fired to {callback_url}")
+                except Exception as e:
+                    print(f"Webhook failed: {e}")
+
             return {"status": "complete",
                     "count": len(all_images)}
 
@@ -930,6 +950,7 @@ def train_face_model_http(request: dict) -> dict:
 )
 @modal.fastapi_endpoint(method="POST")
 def generate_illustrations_http(request: dict) -> dict:
+    import os
     # Map SDXL payload format to FLUX format
     # SDXL sends: prompts, age, pronouns, character_description,
     #             hair_description, face_model_id, cover_prompt
@@ -970,10 +991,12 @@ def generate_illustrations_http(request: dict) -> dict:
         "episode_id": request.get("episode_id"),
         "child_id": request.get("child_id"),
         "skip_lora": request.get("skip_lora", False),
+        "callback_url": os.environ.get("ILLUSTRATION_COMPLETE_WEBHOOK_URL", ""),
+        "webhook_secret": os.environ.get("MODAL_WEBHOOK_SECRET", ""),
     }
 
-    result = generate_flux_illustrations.local(flux_payload)
-    return result
+    generate_flux_illustrations.spawn(flux_payload)
+    return {"status": "generating", "message": "Generation started"}
 
 
 @app.function(

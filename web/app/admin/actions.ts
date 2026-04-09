@@ -762,6 +762,8 @@ export async function completeIllustrationGeneration(
           harvest_id: harvestId,
           episode_id: episode?.id,
           child_id: harvest.child_id,
+          callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/api/admin/illustrations-complete`,
+          webhook_secret: process.env.MODAL_WEBHOOK_SECRET,
         } : {}),
       }
     );
@@ -1040,6 +1042,8 @@ export async function triggerIllustrationPipeline(
     harvest_id: harvestId,
     episode_id: episode?.id,
     child_id: childId,
+    callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/api/admin/illustrations-complete`,
+    webhook_secret: process.env.MODAL_WEBHOOK_SECRET,
   } : {};
 
   if (forceSkipLora) {

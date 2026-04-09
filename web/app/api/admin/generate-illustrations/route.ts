@@ -1,4 +1,4 @@
-export const maxDuration = 300;
+export const maxDuration = 600; // 10 minutes
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
