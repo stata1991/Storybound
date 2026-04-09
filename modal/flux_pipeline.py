@@ -983,7 +983,7 @@ def generate_illustrations_http(request: dict) -> dict:
         "skip_lora": request.get("skip_lora", False),
     }
 
-    result = generate_flux_illustrations(flux_payload)
+    result = generate_flux_illustrations.local(flux_payload)
     return result
 
 
