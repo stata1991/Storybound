@@ -544,15 +544,41 @@ def generate_flux_illustrations(body: dict) -> dict:
     # Gender word from pronouns
     if pronouns == "boy":
         gender_word = "boy"
+        gender_clip_reinforcement = (
+            "boy, male child, short hair, "
+            "no pigtails, no ponytails, no hair ties, "
+            "no braids, no hair accessories, "
+        )
+        gender_t5_reinforcement = (
+            "boy with short hair, male child, "
+            "short straight hair, hair cut above ears, "
+            "no hair accessories, no hair ties, "
+        )
         gender_negative = (
-            "girl, female, feminine, pigtails, ponytails, "
-            "dress, skirt, "
+            "girl, female, feminine, "
+            "pigtails, ponytails, twin tails, side tails, "
+            "hair ties, hair ribbons, hair clips, hair bows, "
+            "hair accessories, braids, plaits, "
+            "dress, skirt, frock, feminine clothing, "
+            "long hair, hair past ears, hair past collar, "
+            "she, her, "
         )
     elif pronouns == "girl":
         gender_word = "girl"
-        gender_negative = "boy, male, masculine, "
+        gender_clip_reinforcement = (
+            "girl, female child, "
+        )
+        gender_t5_reinforcement = (
+            "girl with long hair, female child, "
+        )
+        gender_negative = (
+            "boy, male, masculine, "
+            "short hair, buzz cut, "
+        )
     else:
         gender_word = "child"
+        gender_clip_reinforcement = ""
+        gender_t5_reinforcement = ""
         gender_negative = ""
 
     age_prefix = f"{child_age}-year-old toddler {gender_word}"
@@ -567,10 +593,10 @@ def generate_flux_illustrations(body: dict) -> dict:
     )
 
     NEGATIVE_PROMPT = (
-        "disproportionate head, oversized head, big head, chibi, "
-        "bobblehead, huge head, head too large, giant head, "
-        "head larger than torso, no visible body, " +
         gender_negative +
+        "disproportionate head, oversized head, big head, "
+        "chibi, bobblehead, huge head, head too large, "
+        "giant head, head larger than torso, no visible body, "
         "oil painting, photorealistic, photograph, "
         "realistic rendering, back of head, facing away, "
         "looking away, turned away, black and white, monochrome, "
@@ -660,7 +686,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                     str(lora_dir),
                     weight_name="adapter_model_remapped.safetensors"
                 )
-                pipe.fuse_lora(lora_scale=0.7)
+                pipe.fuse_lora(lora_scale=0.85)
                 print("FLUX LoRA loaded and fused")
             else:
                 print("No adapter_model.safetensors found — skipping LoRA")
@@ -678,13 +704,16 @@ def generate_flux_illustrations(body: dict) -> dict:
 
             # CLIP-L prompt — short, under 60 tokens
             cover_clip = (
+                f"{gender_clip_reinforcement}"
                 f"{age_prefix}, sks child, "
-                f"{'short hair, ' if pronouns == 'boy' else ''}"
-                f"realistic proportions, portrait, storybook illustration"
-            )
+                f"realistic proportions, portrait, storybook illustration, "
+                f"{gender_clip_reinforcement}"
+            ).strip(", ")
             # T5-XXL prompt — full detail with avoid_str
             cover_t5 = (
-                f"{avoid_str}{age_prefix}, sks child, "
+                f"{avoid_str}"
+                f"{gender_t5_reinforcement}"
+                f"{age_prefix}, sks child, "
                 f"{skin_tone + ', ' if skin_tone else ''}"
                 f"portrait, magical storybook world, "
                 f"looking at viewer, warm smile"
@@ -728,15 +757,17 @@ def generate_flux_illustrations(body: dict) -> dict:
             for i, scene_desc in enumerate(scene_prompts):
                 # CLIP-L prompt — short, under 60 tokens
                 scene_clip = (
+                    f"{gender_clip_reinforcement}"
                     f"{age_prefix}, sks child, "
-                    f"{'short hair, ' if pronouns == 'boy' else ''}"
-                    f"realistic proportions, "
-                    f"foreground, facing camera, "
-                    f"{scene_desc}, storybook illustration"
-                )
+                    f"realistic proportions, foreground, facing camera, "
+                    f"{scene_desc}, storybook illustration, "
+                    f"{gender_clip_reinforcement}"
+                ).strip(", ")
                 # T5-XXL prompt — full detail with avoid_str
                 scene_t5 = (
-                    f"{avoid_str}{age_prefix}, sks child, "
+                    f"{avoid_str}"
+                    f"{gender_t5_reinforcement}"
+                    f"{age_prefix}, sks child, "
                     f"{skin_tone + ', ' if skin_tone else ''}"
                     f"foreground, facing camera, "
                     f"{scene_desc}"
@@ -758,7 +789,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                     guidance_scale=4.0,
                     num_images_per_prompt=5,
                     generator=torch.Generator("cuda").manual_seed(
-                        seed_base + i
+                        seed_base
                     ),
                 ).images
 
@@ -814,7 +845,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                             guidance_scale=4.0,
                             num_images_per_prompt=5,
                             generator=torch.Generator("cuda").manual_seed(
-                                seed_base + i + 1000
+                                seed_base + 1000
                             ),
                         ).images
                         print(f"Scene {i+1} retry: "
