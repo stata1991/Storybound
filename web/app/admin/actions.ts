@@ -406,12 +406,20 @@ async function callModal<T>(url: string, body: Record<string, unknown>): Promise
     signal: AbortSignal.timeout(300_000), // 5 minutes
   });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "No response body");
-    throw new Error(`Modal returned ${res.status}: ${text}`);
+  const responseText = await res.text();
+  if (!responseText || responseText.trim() === "") {
+    return { status: "ok" } as T;
   }
-
-  return res.json() as Promise<T>;
+  let data: T;
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error(`Modal returned non-JSON: ${responseText}`);
+  }
+  if (!res.ok) {
+    throw new Error(`Modal error ${res.status}: ${JSON.stringify(data)}`);
+  }
+  return data;
 }
 
 function buildDefaultPrompts(
