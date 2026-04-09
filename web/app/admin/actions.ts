@@ -6,6 +6,10 @@ import { logEvent } from "@/lib/audit";
 import { buildCoverPrompt } from "@/lib/book/cover-prompt";
 import { sanitizeForPrompt, sanitizeArrayForPrompt } from "@/lib/utils/sanitize";
 
+/* ─── Pipeline toggle ─────────────────────────────────────────────────────── */
+
+const USE_FLUX = process.env.USE_FLUX_PIPELINE === "true";
+
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
 export interface AdminStats {
@@ -516,8 +520,12 @@ export async function startFaceTraining(
 
   // Fire Modal train request — short timeout just to confirm Modal accepted the job
   // Training runs async on Modal; completion arrives via /api/admin/training-complete webhook
+  const trainUrl = USE_FLUX
+    ? process.env.MODAL_FLUX_TRAIN_URL!
+    : process.env.MODAL_TRAIN_URL!;
+
   try {
-    const res = await fetch(process.env.MODAL_TRAIN_URL!, {
+    const res = await fetch(trainUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -734,19 +742,31 @@ export async function completeIllustrationGeneration(
 
   // ── Generate illustrations with LoRA ───────────────────────────────────────
 
+  const generateUrl = USE_FLUX
+    ? process.env.MODAL_FLUX_GENERATE_URL!
+    : process.env.MODAL_GENERATE_URL!;
+  const deleteUrl = USE_FLUX
+    ? process.env.MODAL_FLUX_DELETE_URL!
+    : process.env.MODAL_DELETE_URL!;
+
   let genResult: ModalGenerateResponse;
   try {
     genResult = await callModal<ModalGenerateResponse>(
-      process.env.MODAL_GENERATE_URL!,
+      generateUrl,
       {
         face_model_id: faceModelId,
         prompts,
         ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
         ...modalSharedParams,
+        ...(USE_FLUX ? {
+          harvest_id: harvestId,
+          episode_id: episode?.id,
+          child_id: harvest.child_id,
+        } : {}),
       }
     );
   } catch (e) {
-    await callModal(process.env.MODAL_DELETE_URL!, {
+    await callModal(deleteUrl, {
       face_model_id: faceModelId,
     }).catch(() => {});
     const msg = e instanceof Error ? e.message : "Unknown error";
@@ -760,7 +780,7 @@ export async function completeIllustrationGeneration(
   }
 
   // Delete LoRA weights + character photos
-  await callModal(process.env.MODAL_DELETE_URL!, {
+  await callModal(deleteUrl, {
     face_model_id: faceModelId,
     child_id: harvest.child_id,
   }).catch(() => {});
@@ -1009,6 +1029,19 @@ export async function triggerIllustrationPipeline(
     ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
   };
 
+  const generateUrl = USE_FLUX
+    ? process.env.MODAL_FLUX_GENERATE_URL!
+    : process.env.MODAL_GENERATE_URL!;
+  const deleteUrl = USE_FLUX
+    ? process.env.MODAL_FLUX_DELETE_URL!
+    : process.env.MODAL_DELETE_URL!;
+
+  const fluxExtraFields = USE_FLUX ? {
+    harvest_id: harvestId,
+    episode_id: episode?.id,
+    child_id: childId,
+  } : {};
+
   if (forceSkipLora) {
     logEvent({
       event_type: "illustration.pipeline",
@@ -1019,12 +1052,13 @@ export async function triggerIllustrationPipeline(
 
     try {
       genResult = await callModal<ModalGenerateResponse>(
-        process.env.MODAL_GENERATE_URL!,
+        generateUrl,
         {
           prompts,
           skip_lora: true,
           ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
           ...modalSharedParams,
+          ...fluxExtraFields,
         }
       );
     } catch (e) {
@@ -1051,12 +1085,13 @@ export async function triggerIllustrationPipeline(
 
     try {
       genResult = await callModal<ModalGenerateResponse>(
-        process.env.MODAL_GENERATE_URL!,
+        generateUrl,
         {
           face_model_id: existingModelId,
           prompts,
           ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
           ...modalSharedParams,
+          ...fluxExtraFields,
         }
       );
       console.log("Modal generate_illustrations returned:", {
@@ -1076,7 +1111,7 @@ export async function triggerIllustrationPipeline(
 
     // Delete LoRA weights + character photos after successful generation
     try {
-      await callModal(process.env.MODAL_DELETE_URL!, {
+      await callModal(deleteUrl, {
         face_model_id: existingModelId,
         child_id: harvest.child_id,
       });
