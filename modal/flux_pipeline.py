@@ -785,13 +785,6 @@ def generate_flux_illustrations(body: dict) -> dict:
                                 (f.bbox[3]-f.bbox[1])
                             )
                         )
-                        # Skip candidates with wrong gender based on parent's onboarding input
-                        if pronouns == "boy" and hasattr(face, 'gender') and face.gender == 0:
-                            print(f"  Scene {i+1} candidate {j}: skipped (female detected, pronouns=boy)")
-                            continue
-                        if pronouns == "girl" and hasattr(face, 'gender') and face.gender == 1:
-                            print(f"  Scene {i+1} candidate {j}: skipped (male detected, pronouns=girl)")
-                            continue
                         gen_emb = torch.from_numpy(
                             face.normed_embedding
                         ).unsqueeze(0).float()
@@ -840,10 +833,6 @@ def generate_flux_illustrations(body: dict) -> dict:
                                     (f.bbox[3]-f.bbox[1])
                                 )
                             )
-                            if pronouns == "boy" and hasattr(face, 'gender') and face.gender == 0:
-                                continue
-                            if pronouns == "girl" and hasattr(face, 'gender') and face.gender == 1:
-                                continue
                             gen_emb = torch.from_numpy(
                                 face.normed_embedding
                             ).unsqueeze(0).float()
