@@ -229,8 +229,13 @@ export function RunIllustrationsButton({
       if (!res.ok) return;
       const data = (await res.json()) as { status: string };
 
-      if (data.status === "processing" || data.status === "complete") {
-        // Training done, generation complete or in progress
+      if (data.status === "processing" && phase === "training") {
+        // Training done, generation now running — update phase
+        setPhase("generating");
+      }
+
+      if (data.status === "complete") {
+        // Everything done — stop polling
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = null;
         setDone(true);
@@ -260,8 +265,9 @@ export function RunIllustrationsButton({
       const result = await res.json();
 
       if (res.status === 202) {
-        // Async training started — poll for completion
-        setPhase("training");
+        // Async operation started — poll for completion
+        const asyncPhase = result.status === "generating" ? "generating" : "training";
+        setPhase(asyncPhase);
         if (result.message) setTrainingMessage(result.message);
         pollRef.current = setInterval(pollHarvestStatus, 15_000);
         inFlightRef.current = false;
@@ -301,9 +307,11 @@ export function RunIllustrationsButton({
   const phaseLabel =
     phase === "training"
       ? "Training face model... "
-      : skipLora
-        ? "Running (base model)... "
-        : "Running illustrations... ";
+      : phase === "generating"
+        ? "Generating illustrations... "
+        : skipLora
+          ? "Running (base model)... "
+          : "Running illustrations... ";
 
   return (
     <div>
@@ -317,6 +325,15 @@ export function RunIllustrationsButton({
           <p className="font-medium">LoRA face training in progress</p>
           <p className="mt-1 text-xs text-indigo-500">
             {trainingMessage ?? "Illustrations will generate automatically when training completes."}{" "}
+            Polling every 15s.
+          </p>
+        </div>
+      )}
+      {phase === "generating" && (
+        <div className="mb-4 rounded bg-violet-50 px-4 py-3 text-sm text-violet-700">
+          <p className="font-medium">Generating illustrations</p>
+          <p className="mt-1 text-xs text-violet-500">
+            {trainingMessage ?? "Illustrations are being generated in the background."}{" "}
             Polling every 15s.
           </p>
         </div>

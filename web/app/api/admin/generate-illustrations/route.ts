@@ -47,6 +47,15 @@ export async function POST(req: NextRequest) {
 
   if (skipLora || loraExists || process.env.NODE_ENV === "development") {
     const result = await triggerIllustrationPipeline(harvestId, skipLora);
+
+    // FLUX path: generation is async — return 202 so client polls
+    if (process.env.USE_FLUX_PIPELINE === "true" && "success" in result) {
+      return NextResponse.json(
+        { status: "generating", message: "Illustrations generating in background" },
+        { status: 202 }
+      );
+    }
+
     return NextResponse.json(result);
   }
 
