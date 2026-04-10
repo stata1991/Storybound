@@ -463,9 +463,9 @@ export async function startFaceTraining(
   if (!harvestRaw) return { error: "Harvest not found." };
   const harvest = harvestRaw as unknown as HarvestFullDbRow;
 
-  // Allow "training" status for retries after timeout failures
-  if (harvest.status !== "processing" && harvest.status !== "training") {
-    return { error: `Harvest status is '${harvest.status}', expected 'processing' or 'training'.` };
+  // Allow "submitted" and "training" status for retries after timeout failures
+  if (!["submitted", "processing", "training"].includes(harvest.status)) {
+    return { error: `Harvest status is '${harvest.status}', expected 'submitted', 'processing', or 'training'.` };
   }
 
   const childId = harvest.child_id;
@@ -935,8 +935,8 @@ export async function triggerIllustrationPipeline(
   if (!harvestRaw) return { error: "Harvest not found." };
   const harvest = harvestRaw as unknown as HarvestFullDbRow;
 
-  if (harvest.status !== "processing") {
-    return { error: `Harvest status is '${harvest.status}', expected 'processing'.` };
+  if (!["submitted", "processing"].includes(harvest.status)) {
+    return { error: `Harvest status is '${harvest.status}', expected 'submitted' or 'processing'.` };
   }
 
   const { data: childRaw } = await supa
