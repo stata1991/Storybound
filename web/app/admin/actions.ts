@@ -789,6 +789,19 @@ export async function completeIllustrationGeneration(
     return { error: `Illustration generation failed: ${msg}` };
   }
 
+  // FLUX path: generation is async — Modal returns immediately, webhook handles completion
+  if (USE_FLUX) {
+    logEvent({
+      event_type: "illustration.generation",
+      status: "started",
+      harvest_id: harvestId,
+      message: "FLUX generation spawned — waiting for webhook callback",
+    });
+    return { success: true };
+  }
+
+  // SDXL path: generation is synchronous — process results inline
+
   // Delete LoRA weights + character photos
   await callModal(deleteUrl, {
     face_model_id: faceModelId,
@@ -812,19 +825,21 @@ export async function completeIllustrationGeneration(
   const episodeId = episode?.id ?? "no-episode";
   const illustrationPaths: string[] = [];
 
-  for (const ill of genResult.illustrations) {
-    const pngBuffer = Buffer.from(ill.data, "base64");
-    const storagePath = `${child.id}/${episodeId}/${ill.index}.png`;
+  if (genResult?.illustrations && Array.isArray(genResult.illustrations)) {
+    for (const ill of genResult.illustrations) {
+      const pngBuffer = Buffer.from(ill.data, "base64");
+      const storagePath = `${child.id}/${episodeId}/${ill.index}.png`;
 
-    const { error: upErr } = await supa.storage
-      .from("illustrations")
-      .upload(storagePath, pngBuffer, {
-        contentType: "image/png",
-        upsert: true,
-      });
+      const { error: upErr } = await supa.storage
+        .from("illustrations")
+        .upload(storagePath, pngBuffer, {
+          contentType: "image/png",
+          upsert: true,
+        });
 
-    if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
-    illustrationPaths.push(storagePath);
+      if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
+      illustrationPaths.push(storagePath);
+    }
   }
 
   // ── Update episode ─────────────────────────────────────────────────────────
@@ -1121,38 +1136,53 @@ export async function triggerIllustrationPipeline(
       return { error: `Illustration generation failed: ${msg}` };
     }
 
-    // Delete LoRA weights + character photos after successful generation
-    try {
-      await callModal(deleteUrl, {
-        face_model_id: existingModelId,
-        child_id: harvest.child_id,
-      });
-      logEvent({
-        event_type: "face_model_deleted",
-        status: "success",
-        harvest_id: harvestId,
-        message: `LoRA weights deleted (face_model_id: ${existingModelId})`,
-      });
-    } catch (err) {
-      console.error("Failed to delete face model:", err);
-      logEvent({
-        event_type: "face_model_delete_failed",
-        status: "error",
-        harvest_id: harvestId,
-        message: `Failed to delete LoRA (face_model_id: ${existingModelId})`,
-      });
-    }
+    // SDXL: delete LoRA inline. FLUX: webhook handles deletion.
+    if (!USE_FLUX) {
+      try {
+        await callModal(deleteUrl, {
+          face_model_id: existingModelId,
+          child_id: harvest.child_id,
+        });
+        logEvent({
+          event_type: "face_model_deleted",
+          status: "success",
+          harvest_id: harvestId,
+          message: `LoRA weights deleted (face_model_id: ${existingModelId})`,
+        });
+      } catch (err) {
+        console.error("Failed to delete face model:", err);
+        logEvent({
+          event_type: "face_model_delete_failed",
+          status: "error",
+          harvest_id: harvestId,
+          message: `Failed to delete LoRA (face_model_id: ${existingModelId})`,
+        });
+      }
 
-    // Clear face ref from harvest
-    await supa
-      .from("harvests")
-      .update({ face_ref_generated: false, face_ref_path: null })
-      .eq("id", harvestId);
+      // Clear face ref from harvest
+      await supa
+        .from("harvests")
+        .update({ face_ref_generated: false, face_ref_path: null })
+        .eq("id", harvestId);
+    }
   } else {
     // Training is now async — use the generate-illustrations route which fires
     // startFaceTraining + webhook. This sync path should not be reached.
     return { error: "No LoRA model found. Use the async training path (generate-illustrations route) instead." };
   }
+
+  // FLUX path: generation is async — Modal returns immediately, webhook handles completion
+  if (USE_FLUX) {
+    logEvent({
+      event_type: "illustration.pipeline",
+      status: "started",
+      harvest_id: harvestId,
+      message: "FLUX generation spawned — waiting for webhook callback",
+    });
+    return { success: true };
+  }
+
+  // SDXL path: generation is synchronous — process results inline
 
   // ── Upload illustrations to Supabase Storage ───────────────────────────────
 
@@ -1167,19 +1197,21 @@ export async function triggerIllustrationPipeline(
     const episodeId = episode?.id ?? "no-episode";
     const illustrationPaths: string[] = [];
 
-    for (const ill of genResult.illustrations) {
-      const pngBuffer = Buffer.from(ill.data, "base64");
-      const storagePath = `${child.id}/${episodeId}/${ill.index}.png`;
+    if (genResult?.illustrations && Array.isArray(genResult.illustrations)) {
+      for (const ill of genResult.illustrations) {
+        const pngBuffer = Buffer.from(ill.data, "base64");
+        const storagePath = `${child.id}/${episodeId}/${ill.index}.png`;
 
-      const { error: upErr } = await supa.storage
-        .from("illustrations")
-        .upload(storagePath, pngBuffer, {
-          contentType: "image/png",
-          upsert: true,
-        });
+        const { error: upErr } = await supa.storage
+          .from("illustrations")
+          .upload(storagePath, pngBuffer, {
+            contentType: "image/png",
+            upsert: true,
+          });
 
-      if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
-      illustrationPaths.push(storagePath);
+        if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
+        illustrationPaths.push(storagePath);
+      }
     }
 
     if (episode) {

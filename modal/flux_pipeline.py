@@ -546,8 +546,6 @@ def generate_flux_illustrations(body: dict) -> dict:
         gender_word = "boy"
         gender_clip_reinforcement = (
             "boy, male child, short hair, "
-            "no pigtails, no ponytails, no hair ties, "
-            "no braids, no hair accessories, "
         )
         gender_t5_reinforcement = (
             "boy with short hair, male child, "
@@ -706,9 +704,8 @@ def generate_flux_illustrations(body: dict) -> dict:
             cover_clip = (
                 f"{gender_clip_reinforcement}"
                 f"{age_prefix}, sks child, "
-                f"realistic proportions, portrait, storybook illustration, "
-                f"{gender_clip_reinforcement}"
-            ).strip(", ")
+                f"realistic proportions, portrait, storybook illustration"
+            )
             # T5-XXL prompt — full detail with avoid_str
             cover_t5 = (
                 f"{avoid_str}"
@@ -760,9 +757,8 @@ def generate_flux_illustrations(body: dict) -> dict:
                     f"{gender_clip_reinforcement}"
                     f"{age_prefix}, sks child, "
                     f"realistic proportions, foreground, facing camera, "
-                    f"{scene_desc}, storybook illustration, "
-                    f"{gender_clip_reinforcement}"
-                ).strip(", ")
+                    f"{scene_desc}, storybook illustration"
+                )
                 # T5-XXL prompt — full detail with avoid_str
                 scene_t5 = (
                     f"{avoid_str}"
@@ -1037,7 +1033,7 @@ def generate_illustrations_http(request: dict) -> dict:
 )
 @modal.fastapi_endpoint(method="POST")
 def delete_face_model_http(request: dict) -> dict:
-    return delete_face_model(
+    return delete_face_model.local(
         face_model_id=request.get("face_model_id"),
         child_id=request.get("child_id"),
         harvest_id=request.get("harvest_id"),
