@@ -500,7 +500,7 @@ def train_flux_lora(
 @app.function(
     image=flux_image,
     gpu="L40S",
-    timeout=600,
+    timeout=1800,
     volumes={"/lora-weights": lora_volume},
     secrets=[modal.Secret.from_name("storybound-secrets")],
     memory=32768,
