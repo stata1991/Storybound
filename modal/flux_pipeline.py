@@ -1123,11 +1123,13 @@ def delete_face_model(
         print(f"Character photos delete error: {e}")
 
     # 3. Delete harvest photos from Supabase Storage
+    print(f"Attempting to delete harvest photos for harvest_id={harvest_id}")
     if harvest_id:
         try:
             harvest_photos = sb.storage.from_(
                 "harvest-photos"
             ).list(harvest_id)
+            print(f"Found {len(harvest_photos)} harvest photos to delete")
             if harvest_photos:
                 harvest_paths = [
                     f"{harvest_id}/{p['name']}"

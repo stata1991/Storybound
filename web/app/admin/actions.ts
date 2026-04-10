@@ -1741,6 +1741,7 @@ function buildStoryBiblePrompt(
   age: number,
   harvest: { season: string; milestone_description: string | null; current_interests: string[]; notable_notes: string | null; character_archetype: string | null }
 ): { system: string; user: string } {
+  const heroName = sanitizeForPrompt(child.preferred_name ?? child.name, 50);
   return {
     system: `You are a children's book author specializing in episodic adventure series for ages 3-10.
 Your job is to create a Story Bible for a child's personalized quarterly storybook subscription.
@@ -1820,7 +1821,7 @@ Output this exact JSON structure:
     }
   ],
   "season_arc": {
-    "title": "...",
+    "title": "Season arc title MUST start with the child's name: ${heroName}",
     "overarching_theme": "...",
     "what_the_hero_learns_this_year": "..."
   },
@@ -1828,7 +1829,7 @@ Output this exact JSON structure:
     {
       "number": 1,
       "season": "spring",
-      "title": "...",
+      "title": "Episode title MUST start with ${heroName}",
       "emotional_theme": "...",
       "challenge": "...",
       "resolution": "...",
@@ -2060,6 +2061,8 @@ This quarter's harvest data:
 - Current interests (updated): ${safeInterests.length > 0 ? safeInterests.join(", ") : "Same as profile"}${safeArchetype ? `\n- Character inspiration this season: ${safeArchetype} (reimagine as original — no trademarked names or likenesses)` : ""}
 - Anything new or notable: ${safeNotes}
 ${continuitySection}
+
+The episode title MUST start with the child's name. Format: '[Child's name] and the [adventure description]' or '[Child's name]'s [season] [adventure description]'. Examples: '${heroName} and the Rainy Day Mystery', '${heroName}'s Spring Adventure', '${heroName} and his Dino Friends'. Child's name is: ${heroName}
 
 Output this exact JSON structure:
 {
