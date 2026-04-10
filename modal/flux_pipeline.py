@@ -828,9 +828,9 @@ def generate_flux_illustrations(body: dict) -> dict:
                     print(f"Scene {i+1} reranking: "
                           f"best_score={best_score:.3f}")
 
-                    # All candidates failed — regenerate with offset seed
-                    if best_score == -1.0:
-                        print(f"Scene {i+1}: all candidates failed, "
+                    # Low confidence or all failed — regenerate with offset seed
+                    if best_score < 0.2:
+                        print(f"Scene {i+1}: low confidence ({best_score:.3f}), "
                               "regenerating with offset seed")
                         candidates_retry = pipe(
                             prompt=scene_clip,
@@ -873,9 +873,9 @@ def generate_flux_illustrations(body: dict) -> dict:
                                 best_score = score
                                 best_image = candidate
 
-                        if best_score == -1.0:
+                        if best_score < 0.2:
                             best_image = candidates_retry[0]
-                            print(f"Scene {i+1}: retry also failed, "
+                            print(f"Scene {i+1}: retry still low ({best_score:.3f}), "
                                   "using first retry candidate as fallback")
                         else:
                             print(f"Scene {i+1} retry reranking: "
@@ -1008,9 +1008,20 @@ def generate_illustrations_http(request: dict) -> dict:
     else:
         pronouns = "child"
 
+    # Strip hair descriptions that conflict with gender enforcement
+    import re
+    scene_prompts = request.get("prompts", [])
+    if pronouns == "boy":
+        cleaned_prompts = []
+        for p in scene_prompts:
+            p = re.sub(r'\b(wavy|curly|long|flowing|bouncing)\s+hair\b', 'short hair', p, flags=re.IGNORECASE)
+            p = re.sub(r'\bpigtails?\b|\bponytails?\b|\bbraids?\b', 'short hair', p, flags=re.IGNORECASE)
+            cleaned_prompts.append(p)
+        scene_prompts = cleaned_prompts
+
     flux_payload = {
         "face_model_id": request.get("face_model_id"),
-        "scene_prompts": request.get("prompts", []),
+        "scene_prompts": scene_prompts,
         "child_age": request.get("age", 3),
         "pronouns": pronouns,
         "skin_tone_hint": skin_tone_hint,
