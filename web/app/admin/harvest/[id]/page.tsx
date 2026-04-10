@@ -582,7 +582,7 @@ export default async function HarvestDetailPage({
                 <RunIllustrationsButton harvestId={harvestId} skipLora />
               </div>
             )}
-            {storyComplete && !illustrationsComplete && (harvest.status === "training" || harvest.status === "processing") && (
+            {storyComplete && !illustrationsComplete && (harvest.status === "training" || (harvest.status === "processing" && !!harvest.face_ref_path)) && (
               <div>
                 <p className="text-sm font-medium text-blue-600">
                   {harvest.status === "training"
@@ -594,7 +594,7 @@ export default async function HarvestDetailPage({
                 </p>
               </div>
             )}
-            {storyComplete && !illustrationsComplete && !photosDeletedNoIllustrations && harvest.status !== "training" && harvest.status !== "processing" && (
+            {storyComplete && !illustrationsComplete && !photosDeletedNoIllustrations && harvest.status !== "training" && !(harvest.status === "processing" && !!harvest.face_ref_path) && (
               <RunIllustrationsButton harvestId={harvestId} />
             )}
           </PipelineStep>
