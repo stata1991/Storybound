@@ -504,6 +504,25 @@ export async function startFaceTraining(
     photosBase64.push(Buffer.from(arrayBuf).toString("base64"));
   }
 
+  // Also fetch harvest photos for stronger LoRA training
+  if (harvest.photo_paths && harvest.photo_paths.length > 0) {
+    for (const photoPath of harvest.photo_paths) {
+      try {
+        const { data } = await supa.storage
+          .from("harvest-photos")
+          .download(photoPath);
+        if (data) {
+          const arrayBuffer = await data.arrayBuffer();
+          photosBase64.push(Buffer.from(arrayBuffer).toString("base64"));
+        }
+      } catch (e) {
+        console.error(`Failed to fetch harvest photo: ${e}`);
+      }
+    }
+  }
+
+  console.log(`Total photos for training: ${photosBase64.length} (character + harvest combined)`);
+
   // Build callback URL — Modal will POST here when training completes
   const callbackUrl = process.env.NEXT_PUBLIC_APP_URL
     ? `${process.env.NEXT_PUBLIC_APP_URL}/api/admin/training-complete`
@@ -1621,9 +1640,9 @@ const STORY_STYLE: Record<string, StoryStyle> = {
 };
 
 // Scene counts are intentionally age-scaled. Total illustrations = SCENE_COUNT + 1 (cover).
-// Age 3-4: 6 scenes + 1 cover = 7 images. Age 5-6: 8+1=9. Age 7-8: 10+1=11. Age 9-10: 12+1=13.
+// Age 3-4: 8 scenes + 1 cover = 9 images. Age 5-6: 8+1=9. Age 7-8: 10+1=11. Age 9-10: 12+1=13.
 const SCENE_COUNT: Record<string, number> = {
-  "3-4": 6,
+  "3-4": 8,
   "5-6": 8,
   "7-8": 10,
   "9-10": 12,
@@ -2035,6 +2054,17 @@ Episode rules:
 - Episode threads the seasonal arc (existing reader feels continuity)
 ${isEp4 ? "- Episode 4 must reference specific moments from Episodes 1, 2, and 3" : ""}
 
+Story depth requirements:
+- A clear emotional arc: excitement → challenge → self-doubt → breakthrough → triumph
+- At least one moment where the child feels genuinely scared or stuck (real stakes)
+- The child's specific interests woven into the solution (not just the setting)
+- A memorable line the child will want to repeat
+- Sensory details: sounds, textures, smells
+- The companion animal reacting emotionally to the child
+- Child's interests: ${child.interests.join(", ")}
+- Current milestone: ${safeMilestone}
+- These interests MUST appear in how the child solves the problem, not just as background details.
+
 Illustration prompt rules:
 - Every illustration_prompt must describe the hero using the EXACT physical details from the character block (hair, eyes, skin tone, signature look)
 - Keep each illustration_prompt under 20 words — focus on the single most important visual element of the scene
@@ -2075,7 +2105,7 @@ Output this exact JSON structure:
       "illustration_prompt": "..."
     }
   ],
-  "final_page": "A short closing line (1-2 sentences) that hints at next episode",
+  "final_page": "A warm teaser ending (1-2 sentences) that names the next season explicitly, references something specific from this story, and feels like a promise not an ad. Example: 'As the leaves turned golden, Pebble whispered something in ${heroName}'s ear. A new adventure was coming...' NOT: 'Ready for the autumn hills, ${heroName}?'",
   "parent_note": "A brief warm note for the parent about what this story celebrated (2-3 sentences, not printed in book)",
   "story_seeds": {
     "key_moment": "The single most vivid, emotionally resonant scene in this episode (1 sentence — specific enough to callback later)",

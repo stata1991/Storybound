@@ -559,6 +559,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             "hair accessories, braids, plaits, "
             "dress, skirt, frock, feminine clothing, "
             "long hair, hair past ears, hair past collar, "
+            "bindi, tilak, forehead dot, forehead mark, "
             "she, her, "
         )
     elif pronouns == "girl":
@@ -583,20 +584,22 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     # Style suffix — FLUX handles longer prompts natively
     STYLE_SUFFIX = (
-        ", gouache illustration, children's picture book, "
-        "soft warm colors, Studio Ghibli inspired, "
-        "painterly style, detailed face, "
-        "realistic head-to-body ratio, full body visible, "
-        "small head relative to body, natural proportions"
+        ", children's picture book illustration, "
+        "gouache painting style, soft warm colors, "
+        "consistent art style, flat lighting, "
+        "2D illustrated, painterly, "
+        "NOT photorealistic, NOT 3D render"
     )
 
     NEGATIVE_PROMPT = (
         gender_negative +
+        "photorealistic, hyperrealistic, 3d render, cgi, "
+        "digital painting, oil painting, watercolor, "
         "disproportionate head, oversized head, big head, "
         "chibi, bobblehead, huge head, head too large, "
         "giant head, head larger than torso, no visible body, "
-        "oil painting, photorealistic, photograph, "
-        "realistic rendering, back of head, facing away, "
+        "photograph, realistic rendering, "
+        "back of head, facing away, "
         "looking away, turned away, black and white, monochrome, "
         "sketch, line art, text, watermark, blurry, deformed, "
         "extra limbs, adult, teenager, low quality face, "
@@ -782,7 +785,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                     height=768,
                     width=768,
                     num_inference_steps=35,
-                    guidance_scale=4.0,
+                    guidance_scale=4.5,
                     num_images_per_prompt=5,
                     generator=torch.Generator("cuda").manual_seed(
                         seed_base
@@ -838,7 +841,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                             height=768,
                             width=768,
                             num_inference_steps=35,
-                            guidance_scale=4.0,
+                            guidance_scale=4.5,
                             num_images_per_prompt=5,
                             generator=torch.Generator("cuda").manual_seed(
                                 seed_base + 1000
