@@ -582,7 +582,19 @@ export default async function HarvestDetailPage({
                 <RunIllustrationsButton harvestId={harvestId} skipLora />
               </div>
             )}
-            {storyComplete && !illustrationsComplete && !photosDeletedNoIllustrations && (
+            {storyComplete && !illustrationsComplete && (harvest.status === "training" || harvest.status === "processing") && (
+              <div>
+                <p className="text-sm font-medium text-blue-600">
+                  {harvest.status === "training"
+                    ? "LoRA face training in progress..."
+                    : "Illustrations generating in background..."}
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  This page will update automatically when complete.
+                </p>
+              </div>
+            )}
+            {storyComplete && !illustrationsComplete && !photosDeletedNoIllustrations && harvest.status !== "training" && harvest.status !== "processing" && (
               <RunIllustrationsButton harvestId={harvestId} />
             )}
           </PipelineStep>
