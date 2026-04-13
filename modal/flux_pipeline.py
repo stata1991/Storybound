@@ -554,13 +554,12 @@ def generate_flux_illustrations(body: dict) -> dict:
         )
         gender_negative = (
             "girl, female, feminine, "
+            "bindi, tilak, forehead dot, forehead mark, dot on forehead, red dot, sindoor, "
             "pigtails, ponytails, twin tails, side tails, "
             "hair ties, hair ribbons, hair clips, hair bows, "
-            "hair accessories, braids, plaits, "
+            "braids, plaits, "
             "dress, skirt, frock, feminine clothing, "
-            "long hair, hair past ears, hair past collar, "
-            "bindi, tilak, forehead dot, forehead mark, dot on forehead, red dot, "
-            "she, her, "
+            "long hair, "
         )
     elif pronouns == "girl":
         gender_word = "girl"
@@ -584,23 +583,20 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     # Style anchor — applied to EVERY scene and cover without exception
     STYLE_SUFFIX = (
-        ", 3D animated film style, Pixar-quality rendering, "
-        "consistent art direction, warm studio lighting, "
-        "soft subsurface skin, expressive face, "
-        "same character design throughout, cohesive visual style"
+        ", children's storybook illustration, warm soft colors, "
+        "consistent character design, expressive face, "
+        "same child in every scene, coherent art style throughout, "
+        "soft even lighting, gentle shadows"
     )
 
     NEGATIVE_PROMPT = (
         gender_negative +
-        "painterly, gouache, watercolor, flat 2D, hand drawn, "
         "photorealistic, hyperrealistic, photograph, "
-        "illustrated, cartoon, anime, digital art, "
-        "concept art, oil painting, "
-        "disproportionate head, oversized head, big head, "
-        "chibi, bobblehead, huge head, head too large, "
-        "giant head, head larger than torso, no visible body, "
-        "back of head, facing away, "
-        "looking away, turned away, black and white, monochrome, "
+        "3D render, CGI, Pixar, Disney 3D, animated film, "
+        "digital painting, oil painting, watercolor, "
+        "disproportionate head, oversized head, chibi, bobblehead, "
+        "back of head, facing away, looking away, "
+        "black and white, monochrome, "
         "sketch, line art, text, watermark, blurry, deformed, "
         "extra limbs, adult, teenager, low quality face, "
         "blurry face"
