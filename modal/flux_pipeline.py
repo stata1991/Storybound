@@ -582,23 +582,23 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     age_prefix = f"{child_age}-year-old toddler {gender_word}"
 
-    # Style suffix — FLUX handles longer prompts natively
+    # Style anchor — applied to EVERY scene and cover without exception
     STYLE_SUFFIX = (
-        ", children's picture book illustration, "
-        "gouache painting style, soft warm colors, "
-        "consistent art style, flat lighting, "
-        "2D illustrated, painterly, "
-        "NOT photorealistic, NOT 3D render"
+        ", professional children's photo book, "
+        "consistent realistic lighting, photorealistic skin texture, "
+        "natural studio photography, same art direction throughout, "
+        "sharp focus, soft natural shadows"
     )
 
     NEGATIVE_PROMPT = (
         gender_negative +
-        "photorealistic, hyperrealistic, 3d render, cgi, "
-        "digital painting, oil painting, watercolor, "
+        "painterly, illustrated, cartoon, anime, digital art, "
+        "concept art, gouache, watercolor painting, flat lighting, "
+        "2D, hand drawn, oil painting, "
         "disproportionate head, oversized head, big head, "
         "chibi, bobblehead, huge head, head too large, "
         "giant head, head larger than torso, no visible body, "
-        "photograph, realistic rendering, "
+        "3d render, cgi, "
         "back of head, facing away, "
         "looking away, turned away, black and white, monochrome, "
         "sketch, line art, text, watermark, blurry, deformed, "
@@ -707,7 +707,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             cover_clip = (
                 f"{gender_clip_reinforcement}"
                 f"{age_prefix}, sks child, "
-                f"realistic proportions, portrait, storybook illustration"
+                f"realistic proportions, portrait, children's photo book"
             )
             # T5-XXL prompt — full detail with avoid_str
             cover_t5 = (
@@ -760,7 +760,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                     f"{gender_clip_reinforcement}"
                     f"{age_prefix}, sks child, "
                     f"realistic proportions, foreground, facing camera, "
-                    f"{scene_desc}, storybook illustration"
+                    f"{scene_desc}, children's photo book"
                 )
                 # T5-XXL prompt — full detail with avoid_str
                 scene_t5 = (

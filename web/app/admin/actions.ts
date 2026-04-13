@@ -1968,6 +1968,8 @@ function buildEpisodePrompt(
 ): { system: string; user: string } {
   const episodeNumber = harvest.quarter;
   const isEp4 = episodeNumber === 4;
+  const nextSeasonMap: Record<string, string> = { spring: "summer", summer: "fall", fall: "winter", winter: "spring" };
+  const nextSeason = nextSeasonMap[harvest.season?.toLowerCase() ?? ""] ?? "next season";
 
   // Sanitize user-provided fields before prompt interpolation
   const heroName = sanitizeForPrompt(child.preferred_name ?? child.name, 50);
@@ -2055,15 +2057,29 @@ Episode rules:
 ${isEp4 ? "- Episode 4 must reference specific moments from Episodes 1, 2, and 3" : ""}
 
 Story depth requirements:
-- A clear emotional arc: excitement → challenge → self-doubt → breakthrough → triumph
-- At least one moment where the child feels genuinely scared or stuck (real stakes)
-- The child's specific interests woven into the solution (not just the setting)
+- Child's interests: ${child.interests.join(", ")}
+- Current milestone: ${safeMilestone}
+- Interest as mechanism (CRITICAL): The child's specific interest or skill (${child.interests.join(", ")}) must be the DIRECT REASON they solve the central problem. A character who did NOT have this interest could NOT have solved it the same way. The interest is not backdrop or setting — it is the tool, the insight, or the unique knowledge that unlocks the turning_point. Example: a child who loves cooking doesn't just have an adventure in a kitchen — they recognize that a rising dough is blocking a door and know to cool it down because they understand how yeast works.
+- Acknowledgment scene: At least one scene must include another character (the companion, a side character, or a narrator aside) explicitly recognizing the child's unique skill. Example: '"Nobody else would have known that," whispered Pebble, eyes wide.' This moment should land in a "resolution" or "celebration" beat.
 - A memorable line the child will want to repeat
 - Sensory details: sounds, textures, smells
 - The companion animal reacting emotionally to the child
-- Child's interests: ${child.interests.join(", ")}
-- Current milestone: ${safeMilestone}
-- These interests MUST appear in how the child solves the problem, not just as background details.
+
+Emotional beat structure (MANDATORY):
+Every scene MUST be labeled with exactly one emotional beat. The valid beats are:
+  setup, escalation, setback, turning_point, resolution, celebration, teaser
+
+Rules for beat assignment:
+1. The story MUST contain at least 2 CONSECUTIVE scenes labeled "escalation" or "setback" BEFORE any scene labeled "turning_point". The child must try and fail, or face increasing difficulty, at least twice before the breakthrough. A single struggle scene is NOT enough — the arc feels thin without sustained tension.
+2. Every story must include at least one "setback" beat — a moment where the child's attempt genuinely does not work and they must regroup.
+3. The "turning_point" must come AFTER the escalation/setback sequence, never before it.
+4. The final scene should be "celebration" or "teaser", not "resolution" — give the triumph room to breathe.
+5. Each beat must be output in the scene's JSON object as a "beat" field (see output schema below).
+
+Example beat sequence for an 8-scene story:
+  setup → escalation → setback → escalation → turning_point → resolution → celebration → teaser
+Another valid sequence:
+  setup → setup → escalation → escalation → setback → turning_point → resolution → celebration
 
 Illustration prompt rules:
 - Every illustration_prompt must describe the hero using the EXACT physical details from the character block (hair, eyes, skin tone, signature look)
@@ -2101,11 +2117,12 @@ Output this exact JSON structure:
   "scenes": [
     {
       "number": 1,
+      "beat": "setup | escalation | setback | turning_point | resolution | celebration | teaser",
       "text": "...",
       "illustration_prompt": "..."
     }
   ],
-  "final_page": "A warm teaser ending (1-2 sentences) that names the next season explicitly, references something specific from this story, and feels like a promise not an ad. Example: 'As the leaves turned golden, Pebble whispered something in ${heroName}'s ear. A new adventure was coming...' NOT: 'Ready for the autumn hills, ${heroName}?'",
+  "final_page": "End-credits teaser (2-3 sentences). Think movie post-credits scene, not a fade to black. MUST include ALL three elements: (1) CALLBACK — reference a specific object, place, or detail from THIS story (e.g. the glowing seed, the cracked compass, the melody the child hummed). (2) CONCRETE HINT — introduce a new location, character, or mystery that will appear in the ${nextSeason} book. Name it specifically — not 'a new adventure' but 'a door in the old oak that wasn't there before' or 'a fox with a silver collar watching from the ridge'. (3) TONE — warm and excited, matching ${nextSeason} energy (${nextSeason === "summer" ? "long golden days, fireflies, warm nights" : nextSeason === "fall" ? "crunchy leaves, cozy sweaters, harvest moon" : nextSeason === "winter" ? "first snowfall, warm cocoa, glowing windows" : "new blossoms, puddle-jumping, birdsong"}). BAD example: 'Where will ${heroName} go next?' GOOD example: 'That night, the glowing seed from the garden began to hum. By morning it had sprouted a single silver leaf — and Pebble swore it was pointing toward the mountains. ${heroName} pressed ${child.pronouns === "he/him" ? "his" : child.pronouns === "she/her" ? "her" : "their"} nose to the window. The ${nextSeason} air smelled like pine and promises.'",
   "parent_note": "A brief warm note for the parent about what this story celebrated (2-3 sentences, not printed in book)",
   "story_seeds": {
     "key_moment": "The single most vivid, emotionally resonant scene in this episode (1 sentence — specific enough to callback later)",
@@ -2143,7 +2160,56 @@ function runStoryQualityChecks(
   }
 
   if (scenes) {
-    // Per-scene word count validation + trimming
+    // ── Beat validation ──
+    const VALID_BEATS = ["setup", "escalation", "setback", "turning_point", "resolution", "celebration", "teaser"];
+    const beats = scenes.map((s) => (s.beat as string) ?? "");
+
+    // Check 1: every scene must have a valid beat label
+    const unlabeled = scenes.filter((s) => !s.beat || !VALID_BEATS.includes(s.beat as string));
+    if (unlabeled.length > 0) {
+      const ids = unlabeled.map((s) => `scene ${s.number}`).join(", ");
+      warnings.push(
+        `BEAT: Missing or invalid beat label on ${ids}. Valid beats: ${VALID_BEATS.join(", ")}.`
+      );
+    }
+
+    // Check 2: at least 2 consecutive escalation/setback scenes before turning_point
+    const turningIdx = beats.indexOf("turning_point");
+    if (turningIdx === -1) {
+      warnings.push("BEAT: No turning_point scene found — arc has no breakthrough moment.");
+    } else {
+      const preBeats = beats.slice(0, turningIdx);
+      let maxConsecutiveStruggle = 0;
+      let currentRun = 0;
+      for (const b of preBeats) {
+        if (b === "escalation" || b === "setback") {
+          currentRun++;
+          maxConsecutiveStruggle = Math.max(maxConsecutiveStruggle, currentRun);
+        } else {
+          currentRun = 0;
+        }
+      }
+      if (maxConsecutiveStruggle < 2) {
+        warnings.push(
+          `BEAT: Only ${maxConsecutiveStruggle} consecutive escalation/setback scene(s) before turning_point (need ≥2). Arc feels thin — struggle resolves too quickly.`
+        );
+      }
+    }
+
+    // Check 3: must have at least one setback
+    if (!beats.includes("setback")) {
+      warnings.push("BEAT: No setback scene found — child never fails or regroups, making the resolution feel unearned.");
+    }
+
+    // Check 4: turning_point must not appear before any escalation/setback
+    if (turningIdx !== -1) {
+      const firstStruggle = beats.findIndex((b) => b === "escalation" || b === "setback");
+      if (firstStruggle === -1 || turningIdx < firstStruggle) {
+        warnings.push("BEAT: turning_point appears before any escalation/setback — breakthrough has no preceding struggle.");
+      }
+    }
+
+    // ── Per-scene word count validation + trimming ──
     const wordLimit = style.wordsPerScene;
     const trimThreshold = Math.ceil(wordLimit * 1.2);
 
