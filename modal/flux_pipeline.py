@@ -559,7 +559,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             "hair accessories, braids, plaits, "
             "dress, skirt, frock, feminine clothing, "
             "long hair, hair past ears, hair past collar, "
-            "bindi, tilak, forehead dot, forehead mark, "
+            "bindi, tilak, forehead dot, forehead mark, dot on forehead, red dot, "
             "she, her, "
         )
     elif pronouns == "girl":
@@ -584,21 +584,21 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     # Style anchor — applied to EVERY scene and cover without exception
     STYLE_SUFFIX = (
-        ", professional children's photo book, "
-        "consistent realistic lighting, photorealistic skin texture, "
-        "natural studio photography, same art direction throughout, "
-        "sharp focus, soft natural shadows"
+        ", 3D animated film style, Pixar-quality rendering, "
+        "consistent art direction, warm studio lighting, "
+        "soft subsurface skin, expressive face, "
+        "same character design throughout, cohesive visual style"
     )
 
     NEGATIVE_PROMPT = (
         gender_negative +
-        "painterly, illustrated, cartoon, anime, digital art, "
-        "concept art, gouache, watercolor painting, flat lighting, "
-        "2D, hand drawn, oil painting, "
+        "painterly, gouache, watercolor, flat 2D, hand drawn, "
+        "photorealistic, hyperrealistic, photograph, "
+        "illustrated, cartoon, anime, digital art, "
+        "concept art, oil painting, "
         "disproportionate head, oversized head, big head, "
         "chibi, bobblehead, huge head, head too large, "
         "giant head, head larger than torso, no visible body, "
-        "3d render, cgi, "
         "back of head, facing away, "
         "looking away, turned away, black and white, monochrome, "
         "sketch, line art, text, watermark, blurry, deformed, "
