@@ -255,6 +255,7 @@ function textPage(
   `, WARM_WHITE);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function scenePage(
   scene: { number: number; text: string; imageBase64: string },
   profile: AgeProfile,
