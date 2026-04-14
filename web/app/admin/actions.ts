@@ -444,6 +444,19 @@ function buildDefaultPrompts(
   ];
 }
 
+/* ─── Scene human-detection helper ────────────────────────────────────────── */
+
+function hasExtraHumans(sceneText: string, childName: string, companionName: string): boolean {
+  const humanKeywords = [
+    "mama", "papa", "mom", "dad", "mother", "father",
+    "brother", "sister", "friend", "grandma", "grandpa",
+    "uncle", "aunty", "auntie", "nana", "nanu",
+    "family", "parent", "sibling",
+  ];
+  const lower = sceneText.toLowerCase();
+  return humanKeywords.some((k) => new RegExp(`\\b${k}\\b`).test(lower));
+}
+
 /* ─── startFaceTraining — async training kickoff ──────────────────────────── */
 
 export async function startFaceTraining(
@@ -740,6 +753,12 @@ export async function completeIllustrationGeneration(
 
   if (prompts.length === 0) return { error: "No illustration prompts available." };
 
+  // Build parallel array of per-scene human-detection flags
+  const sceneHasHumans = (episode?.scenes && episode.scenes.length > 0)
+    ? episode.scenes.slice(0, 12).map((s) =>
+        hasExtraHumans(s.text ?? "", child.name, ""))
+    : [];
+
   // ── Download memory photos for color mood extraction ───────────────────────
 
   const memoryPhotosBase64: string[] = [];
@@ -783,6 +802,7 @@ export async function completeIllustrationGeneration(
       {
         face_model_id: faceModelId,
         prompts,
+        scene_has_humans: sceneHasHumans,
         ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
         ...modalSharedParams,
         ...(USE_FLUX ? {
@@ -1043,6 +1063,12 @@ export async function triggerIllustrationPipeline(
 
   if (prompts.length === 0) return { error: "No illustration prompts available." };
 
+  // Build parallel array of per-scene human-detection flags
+  const sceneHasHumans = (episode?.scenes && episode.scenes.length > 0)
+    ? episode.scenes.slice(0, 12).map((s) =>
+        hasExtraHumans(s.text ?? "", child.name, ""))
+    : [];
+
   const childId = harvest.child_id;
   let genResult: ModalGenerateResponse;
 
@@ -1101,6 +1127,7 @@ export async function triggerIllustrationPipeline(
         generateUrl,
         {
           prompts,
+          scene_has_humans: sceneHasHumans,
           skip_lora: true,
           ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
           ...modalSharedParams,
@@ -1135,6 +1162,7 @@ export async function triggerIllustrationPipeline(
         {
           face_model_id: existingModelId,
           prompts,
+          scene_has_humans: sceneHasHumans,
           ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
           ...modalSharedParams,
           ...fluxExtraFields,

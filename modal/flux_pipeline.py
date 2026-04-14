@@ -534,6 +534,7 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     face_model_id = body.get("face_model_id")
     scene_prompts = body.get("scene_prompts", [])
+    scene_has_humans = body.get("scene_has_humans", [False] * len(scene_prompts))
     child_age = body.get("child_age", 3)
     pronouns = body.get("pronouns", "child")
     skin_tone = body.get("skin_tone_hint", "")
@@ -698,7 +699,14 @@ def generate_flux_illustrations(body: dict) -> dict:
             # ── Generate cover ──
             # FLUX uses CLIP-L (77 token limit) + T5-XXL (512 tokens)
             # Split prompts: short for CLIP-L, full detail for T5-XXL
-            avoid_str = f"avoid: {NEGATIVE_PROMPT}. "
+            # Cover always gets full people-suppression
+            PEOPLE_SUPPRESSION = (
+                "multiple children, two children, siblings, brother, sister, "
+                "other child, second child, background children, extra person, "
+                "parent, mother, father, grandparent, family members, "
+                "crowd, group of people, "
+            )
+            cover_avoid_str = f"avoid: {PEOPLE_SUPPRESSION}{NEGATIVE_PROMPT}. "
 
             # CLIP-L prompt — short, under 60 tokens
             cover_clip = (
@@ -708,7 +716,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             )
             # T5-XXL prompt — full detail with avoid_str
             cover_t5 = (
-                f"{avoid_str}"
+                f"{cover_avoid_str}"
                 f"{gender_t5_reinforcement}"
                 f"{age_prefix}, sks child, "
                 f"{skin_tone + ', ' if skin_tone else ''}"
@@ -752,6 +760,16 @@ def generate_flux_illustrations(body: dict) -> dict:
             ) & 0x7FFFFFFF
 
             for i, scene_desc in enumerate(scene_prompts):
+                has_humans = scene_has_humans[i] if i < len(scene_has_humans) else False
+
+                people_suppression = (
+                    "" if has_humans else
+                    PEOPLE_SUPPRESSION
+                )
+
+                scene_negative = people_suppression + NEGATIVE_PROMPT
+                avoid_str = f"avoid: {scene_negative}. "
+
                 # CLIP-L prompt — short, under 60 tokens
                 scene_clip = (
                     f"{gender_clip_reinforcement}"
@@ -770,6 +788,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                     f"{STYLE_SUFFIX}"
                 )
 
+                print(f"Scene {i+1} has_humans={has_humans}")
                 print(f"Scene {i+1} CLIP ({len(scene_clip.split())} words): "
                       f"{scene_clip[:80]}...")
                 print(f"Scene {i+1} T5 ({len(scene_t5.split())} words): "
@@ -1019,9 +1038,12 @@ def generate_illustrations_http(request: dict) -> dict:
             cleaned_prompts.append(p)
         scene_prompts = cleaned_prompts
 
+    scene_has_humans = request.get("scene_has_humans", [False] * len(scene_prompts))
+
     flux_payload = {
         "face_model_id": request.get("face_model_id"),
         "scene_prompts": scene_prompts,
+        "scene_has_humans": scene_has_humans,
         "child_age": request.get("age", 3),
         "pronouns": pronouns,
         "skin_tone_hint": skin_tone_hint,
