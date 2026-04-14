@@ -592,6 +592,7 @@ def generate_flux_illustrations(body: dict) -> dict:
     NEGATIVE_PROMPT = (
         gender_negative +
         "photorealistic, hyperrealistic, photograph, "
+        "realistic photography, photo, camera, DSLR, "
         "3D render, CGI, Pixar, Disney 3D, animated film, "
         "digital painting, oil painting, watercolor, "
         "disproportionate head, oversized head, chibi, bobblehead, "
