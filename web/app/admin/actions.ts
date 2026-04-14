@@ -446,7 +446,7 @@ function buildDefaultPrompts(
 
 /* ─── Scene human-detection helper ────────────────────────────────────────── */
 
-function hasExtraHumans(sceneText: string, _childName: string, _companionName: string): boolean {
+function hasExtraHumans(sceneText: string): boolean {
   const humanKeywords = [
     "mama", "papa", "mom", "dad", "mother", "father",
     "brother", "sister", "friend", "grandma", "grandpa",
@@ -756,7 +756,7 @@ export async function completeIllustrationGeneration(
   // Build parallel array of per-scene human-detection flags
   const sceneHasHumans = (episode?.scenes && episode.scenes.length > 0)
     ? episode.scenes.slice(0, 12).map((s) =>
-        hasExtraHumans(s.text ?? "", child.name, ""))
+        hasExtraHumans(s.text ?? ""))
     : [];
 
   // ── Download memory photos for color mood extraction ───────────────────────
@@ -1066,7 +1066,7 @@ export async function triggerIllustrationPipeline(
   // Build parallel array of per-scene human-detection flags
   const sceneHasHumans = (episode?.scenes && episode.scenes.length > 0)
     ? episode.scenes.slice(0, 12).map((s) =>
-        hasExtraHumans(s.text ?? "", child.name, ""))
+        hasExtraHumans(s.text ?? ""))
     : [];
 
   const childId = harvest.child_id;
