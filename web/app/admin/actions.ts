@@ -446,7 +446,7 @@ function buildDefaultPrompts(
 
 /* ─── Scene human-detection helper ────────────────────────────────────────── */
 
-function hasExtraHumans(sceneText: string, childName: string, companionName: string): boolean {
+function hasExtraHumans(sceneText: string, _childName: string, _companionName: string): boolean {
   const humanKeywords = [
     "mama", "papa", "mom", "dad", "mother", "father",
     "brother", "sister", "friend", "grandma", "grandpa",
