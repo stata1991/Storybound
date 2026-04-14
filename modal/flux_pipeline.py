@@ -583,10 +583,10 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     # Style anchor — applied to EVERY scene and cover without exception
     STYLE_SUFFIX = (
-        ", children's storybook illustration, warm soft colors, "
-        "consistent character design, expressive face, "
-        "same child in every scene, coherent art style throughout, "
-        "soft even lighting, gentle shadows"
+        ", gouache illustration, children's picture book, "
+        "soft warm colors, Studio Ghibli inspired, "
+        "painterly style, detailed face, "
+        "realistic head-to-body ratio, natural proportions"
     )
 
     NEGATIVE_PROMPT = (

@@ -264,6 +264,100 @@ function scenePage(
   return illustrationPage(scene) + textPage(scene, profile, seasonLabel, pageNumber);
 }
 
+/* ─── Combined scene page — image + text on one page ─────────────────────── */
+
+function combinedScenePage(
+  scene: { number: number; text: string; imageBase64: string },
+  profile: AgeProfile,
+  seasonLabel: string,
+  pageNumber: number
+): string {
+  const imageHeight = (profile.label === "7-8" || profile.label === "9-10") ? "55%" : "60%";
+
+  return page(`
+    <div style="
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      overflow: hidden;
+    ">
+      <!-- IMAGE SECTION -->
+      <div style="
+        width: 100%;
+        height: ${imageHeight};
+        flex-shrink: 0;
+        overflow: hidden;
+        position: relative;
+      ">
+        <img
+          src="data:image/png;base64,${scene.imageBase64}"
+          style="
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center top;
+            display: block;
+          "
+        />
+      </div>
+
+      <!-- DIVIDER: gold bar separating image from text -->
+      <div style="width: 100%; height: 3px; background-color: ${GOLD}; flex-shrink: 0;"></div>
+
+      <!-- TEXT SECTION -->
+      <div style="
+        width: 100%;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        box-sizing: border-box;
+        padding: 0 52px;
+        overflow: hidden;
+      ">
+        <!-- Season label -->
+        <div style="padding: 12px 0 8px 0; text-align: right;">
+          <span style="
+            font-family: ${NUNITO};
+            font-size: 11px;
+            color: ${MUTED};
+            letter-spacing: 1px;
+          ">${escapeHtml(seasonLabel)}</span>
+        </div>
+
+        <!-- Story text -->
+        <div style="
+          flex: 1;
+          display: flex;
+          align-items: center;
+          overflow: hidden;
+        ">
+          <p style="
+            margin: 0;
+            font-family: ${NUNITO};
+            font-size: ${profile.fontSize}px;
+            font-weight: 600;
+            color: ${TEXT_DARK};
+            line-height: ${profile.lineHeight};
+            text-align: left;
+            width: 100%;
+          ">${escapeHtml(scene.text)}</p>
+        </div>
+
+        <!-- Page number -->
+        <div style="padding: 8px 0 16px 0; text-align: center;">
+          <span style="
+            font-family: ${NUNITO};
+            font-size: 12px;
+            color: ${MUTED};
+          ">${pageNumber}</span>
+        </div>
+      </div>
+    </div>
+  `, WARM_WHITE);
+}
+
 /* ─── Back page (Fix 6: pronouns, Fix 7: warmer privacy text) ────────────── */
 
 function backPage(childName: string, pronouns: string): string {
@@ -348,12 +442,12 @@ export function generateBookHTML(params: BookParams): string {
   // 2. Dedication
   pages.push(dedicationPage(params.dedication));
 
-  // 3. Scene pages (two pages per scene: illustration + text)
-  // Page numbering: dedication is page 1, first illustration is page 2
+  // 3. Scene pages (combined image + text on one page)
+  // Page numbering: dedication is page 1, first scene is page 2
   let pageNum = 2;
   for (const scene of params.scenes) {
-    pages.push(scenePage(scene, profile, seasonLabel, pageNum + 1));
-    pageNum += 2; // illustration page + text page
+    pages.push(combinedScenePage(scene, profile, seasonLabel, pageNum));
+    pageNum += 1;
   }
 
   // 4. Final page
