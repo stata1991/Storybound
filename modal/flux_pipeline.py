@@ -206,8 +206,9 @@ def train_flux_lora(
                 fb, fg, fr = forehead[:,:,0], forehead[:,:,1], forehead[:,:,2]
                 red_mask = (fr > 150) & (fg < 100) & (fb < 100)
                 yellow_mask = (fr > 200) & (fg > 150) & (fb < 80)
-                if (red_mask | yellow_mask).any():
-                    print(f"Skipping embedding for photo {i} — forehead mark detected")
+                mark_pixel_count = (red_mask | yellow_mask).sum()
+                if mark_pixel_count > 10 and mark_pixel_count < 500:
+                    print(f"Skipping embedding for photo {i} — forehead mark detected ({mark_pixel_count} pixels)")
                 else:
                     embeddings.append(
                         torch.from_numpy(face.normed_embedding).unsqueeze(0)
@@ -263,7 +264,8 @@ def train_flux_lora(
             yellow_mask = (r > 200) & (g > 150) & (b < 80)
             mark_mask = red_mask | yellow_mask
 
-            if mark_mask.any():
+            mark_pixel_count = mark_mask.sum()
+            if mark_pixel_count > 10 and mark_pixel_count < 500:
                 kernel = np.ones((3, 3), np.float32) / 9.0
                 blurred = cv2.filter2D(forehead, -1, kernel)
                 ys, xs = np.where(mark_mask)
