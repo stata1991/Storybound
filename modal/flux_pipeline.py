@@ -196,16 +196,46 @@ def train_flux_lora(
                 key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
             face_size = ((face.bbox[2]-face.bbox[0]) *
                         (face.bbox[3]-face.bbox[1]))
-            embeddings.append(
-                torch.from_numpy(face.normed_embedding).unsqueeze(0)
-            )
+
+            # Check for forehead marks before including embedding
+            fx1, fy1, fx2, fy2 = [int(c) for c in face.bbox]
+            face_crop = img_bgr[fy1:fy2, fx1:fx2]
+            fh = int(face_crop.shape[0] * 0.35)
+            if fh > 0:
+                forehead = face_crop[:fh]
+                fb, fg, fr = forehead[:,:,0], forehead[:,:,1], forehead[:,:,2]
+                red_mask = (fr > 150) & (fg < 100) & (fb < 100)
+                yellow_mask = (fr > 200) & (fg > 150) & (fb < 80)
+                if (red_mask | yellow_mask).any():
+                    print(f"Skipping embedding for photo {i} — forehead mark detected")
+                else:
+                    embeddings.append(
+                        torch.from_numpy(face.normed_embedding).unsqueeze(0)
+                    )
+            else:
+                embeddings.append(
+                    torch.from_numpy(face.normed_embedding).unsqueeze(0)
+                )
+
             if face_size > best_face_size:
                 best_face_size = face_size
                 best_face_img = img
             print(f"Photo {i}: InsightFace detected (size={int(face_size)})")
 
     if not embeddings:
-        raise RuntimeError("No faces detected by InsightFace")
+        # All photos had forehead marks — fall back to using all embeddings
+        print("WARNING: All photos had forehead marks, using all embeddings")
+        for img in pil_images:
+            img_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            faces = face_app.get(img_bgr)
+            if faces:
+                face = max(faces,
+                    key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                embeddings.append(
+                    torch.from_numpy(face.normed_embedding).unsqueeze(0)
+                )
+        if not embeddings:
+            raise RuntimeError("No faces detected by InsightFace")
 
     avg_embedding = torch.cat(embeddings).mean(dim=0, keepdim=True)
     print(f"Face embedding: averaged across {len(embeddings)} photos, "
