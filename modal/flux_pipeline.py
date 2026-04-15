@@ -546,7 +546,7 @@ def generate_flux_illustrations(body: dict) -> dict:
     if pronouns == "boy":
         gender_word = "boy"
         gender_clip_reinforcement = (
-            "boy, male child, short hair, "
+            "boy, male child, short hair, no forehead mark, no bindi, clear forehead, "
         )
         gender_t5_reinforcement = (
             "boy with short hair, male child, "
