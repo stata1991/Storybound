@@ -211,10 +211,41 @@ def train_flux_lora(
     print(f"Face embedding: averaged across {len(embeddings)} photos, "
           f"shape={avg_embedding.shape}")
 
-    # Buffer best face crop
+    # Buffer best face crop — crop to face bbox, remove forehead marks
     best_face_buffer = io.BytesIO()
     if best_face_img:
-        best_face_img.save(best_face_buffer, format="JPEG", quality=95)
+        img_bgr = cv2.cvtColor(np.array(best_face_img), cv2.COLOR_RGB2BGR)
+        faces = face_app.get(img_bgr)
+        if faces:
+            face = max(faces,
+                key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+            x1, y1, x2, y2 = [int(c) for c in face.bbox]
+            h, w = img_bgr.shape[:2]
+            x1, y1 = max(0, x1 - 20), max(0, y1 - 20)
+            x2, y2 = min(w, x2 + 20), min(h, y2 + 20)
+            crop = img_bgr[y1:y2, x1:x2].copy()
+
+            # Remove forehead marks in top 35% of crop
+            fh = int(crop.shape[0] * 0.35)
+            forehead = crop[:fh]
+            b, g, r = forehead[:,:,0], forehead[:,:,1], forehead[:,:,2]
+            red_mask = (r > 150) & (g < 100) & (b < 100)
+            yellow_mask = (r > 200) & (g > 150) & (b < 80)
+            mark_mask = red_mask | yellow_mask
+
+            if mark_mask.any():
+                kernel = np.ones((3, 3), np.float32) / 9.0
+                blurred = cv2.filter2D(forehead, -1, kernel)
+                ys, xs = np.where(mark_mask)
+                forehead[ys, xs] = blurred[ys, xs]
+                crop[:fh] = forehead
+                print(f"Forehead mark removal: {len(ys)} pixels replaced")
+
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            Image.fromarray(crop_rgb).save(
+                best_face_buffer, format="JPEG", quality=95)
+        else:
+            best_face_img.save(best_face_buffer, format="JPEG", quality=95)
 
     # ── STEP 3: Privacy cleanup ──
     del face_app
