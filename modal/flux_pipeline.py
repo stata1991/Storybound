@@ -757,6 +757,16 @@ def generate_flux_illustrations(body: dict) -> dict:
                 f"{STYLE_SUFFIX}"
             )
 
+            # Init InsightFace for reranking + forehead cleanup
+            rank_app = None
+            if face_embedding is not None:
+                rank_app = FaceAnalysis(
+                    name="buffalo_l",
+                    providers=["CUDAExecutionProvider",
+                               "CPUExecutionProvider"]
+                )
+                rank_app.prepare(ctx_id=0, det_size=(640, 640))
+
             print(f"Cover CLIP prompt: {cover_clip}")
             print(f"Cover T5 prompt: {cover_t5}")
 
@@ -774,18 +784,33 @@ def generate_flux_illustrations(body: dict) -> dict:
             cover_image = cover_result.images[0]
             print("Cover generated")
 
+            # ── Post-generation forehead cleanup on cover ──
+            if rank_app is not None:
+                cover_np = cv2.cvtColor(np.array(cover_image), cv2.COLOR_RGB2BGR)
+                cover_faces = rank_app.get(cover_np)
+                if cover_faces:
+                    cf = max(cover_faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                    cx1, cy1, cx2, cy2 = [int(c) for c in cf.bbox]
+                    face_h = cy2 - cy1
+                    fh_top = max(0, cy1 - int(face_h * 0.4))
+                    forehead = cover_np[fh_top:cy1, cx1:cx2].copy()
+                    if forehead.size > 0:
+                        fb, fg, fr = forehead[:,:,0], forehead[:,:,1], forehead[:,:,2]
+                        red_mask = (fr > 170) & (fg < 90) & (fb < 90)
+                        yellow_mask = (fr > 210) & (fg > 155) & (fb < 70)
+                        mark_mask = red_mask | yellow_mask
+                        mark_pixel_count = mark_mask.sum()
+                        if mark_pixel_count > 30 and mark_pixel_count < 200:
+                            kernel = np.ones((3, 3), np.float32) / 9.0
+                            blurred = cv2.filter2D(forehead, -1, kernel)
+                            ys, xs = np.where(mark_mask)
+                            forehead[ys, xs] = blurred[ys, xs]
+                            cover_np[fh_top:cy1, cx1:cx2] = forehead
+                            cover_image = Image.fromarray(cv2.cvtColor(cover_np, cv2.COLOR_BGR2RGB))
+                            print(f"Cover: removed forehead mark ({len(ys)} pixels)")
+
             # ── Generate scenes with reranking ──
             scene_images = []
-
-            # Init InsightFace for reranking
-            rank_app = None
-            if face_embedding is not None:
-                rank_app = FaceAnalysis(
-                    name="buffalo_l",
-                    providers=["CUDAExecutionProvider",
-                               "CPUExecutionProvider"]
-                )
-                rank_app.prepare(ctx_id=0, det_size=(640, 640))
 
             seed_base = int(
                 hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16
@@ -931,6 +956,31 @@ def generate_flux_illustrations(body: dict) -> dict:
                         else:
                             print(f"Scene {i+1} retry reranking: "
                                   f"best_score={best_score:.3f}")
+
+                # ── Post-generation forehead cleanup on scene ──
+                if rank_app is not None:
+                    best_np = cv2.cvtColor(np.array(best_image), cv2.COLOR_RGB2BGR)
+                    cleanup_faces = rank_app.get(best_np)
+                    if cleanup_faces:
+                        cf = max(cleanup_faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                        cx1, cy1, cx2, cy2 = [int(c) for c in cf.bbox]
+                        face_h = cy2 - cy1
+                        fh_top = max(0, cy1 - int(face_h * 0.4))
+                        forehead = best_np[fh_top:cy1, cx1:cx2].copy()
+                        if forehead.size > 0:
+                            fb, fg, fr = forehead[:,:,0], forehead[:,:,1], forehead[:,:,2]
+                            red_mask = (fr > 170) & (fg < 90) & (fb < 90)
+                            yellow_mask = (fr > 210) & (fg > 155) & (fb < 70)
+                            mark_mask = red_mask | yellow_mask
+                            mark_pixel_count = mark_mask.sum()
+                            if mark_pixel_count > 30 and mark_pixel_count < 200:
+                                kernel = np.ones((3, 3), np.float32) / 9.0
+                                blurred = cv2.filter2D(forehead, -1, kernel)
+                                ys, xs = np.where(mark_mask)
+                                forehead[ys, xs] = blurred[ys, xs]
+                                best_np[fh_top:cy1, cx1:cx2] = forehead
+                                best_image = Image.fromarray(cv2.cvtColor(best_np, cv2.COLOR_BGR2RGB))
+                                print(f"Scene {i+1}: removed forehead mark ({len(ys)} pixels)")
 
                 scene_images.append(best_image)
 
