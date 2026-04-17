@@ -2136,7 +2136,7 @@ This quarter's harvest data:
 - Anything new or notable: ${safeNotes}
 ${continuitySection}
 
-The episode title MUST start with the child's name. Format: '[Child's name] and the [adventure description]' or '[Child's name]'s [season] [adventure description]'. Examples: '${heroName} and the Rainy Day Mystery', '${heroName}'s Spring Adventure', '${heroName} and his Dino Friends'. Child's name is: ${heroName}
+The episode title MUST start with the child's name (3-7 words total). Format: '[Child's name] and the [Noun Phrase]' or '[Child's name]'s [Noun Phrase]'. The noun phrase after "and the" must work as a standalone title — no articles, verbs, or determiners that only make sense mid-sentence. BAD: '${heroName} and the Practice Makes Progress', '${heroName} and the Learning to Ride'. GOOD: '${heroName} and the Steady Wheels', '${heroName} and the Hidden Trail', '${heroName}'s Spring Adventure'. Child's name is: ${heroName}
 
 Output this exact JSON structure:
 {

@@ -79,6 +79,64 @@ lora_volume = modal.Volume.from_name(
 )
 
 
+# ─── Forehead mark cleanup (fixed-region, no face detection) ─────────────────
+
+def cleanup_forehead_region(image_np_bgr, label: str = "Image"):
+    """
+    Detect and remove forehead marks (bindi/tilak/decorative) using a fixed
+    center-upper region. InsightFace fails on gouache/painterly faces, so we
+    target x 35-65%, y 22-38% where the forehead consistently lands in our
+    centered front-facing illustrations.
+
+    Returns (image_np_bgr, was_cleaned: bool).
+    """
+    import cv2
+    import numpy as np
+
+    h, w = image_np_bgr.shape[:2]
+    x1, x2 = int(w * 0.35), int(w * 0.65)
+    y1, y2 = int(h * 0.22), int(h * 0.38)
+    region = image_np_bgr[y1:y2, x1:x2].copy()
+
+    if region.size == 0:
+        return image_np_bgr, False
+
+    fb, fg, fr = region[:, :, 0], region[:, :, 1], region[:, :, 2]
+
+    # Red/maroon marks
+    red_mask = (fr > 140) & (fg < 100) & (fb < 100)
+    # Yellow/gold marks
+    yellow_mask = (fr > 200) & (fg > 150) & (fb < 80)
+    # Pink/heart marks
+    pink_mask = (fr > 160) & (fg < 120) & (fb < 140) & (fr > fg + 40)
+
+    mark_mask = red_mask | yellow_mask | pink_mask
+    pixel_count = mark_mask.sum()
+
+    if pixel_count < 15 or pixel_count > 500:
+        return image_np_bgr, False
+
+    # Replace detected pixels with 5x5 blur
+    kernel_5 = np.ones((5, 5), np.float32) / 25.0
+    blurred = cv2.filter2D(region, -1, kernel_5)
+    ys, xs = np.where(mark_mask)
+    region[ys, xs] = blurred[ys, xs]
+
+    # Blend edges: dilate mask 1px, apply 3x3 blur to edge pixels
+    mark_uint8 = mark_mask.astype(np.uint8) * 255
+    dilated = cv2.dilate(mark_uint8, np.ones((3, 3), np.uint8), iterations=1)
+    edge_mask = (dilated > 0) & (~mark_mask)
+    if edge_mask.any():
+        kernel_3 = np.ones((3, 3), np.float32) / 9.0
+        edge_blurred = cv2.filter2D(region, -1, kernel_3)
+        ey, ex = np.where(edge_mask)
+        region[ey, ex] = edge_blurred[ey, ex]
+
+    image_np_bgr[y1:y2, x1:x2] = region
+    print(f"{label}: removed forehead mark ({pixel_count} pixels, fixed-region)")
+    return image_np_bgr, True
+
+
 # ─── Training ────────────────────────────────────────────────────────────────
 
 @app.function(
@@ -785,29 +843,10 @@ def generate_flux_illustrations(body: dict) -> dict:
             print("Cover generated")
 
             # ── Post-generation forehead cleanup on cover ──
-            if rank_app is not None:
-                cover_np = cv2.cvtColor(np.array(cover_image), cv2.COLOR_RGB2BGR)
-                cover_faces = rank_app.get(cover_np)
-                if cover_faces:
-                    cf = max(cover_faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-                    cx1, cy1, cx2, cy2 = [int(c) for c in cf.bbox]
-                    face_h = cy2 - cy1
-                    fh_top = max(0, cy1 - int(face_h * 0.4))
-                    forehead = cover_np[fh_top:cy1, cx1:cx2].copy()
-                    if forehead.size > 0:
-                        fb, fg, fr = forehead[:,:,0], forehead[:,:,1], forehead[:,:,2]
-                        red_mask = (fr > 170) & (fg < 90) & (fb < 90)
-                        yellow_mask = (fr > 210) & (fg > 155) & (fb < 70)
-                        mark_mask = red_mask | yellow_mask
-                        mark_pixel_count = mark_mask.sum()
-                        if mark_pixel_count > 30 and mark_pixel_count < 200:
-                            kernel = np.ones((3, 3), np.float32) / 9.0
-                            blurred = cv2.filter2D(forehead, -1, kernel)
-                            ys, xs = np.where(mark_mask)
-                            forehead[ys, xs] = blurred[ys, xs]
-                            cover_np[fh_top:cy1, cx1:cx2] = forehead
-                            cover_image = Image.fromarray(cv2.cvtColor(cover_np, cv2.COLOR_BGR2RGB))
-                            print(f"Cover: removed forehead mark ({len(ys)} pixels)")
+            cover_np = cv2.cvtColor(np.array(cover_image), cv2.COLOR_RGB2BGR)
+            cover_np, cover_cleaned = cleanup_forehead_region(cover_np, "Cover")
+            if cover_cleaned:
+                cover_image = Image.fromarray(cv2.cvtColor(cover_np, cv2.COLOR_BGR2RGB))
 
             # ── Generate scenes with reranking ──
             scene_images = []
@@ -858,10 +897,10 @@ def generate_flux_illustrations(body: dict) -> dict:
                     height=768,
                     width=768,
                     num_inference_steps=35,
-                    guidance_scale=4.5,
+                    guidance_scale=4.0,
                     num_images_per_prompt=5,
                     generator=torch.Generator("cuda").manual_seed(
-                        seed_base
+                        seed_base + i * 1000
                     ),
                 ).images
 
@@ -914,10 +953,10 @@ def generate_flux_illustrations(body: dict) -> dict:
                             height=768,
                             width=768,
                             num_inference_steps=35,
-                            guidance_scale=4.5,
+                            guidance_scale=4.0,
                             num_images_per_prompt=5,
                             generator=torch.Generator("cuda").manual_seed(
-                                seed_base + 1000
+                                seed_base + i * 1000 + 500
                             ),
                         ).images
                         print(f"Scene {i+1} retry: "
@@ -958,29 +997,10 @@ def generate_flux_illustrations(body: dict) -> dict:
                                   f"best_score={best_score:.3f}")
 
                 # ── Post-generation forehead cleanup on scene ──
-                if rank_app is not None:
-                    best_np = cv2.cvtColor(np.array(best_image), cv2.COLOR_RGB2BGR)
-                    cleanup_faces = rank_app.get(best_np)
-                    if cleanup_faces:
-                        cf = max(cleanup_faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-                        cx1, cy1, cx2, cy2 = [int(c) for c in cf.bbox]
-                        face_h = cy2 - cy1
-                        fh_top = max(0, cy1 - int(face_h * 0.4))
-                        forehead = best_np[fh_top:cy1, cx1:cx2].copy()
-                        if forehead.size > 0:
-                            fb, fg, fr = forehead[:,:,0], forehead[:,:,1], forehead[:,:,2]
-                            red_mask = (fr > 170) & (fg < 90) & (fb < 90)
-                            yellow_mask = (fr > 210) & (fg > 155) & (fb < 70)
-                            mark_mask = red_mask | yellow_mask
-                            mark_pixel_count = mark_mask.sum()
-                            if mark_pixel_count > 30 and mark_pixel_count < 200:
-                                kernel = np.ones((3, 3), np.float32) / 9.0
-                                blurred = cv2.filter2D(forehead, -1, kernel)
-                                ys, xs = np.where(mark_mask)
-                                forehead[ys, xs] = blurred[ys, xs]
-                                best_np[fh_top:cy1, cx1:cx2] = forehead
-                                best_image = Image.fromarray(cv2.cvtColor(best_np, cv2.COLOR_BGR2RGB))
-                                print(f"Scene {i+1}: removed forehead mark ({len(ys)} pixels)")
+                best_np = cv2.cvtColor(np.array(best_image), cv2.COLOR_RGB2BGR)
+                best_np, scene_cleaned = cleanup_forehead_region(best_np, f"Scene {i+1}")
+                if scene_cleaned:
+                    best_image = Image.fromarray(cv2.cvtColor(best_np, cv2.COLOR_BGR2RGB))
 
                 scene_images.append(best_image)
 
