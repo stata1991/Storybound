@@ -636,7 +636,7 @@ def generate_flux_illustrations(body: dict) -> dict:
     if pronouns == "boy":
         gender_word = "boy"
         gender_clip_reinforcement = (
-            "boy, male child, short hair, no forehead mark, no bindi, clear forehead, "
+            "boy, male child, short hair, "
         )
         gender_t5_reinforcement = (
             "boy with short hair, male child, "
@@ -806,13 +806,13 @@ def generate_flux_illustrations(body: dict) -> dict:
             )
             # T5-XXL prompt — full detail with avoid_str
             cover_t5 = (
-                f"{cover_avoid_str}"
                 f"{gender_t5_reinforcement}"
                 f"{age_prefix}, sks child, "
                 f"{skin_tone + ', ' if skin_tone else ''}"
                 f"portrait, magical storybook world, "
                 f"looking at viewer, warm smile"
-                f"{STYLE_SUFFIX}"
+                f"{STYLE_SUFFIX}. "
+                f"{cover_avoid_str}"
             )
 
             # Init InsightFace for reranking + forehead cleanup
@@ -875,13 +875,13 @@ def generate_flux_illustrations(body: dict) -> dict:
                 )
                 # T5-XXL prompt — full detail with avoid_str
                 scene_t5 = (
-                    f"{avoid_str}"
                     f"{gender_t5_reinforcement}"
                     f"{age_prefix}, sks child, "
                     f"{skin_tone + ', ' if skin_tone else ''}"
                     f"foreground, facing camera, "
                     f"{scene_desc}"
-                    f"{STYLE_SUFFIX}"
+                    f"{STYLE_SUFFIX}. "
+                    f"{avoid_str}"
                 )
 
                 print(f"Scene {i+1} has_humans={has_humans}")
