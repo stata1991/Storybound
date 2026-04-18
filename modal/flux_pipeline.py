@@ -109,8 +109,12 @@ def cleanup_forehead_region(image_np_bgr, label: str = "Image"):
     yellow_mask = (fr > 200) & (fg > 150) & (fb < 80)
     # Pink/heart marks
     pink_mask = (fr > 160) & (fg < 120) & (fb < 140) & (fr > fg + 40)
+    # Dark brown/black marks — significantly darker than surrounding skin
+    pixel_brightness = fr.astype(int) + fg.astype(int) + fb.astype(int)
+    median_brightness = np.median(pixel_brightness)
+    dark_mask = (pixel_brightness < median_brightness * 0.45) & (pixel_brightness < 300)
 
-    mark_mask = red_mask | yellow_mask | pink_mask
+    mark_mask = red_mask | yellow_mask | pink_mask | dark_mask
     pixel_count = mark_mask.sum()
 
     if pixel_count < 15 or pixel_count > 500:
@@ -674,9 +678,9 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     # Style anchor — applied to EVERY scene and cover without exception
     STYLE_SUFFIX = (
-        ", gouache illustration, children's picture book, "
-        "soft warm colors, Studio Ghibli inspired, "
-        "painterly style, detailed face, "
+        ", children's picture book illustration, gouache painting style, "
+        "soft warm colors, consistent art style, flat lighting, "
+        "2D illustrated, painterly, "
         "realistic head-to-body ratio, natural proportions"
     )
 
