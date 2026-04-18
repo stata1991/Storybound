@@ -83,10 +83,13 @@ lora_volume = modal.Volume.from_name(
 
 def cleanup_forehead_region(image_np_bgr, label: str = "Image"):
     """
-    Detect and remove forehead marks (bindi/tilak/decorative) using a fixed
-    center-upper region. InsightFace fails on gouache/painterly faces, so we
-    target x 35-65%, y 22-38% where the forehead consistently lands in our
-    centered front-facing illustrations.
+    Detect and remove forehead marks (bindi/tilak/decorative) using
+    contrast-based spot detection. A bindi is a tight cluster of ~20-400
+    pixels that stands out from surrounding skin, regardless of color.
+
+    Uses Gaussian blur to estimate local skin color, then finds small
+    high-contrast spots via absolute difference thresholding + contour
+    filtering.
 
     Returns (image_np_bgr, was_cleaned: bool).
     """
@@ -94,62 +97,64 @@ def cleanup_forehead_region(image_np_bgr, label: str = "Image"):
     import numpy as np
 
     h, w = image_np_bgr.shape[:2]
-    x1, x2 = int(w * 0.35), int(w * 0.65)
-    y1, y2 = int(h * 0.22), int(h * 0.38)
+    x1, x2 = int(w * 0.42), int(w * 0.58)
+    y1, y2 = int(h * 0.26), int(h * 0.36)
     region = image_np_bgr[y1:y2, x1:x2].copy()
 
     if region.size == 0:
         return image_np_bgr, False
 
-    fb, fg, fr = region[:, :, 0], region[:, :, 1], region[:, :, 2]
+    # Convert to grayscale
+    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
 
-    # Red/maroon marks
-    red_mask = (fr > 140) & (fg < 100) & (fb < 100)
-    # Yellow/gold marks
-    yellow_mask = (fr > 200) & (fg > 150) & (fb < 80)
-    # Pink/heart marks
-    pink_mask = (fr > 160) & (fg < 120) & (fb < 140) & (fr > fg + 40)
-    # Dark brown/black marks — significantly darker than surrounding skin
-    pixel_brightness = fr.astype(int) + fg.astype(int) + fb.astype(int)
-    median_brightness = np.median(pixel_brightness)
-    dark_mask = (pixel_brightness < median_brightness * 0.45) & (pixel_brightness < 300)
+    # Gaussian blur to get expected local skin color
+    blurred_gray = cv2.GaussianBlur(gray, (15, 15), 0)
+    blurred_color = cv2.GaussianBlur(region, (15, 15), 0)
 
-    mark_mask = red_mask | yellow_mask | pink_mask | dark_mask
-    pixel_count = mark_mask.sum()
+    # Absolute difference — highlights any spot that differs from surroundings
+    diff = cv2.absdiff(gray, blurred_gray)
 
-    # Diagnostic: log actual color values at most likely mark location
+    # Threshold at >30 intensity difference
+    _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+
+    # Find contours and filter for bindi-sized spots (20-400 pixels)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    bindi_contours = [c for c in contours if 20 <= cv2.contourArea(c) <= 400]
+
+    # Diagnostic logging
     center_y = region.shape[0] // 2
     center_x = region.shape[1] // 2
     sample_radius = 10
-    sample = region[max(0,center_y-sample_radius):center_y+sample_radius,
-                    max(0,center_x-sample_radius):center_x+sample_radius]
-    s_b, s_g, s_r = sample[:,:,0].mean(), sample[:,:,1].mean(), sample[:,:,2].mean()
-    print(f"  {label}: forehead region center RGB=({s_r:.0f},{s_g:.0f},{s_b:.0f}), "
-          f"median_brightness={median_brightness:.0f}, "
-          f"red={red_mask.sum()}, yellow={yellow_mask.sum()}, pink={pink_mask.sum()}, dark={dark_mask.sum()}, "
-          f"total={pixel_count}")
+    sample = region[max(0, center_y - sample_radius):center_y + sample_radius,
+                    max(0, center_x - sample_radius):center_x + sample_radius]
+    s_b, s_g, s_r = sample[:, :, 0].mean(), sample[:, :, 1].mean(), sample[:, :, 2].mean()
+    max_diff = diff.max()
+    total_spot_pixels = sum(cv2.contourArea(c) for c in bindi_contours)
+    print(f"  {label}: forehead center RGB=({s_r:.0f},{s_g:.0f},{s_b:.0f}), "
+          f"max_diff={max_diff}, contours={len(contours)}, "
+          f"bindi_sized={len(bindi_contours)}, spot_pixels={total_spot_pixels:.0f}")
 
-    if pixel_count < 15 or pixel_count > 500:
+    if not bindi_contours:
         return image_np_bgr, False
 
-    # Replace detected pixels with 5x5 blur
-    kernel_5 = np.ones((5, 5), np.float32) / 25.0
-    blurred = cv2.filter2D(region, -1, kernel_5)
-    ys, xs = np.where(mark_mask)
-    region[ys, xs] = blurred[ys, xs]
+    # Replace each bindi contour with the blurred (skin-colored) version
+    mask = np.zeros(gray.shape, dtype=np.uint8)
+    cv2.drawContours(mask, bindi_contours, -1, 255, -1)
 
-    # Blend edges: dilate mask 1px, apply 3x3 blur to edge pixels
-    mark_uint8 = mark_mask.astype(np.uint8) * 255
-    dilated = cv2.dilate(mark_uint8, np.ones((3, 3), np.uint8), iterations=1)
-    edge_mask = (dilated > 0) & (~mark_mask)
-    if edge_mask.any():
-        kernel_3 = np.ones((3, 3), np.float32) / 9.0
-        edge_blurred = cv2.filter2D(region, -1, kernel_3)
-        ey, ex = np.where(edge_mask)
-        region[ey, ex] = edge_blurred[ey, ex]
+    # Dilate 1px for edge blending
+    dilated = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
+
+    # Replace: core pixels get blurred color, edge pixels get blended
+    core = mask > 0
+    edge = (dilated > 0) & ~core
+    region[core] = blurred_color[core]
+    # Blend edges: 50/50 mix of original and blurred
+    region[edge] = (region[edge].astype(np.float32) * 0.5 +
+                    blurred_color[edge].astype(np.float32) * 0.5).astype(np.uint8)
 
     image_np_bgr[y1:y2, x1:x2] = region
-    print(f"{label}: removed forehead mark ({pixel_count} pixels, fixed-region)")
+    cleaned_pixels = core.sum() + edge.sum()
+    print(f"{label}: removed forehead mark ({cleaned_pixels} pixels, contrast-based)")
     return image_np_bgr, True
 
 
