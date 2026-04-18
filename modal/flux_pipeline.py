@@ -117,6 +117,18 @@ def cleanup_forehead_region(image_np_bgr, label: str = "Image"):
     mark_mask = red_mask | yellow_mask | pink_mask | dark_mask
     pixel_count = mark_mask.sum()
 
+    # Diagnostic: log actual color values at most likely mark location
+    center_y = region.shape[0] // 2
+    center_x = region.shape[1] // 2
+    sample_radius = 10
+    sample = region[max(0,center_y-sample_radius):center_y+sample_radius,
+                    max(0,center_x-sample_radius):center_x+sample_radius]
+    s_b, s_g, s_r = sample[:,:,0].mean(), sample[:,:,1].mean(), sample[:,:,2].mean()
+    print(f"  {label}: forehead region center RGB=({s_r:.0f},{s_g:.0f},{s_b:.0f}), "
+          f"median_brightness={median_brightness:.0f}, "
+          f"red={red_mask.sum()}, yellow={yellow_mask.sum()}, pink={pink_mask.sum()}, dark={dark_mask.sum()}, "
+          f"total={pixel_count}")
+
     if pixel_count < 15 or pixel_count > 500:
         return image_np_bgr, False
 
@@ -810,13 +822,13 @@ def generate_flux_illustrations(body: dict) -> dict:
             )
             # T5-XXL prompt — full detail with avoid_str
             cover_t5 = (
+                f"{cover_avoid_str}"
                 f"{gender_t5_reinforcement}"
                 f"{age_prefix}, sks child, "
                 f"{skin_tone + ', ' if skin_tone else ''}"
                 f"portrait, magical storybook world, "
                 f"looking at viewer, warm smile"
-                f"{STYLE_SUFFIX}. "
-                f"{cover_avoid_str}"
+                f"{STYLE_SUFFIX}"
             )
 
             # Init InsightFace for reranking + forehead cleanup
@@ -879,13 +891,13 @@ def generate_flux_illustrations(body: dict) -> dict:
                 )
                 # T5-XXL prompt — full detail with avoid_str
                 scene_t5 = (
+                    f"{avoid_str}"
                     f"{gender_t5_reinforcement}"
                     f"{age_prefix}, sks child, "
                     f"{skin_tone + ', ' if skin_tone else ''}"
                     f"foreground, facing camera, "
                     f"{scene_desc}"
-                    f"{STYLE_SUFFIX}. "
-                    f"{avoid_str}"
+                    f"{STYLE_SUFFIX}"
                 )
 
                 print(f"Scene {i+1} has_humans={has_humans}")
@@ -901,7 +913,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                     height=768,
                     width=768,
                     num_inference_steps=35,
-                    guidance_scale=4.0,
+                    guidance_scale=4.5,
                     num_images_per_prompt=5,
                     generator=torch.Generator("cuda").manual_seed(
                         seed_base + i * 1000
@@ -957,7 +969,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                             height=768,
                             width=768,
                             num_inference_steps=35,
-                            guidance_scale=4.0,
+                            guidance_scale=4.5,
                             num_images_per_prompt=5,
                             generator=torch.Generator("cuda").manual_seed(
                                 seed_base + i * 1000 + 500
