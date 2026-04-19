@@ -113,11 +113,19 @@ def cleanup_forehead_from_bbox(image_pil, face_bbox, label: str = "Image"):
         print(f"  {label}: forehead ROI empty, skipping")
         return image_pil, False
 
+    # Scale dilation and inpaint radius based on image size
+    dilate_px = max(4, int(img_h / 200))
+    inpaint_radius = max(5, int(img_h / 150))
+
     # Contrast-based bindi detection
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blurred_gray = cv2.GaussianBlur(gray, (15, 15), 0)
     diff = cv2.absdiff(gray, blurred_gray)
     _, thresh = cv2.threshold(diff, 15, 255, cv2.THRESH_BINARY)
+
+    # Merge nearby blobs: dilate then erode to connect adjacent small spots
+    thresh = cv2.dilate(thresh, np.ones((3, 3), np.uint8), iterations=3)
+    thresh = cv2.erode(thresh, np.ones((3, 3), np.uint8), iterations=2)
 
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     bindi_contours = [c for c in contours if 10 <= cv2.contourArea(c) <= 600]
@@ -128,21 +136,45 @@ def cleanup_forehead_from_bbox(image_pil, face_bbox, label: str = "Image"):
               f"contours={len(contours)}, bindi_contours=0, inpainted=0px")
         return image_pil, False
 
-    # Build inpaint mask in full image coordinates
+    # ── First inpaint pass ──
     full_mask = np.zeros((img_h, img_w), dtype=np.uint8)
     roi_mask = np.zeros(gray.shape, dtype=np.uint8)
     cv2.drawContours(roi_mask, bindi_contours, -1, 255, -1)
-    roi_mask = cv2.dilate(roi_mask, np.ones((3, 3), np.uint8), iterations=4)
+    roi_mask = cv2.dilate(roi_mask, np.ones((3, 3), np.uint8), iterations=dilate_px)
     full_mask[roi_y1:roi_y2, roi_x1:roi_x2] = roi_mask
 
     n_pixels = int(full_mask.sum() / 255)
 
-    inpainted_bgr = cv2.inpaint(original_bgr, full_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+    inpainted_bgr = cv2.inpaint(original_bgr, full_mask, inpaintRadius=inpaint_radius, flags=cv2.INPAINT_TELEA)
 
     print(f"  {label}: face bbox ({fx1},{fy1})-({fx2},{fy2}), "
           f"forehead ROI {roi_x1},{roi_y1}-{roi_x2},{roi_y2}, "
           f"contours={len(contours)}, bindi_contours={len(bindi_contours)}, "
-          f"inpainted={n_pixels}px")
+          f"inpainted={n_pixels}px, dilate={dilate_px}, radius={inpaint_radius}")
+
+    # ── Second verification pass — catch any residual ──
+    roi2 = inpainted_bgr[roi_y1:roi_y2, roi_x1:roi_x2].copy()
+    gray2 = cv2.cvtColor(roi2, cv2.COLOR_BGR2GRAY)
+    blurred2 = cv2.GaussianBlur(gray2, (15, 15), 0)
+    diff2 = cv2.absdiff(gray2, blurred2)
+    _, thresh2 = cv2.threshold(diff2, 15, 255, cv2.THRESH_BINARY)
+    thresh2 = cv2.dilate(thresh2, np.ones((3, 3), np.uint8), iterations=3)
+    thresh2 = cv2.erode(thresh2, np.ones((3, 3), np.uint8), iterations=2)
+
+    contours2, _ = cv2.findContours(thresh2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    bindi_contours2 = [c for c in contours2 if 10 <= cv2.contourArea(c) <= 600]
+
+    if bindi_contours2:
+        full_mask2 = np.zeros((img_h, img_w), dtype=np.uint8)
+        roi_mask2 = np.zeros(gray2.shape, dtype=np.uint8)
+        cv2.drawContours(roi_mask2, bindi_contours2, -1, 255, -1)
+        roi_mask2 = cv2.dilate(roi_mask2, np.ones((3, 3), np.uint8), iterations=dilate_px)
+        full_mask2[roi_y1:roi_y2, roi_x1:roi_x2] = roi_mask2
+        n_pixels2 = int(full_mask2.sum() / 255)
+        inpainted_bgr = cv2.inpaint(inpainted_bgr, full_mask2, inpaintRadius=inpaint_radius, flags=cv2.INPAINT_TELEA)
+        print(f"  {label}: second pass: {len(bindi_contours2)} contours remaining, inpainted {n_pixels2}px")
+    else:
+        print(f"  {label}: second pass: 0 contours remaining, clean")
 
     cleaned_pil = Image.fromarray(cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB))
     return cleaned_pil, True
