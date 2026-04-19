@@ -79,19 +79,16 @@ lora_volume = modal.Volume.from_name(
 )
 
 
-# ─── Forehead mark cleanup (photorealistic proxy + InsightFace bbox) ─────────
+# ─── Forehead mark cleanup (reuses face bbox from reranking) ─────────────────
 
-def cleanup_forehead_via_proxy(image_pil, pipe, rank_app, label: str = "Image"):
+def cleanup_forehead_from_bbox(image_pil, face_bbox, label: str = "Image"):
     """
     Detect and remove forehead marks (bindi/tilak/decorative) using a
-    photorealistic proxy for face detection.
+    pre-detected face bounding box from InsightFace reranking.
 
-    1. Run img2img at low strength to create a semi-realistic proxy image
-       where InsightFace can reliably detect faces (gouache art fails).
-    2. Use the detected face bbox to locate the forehead on the ORIGINAL
-       illustration (same pixel dimensions — 1:1 mapping).
-    3. Detect bindi via contrast-based spot detection within the forehead ROI.
-    4. Inpaint with cv2.inpaint (deterministic, fast, no FLUX call needed).
+    1. Compute forehead ROI from face bbox (center 40% width, top 5-35% height).
+    2. Detect bindi via contrast-based spot detection within the forehead ROI.
+    3. Inpaint with cv2.inpaint (deterministic, fast, CPU-only — zero GPU cost).
 
     Returns (cleaned_pil_image, was_cleaned: bool).
     """
@@ -99,93 +96,24 @@ def cleanup_forehead_via_proxy(image_pil, pipe, rank_app, label: str = "Image"):
     import numpy as np
     from PIL import Image
 
-    if rank_app is None:
-        print(f"  {label}: no rank_app available, skipping forehead cleanup")
-        return image_pil, False
-
-    # ── Step 1: Generate photorealistic proxy via img2img ──
-    try:
-        from diffusers import FluxImg2ImgPipeline
-        img2img_pipe = FluxImg2ImgPipeline.from_pipe(pipe)
-        proxy_method = "FluxImg2ImgPipeline"
-    except (ImportError, Exception) as e:
-        print(f"  {label}: FluxImg2ImgPipeline unavailable ({e}), using manual VAE fallback")
-        img2img_pipe = None
-        proxy_method = "manual_vae"
-
-    import torch
-
-    if img2img_pipe is not None:
-        proxy_result = img2img_pipe(
-            prompt="photorealistic portrait photo of a child, clear skin, studio lighting",
-            image=image_pil,
-            strength=0.2,
-            num_inference_steps=10,
-            guidance_scale=3.5,
-        )
-        proxy_image = proxy_result.images[0]
-    else:
-        # Manual fallback: encode with VAE, add noise at ~0.2, denoise
-        img_np = np.array(image_pil)
-        img_tensor = torch.from_numpy(img_np).float().permute(2, 0, 1).unsqueeze(0) / 127.5 - 1.0
-        img_tensor = img_tensor.to("cuda", dtype=torch.bfloat16)
-
-        with torch.no_grad():
-            latent = pipe.vae.encode(img_tensor).latent_dist.sample()
-            shift_factor = getattr(pipe.vae.config, 'shift_factor', 0.0)
-            scaling_factor = getattr(pipe.vae.config, 'scaling_factor', 0.18215)
-            latent = (latent - shift_factor) * scaling_factor
-
-            # Add noise at strength ~0.2
-            noise = torch.randn_like(latent)
-            t = torch.tensor([0.2], device="cuda", dtype=torch.bfloat16)
-            noisy_latent = (1 - t) * latent + t * noise
-
-            # Decode back (no denoising — just enough perturbation for face detection)
-            noisy_latent = noisy_latent / scaling_factor + shift_factor
-            decoded = pipe.vae.decode(noisy_latent).sample
-            decoded = ((decoded.clamp(-1, 1) + 1) * 127.5).to(torch.uint8)
-            proxy_np = decoded[0].permute(1, 2, 0).cpu().numpy()
-            proxy_image = Image.fromarray(proxy_np)
-
-    print(f"  {label}: proxy generated via {proxy_method}")
-
-    # ── Step 2: Detect face on proxy image ──
-    proxy_bgr = cv2.cvtColor(np.array(proxy_image), cv2.COLOR_RGB2BGR)
-    faces = rank_app.get(proxy_bgr)
-
-    if not faces:
-        print(f"  {label}: no face detected on proxy, skipping cleanup")
-        return image_pil, False
-
-    face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-
-    # ── Step 3: Compute forehead ROI on the ORIGINAL illustration ──
     original_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
     img_h, img_w = original_bgr.shape[:2]
 
-    face_x1, face_y1, face_x2, face_y2 = [int(c) for c in face.bbox]
-    face_w = face_x2 - face_x1
-    face_h = face_y2 - face_y1
+    fx1, fy1, fx2, fy2 = [int(c) for c in face_bbox]
+    fw, fh = fx2 - fx1, fy2 - fy1
 
-    # Forehead region: central 40% width, top 5-35% height of face box
-    fh_x1 = face_x1 + int(0.30 * face_w)
-    fh_x2 = face_x1 + int(0.70 * face_w)
-    fh_y1 = face_y1 + int(0.05 * face_h)
-    fh_y2 = face_y1 + int(0.35 * face_h)
+    # Forehead: center 40% of face width, top 5-35% of face height
+    roi_x1 = max(0, fx1 + int(0.30 * fw))
+    roi_x2 = min(img_w, fx1 + int(0.70 * fw))
+    roi_y1 = max(0, fy1 + int(0.05 * fh))
+    roi_y2 = min(img_h, fy1 + int(0.35 * fh))
 
-    # Clamp to image bounds
-    fh_x1 = max(0, fh_x1)
-    fh_y1 = max(0, fh_y1)
-    fh_x2 = min(img_w, fh_x2)
-    fh_y2 = min(img_h, fh_y2)
-
-    roi = original_bgr[fh_y1:fh_y2, fh_x1:fh_x2].copy()
+    roi = original_bgr[roi_y1:roi_y2, roi_x1:roi_x2].copy()
     if roi.size == 0:
         print(f"  {label}: forehead ROI empty, skipping")
         return image_pil, False
 
-    # ── Step 4: Detect bindi via contrast in the forehead ROI ──
+    # Contrast-based bindi detection
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blurred_gray = cv2.GaussianBlur(gray, (15, 15), 0)
     diff = cv2.absdiff(gray, blurred_gray)
@@ -195,38 +123,28 @@ def cleanup_forehead_via_proxy(image_pil, pipe, rank_app, label: str = "Image"):
     bindi_contours = [c for c in contours if 10 <= cv2.contourArea(c) <= 600]
 
     if not bindi_contours:
-        print(f"  {label}: proxy face detected at ({face_x1},{face_y1})-({face_x2},{face_y2}), "
-              f"forehead ROI {fh_x1},{fh_y1}-{fh_x2},{fh_y2}, "
+        print(f"  {label}: face bbox ({fx1},{fy1})-({fx2},{fy2}), "
+              f"forehead ROI {roi_x1},{roi_y1}-{roi_x2},{roi_y2}, "
               f"contours={len(contours)}, bindi_contours=0, inpainted=0px")
         return image_pil, False
 
-    # ── Step 5: Inpaint bindi on the original illustration ──
-    # Build mask in full image coordinates
+    # Build inpaint mask in full image coordinates
     full_mask = np.zeros((img_h, img_w), dtype=np.uint8)
     roi_mask = np.zeros(gray.shape, dtype=np.uint8)
     cv2.drawContours(roi_mask, bindi_contours, -1, 255, -1)
-
-    # Dilate 4px for margin
     roi_mask = cv2.dilate(roi_mask, np.ones((3, 3), np.uint8), iterations=4)
-    full_mask[fh_y1:fh_y2, fh_x1:fh_x2] = roi_mask
+    full_mask[roi_y1:roi_y2, roi_x1:roi_x2] = roi_mask
 
     n_pixels = int(full_mask.sum() / 255)
 
-    # cv2.inpaint — deterministic, fast, works great for small dots
     inpainted_bgr = cv2.inpaint(original_bgr, full_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
 
-    # ── Step 6: Diagnostic logging ──
-    print(f"  {label}: proxy face detected at ({face_x1},{face_y1})-({face_x2},{face_y2}), "
-          f"forehead ROI {fh_x1},{fh_y1}-{fh_x2},{fh_y2}, "
+    print(f"  {label}: face bbox ({fx1},{fy1})-({fx2},{fy2}), "
+          f"forehead ROI {roi_x1},{roi_y1}-{roi_x2},{roi_y2}, "
           f"contours={len(contours)}, bindi_contours={len(bindi_contours)}, "
           f"inpainted={n_pixels}px")
 
     cleaned_pil = Image.fromarray(cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB))
-
-    import gc
-    gc.collect()
-    torch.cuda.empty_cache()
-
     return cleaned_pil, True
 
 
@@ -936,11 +854,14 @@ def generate_flux_illustrations(body: dict) -> dict:
             print("Cover generated")
 
             # ── Post-generation forehead cleanup on cover ──
-            cover_image, _ = cleanup_forehead_via_proxy(cover_image, pipe, rank_app, "Cover")
-
-            # Reclaim VRAM before generating 5 candidates per scene
-            gc.collect()
-            torch.cuda.empty_cache()
+            if rank_app is not None:
+                cover_bgr = cv2.cvtColor(np.array(cover_image), cv2.COLOR_RGB2BGR)
+                cover_faces = rank_app.get(cover_bgr)
+                if cover_faces:
+                    cover_face = max(cover_faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                    cover_image, _ = cleanup_forehead_from_bbox(cover_image, cover_face.bbox, "Cover")
+                else:
+                    print("  Cover: no face detected, skipping forehead cleanup")
 
             # ── Generate scenes with reranking ──
             scene_images = []
@@ -1003,6 +924,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                 # Rerank by face similarity
                 best_image = candidates[0]
                 best_score = -1.0
+                best_face_bbox = None
 
                 if rank_app is not None and face_embedding is not None:
                     ref_emb = face_embedding.cpu().float()
@@ -1033,6 +955,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                         if score > best_score:
                             best_score = score
                             best_image = candidate
+                            best_face_bbox = face.bbox
 
                     print(f"Scene {i+1} reranking: "
                           f"best_score={best_score:.3f}")
@@ -1081,17 +1004,29 @@ def generate_flux_illustrations(body: dict) -> dict:
                             if score > best_score:
                                 best_score = score
                                 best_image = candidate
+                                best_face_bbox = face.bbox
 
                         if best_score < 0.2:
                             best_image = candidates_retry[0]
                             print(f"Scene {i+1}: retry still low ({best_score:.3f}), "
                                   "using first retry candidate as fallback")
+                            # Detect face on fallback image for cleanup
+                            fallback_np = cv2.cvtColor(np.array(best_image), cv2.COLOR_RGB2BGR)
+                            fallback_faces = rank_app.get(fallback_np)
+                            if fallback_faces:
+                                fallback_face = max(fallback_faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                                best_face_bbox = fallback_face.bbox
+                            else:
+                                best_face_bbox = None
                         else:
                             print(f"Scene {i+1} retry reranking: "
                                   f"best_score={best_score:.3f}")
 
                 # ── Post-generation forehead cleanup on scene ──
-                best_image, _ = cleanup_forehead_via_proxy(best_image, pipe, rank_app, f"Scene {i+1}")
+                if best_face_bbox is not None:
+                    best_image, _ = cleanup_forehead_from_bbox(best_image, best_face_bbox, f"Scene {i+1}")
+                else:
+                    print(f"  Scene {i+1}: no face bbox available, skipping forehead cleanup")
 
                 scene_images.append(best_image)
 
