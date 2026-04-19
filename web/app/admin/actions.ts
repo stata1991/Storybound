@@ -708,14 +708,9 @@ export async function completeIllustrationGeneration(
     const hero = (bibleRaw as Record<string, unknown>).hero_profile as
       | Record<string, unknown>
       | undefined;
-    const arc = (bibleRaw as Record<string, unknown>).season_arc as
-      | Record<string, unknown>
-      | undefined;
-
     const phys = hero?.physical_description as
       | Record<string, string>
       | undefined;
-    const traits = hero?.personality_traits as string[] | undefined;
 
     hairDescription = phys?.hair ?? "";
     const appearance = phys
@@ -1013,14 +1008,9 @@ export async function triggerIllustrationPipeline(
     const hero = (bibleRaw as Record<string, unknown>).hero_profile as
       | Record<string, unknown>
       | undefined;
-    const arc = (bibleRaw as Record<string, unknown>).season_arc as
-      | Record<string, unknown>
-      | undefined;
-
     const phys = hero?.physical_description as
       | Record<string, string>
       | undefined;
-    const traits = hero?.personality_traits as string[] | undefined;
 
     hairDescription = phys?.hair ?? "";
     const appearance = phys
