@@ -50,9 +50,10 @@ export interface BookParams {
   year: number;
   title: string;
   dedication: string;
-  scenes: { number: number; text: string; imageBase64: string }[];
+  scenes: { number: number; text: string; imageBase64: string; beat?: string }[];
   coverImageBase64: string;
   finalPage: string;
+  finalPageImageBase64?: string;
 }
 
 /* ─── Pronoun helper ─────────────────────────────────────────────────────── */
@@ -128,17 +129,28 @@ function coverPage(params: BookParams): string {
 /* ─── Dedication page ─────────────────────────────────────────────────────── */
 
 function dedicationPage(dedication: string): string {
+  const flourish = `<p style="
+    margin: 0;
+    font-family: ${SERIF};
+    font-size: 16px;
+    color: ${GOLD};
+    letter-spacing: 6px;
+    text-align: center;
+  ">&mdash; &#10087; &mdash;</p>`;
+
   return page(`
     <div style="
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100%;
       padding: 60px;
       box-sizing: border-box;
     ">
+      ${flourish}
       <p style="
-        margin: 0;
+        margin: 20px 0;
         font-family: ${SERIF};
         font-size: 18px;
         color: ${NAVY};
@@ -147,6 +159,7 @@ function dedicationPage(dedication: string): string {
         line-height: 1.8;
         max-width: 5in;
       ">${escapeHtml(dedication)}</p>
+      ${flourish}
     </div>
   `);
 }
@@ -182,7 +195,6 @@ function textPage(
   seasonLabel: string,
   pageNumber: number
 ): string {
-  const safeText = truncateToWords(scene.text, profile.wordsPerScene);
   return page(`
     <div style="
       width: 100%;
@@ -229,15 +241,7 @@ function textPage(
             letter-spacing: 2px;
             text-transform: uppercase;
           ">Chapter ${scene.number}</p>` : ""}
-          <p style="
-            margin: 0;
-            font-family: ${NUNITO};
-            font-size: ${profile.fontSize}px;
-            font-weight: 400;
-            color: ${TEXT_DARK};
-            line-height: 1.8;
-            text-align: left;
-          ">${escapeHtml(safeText)}</p>
+          ${formatSceneText(scene.text, profile, profile.fontSize, 1.8)}
         </div>
       </div>
       <!-- Page number -->
@@ -334,16 +338,7 @@ function combinedScenePage(
           align-items: center;
           overflow: hidden;
         ">
-          <p style="
-            margin: 0;
-            font-family: ${NUNITO};
-            font-size: ${profile.fontSize}px;
-            font-weight: 600;
-            color: ${TEXT_DARK};
-            line-height: ${profile.lineHeight};
-            text-align: left;
-            width: 100%;
-          ">${escapeHtml(scene.text)}</p>
+          ${formatSceneText(scene.text, profile, profile.fontSize, profile.lineHeight)}
         </div>
 
         <!-- Page number -->
@@ -430,6 +425,62 @@ function truncateToWords(text: string, max: number): string {
   return words.slice(0, max).join(" ") + "\u2026";
 }
 
+/* ─── Dialogue formatting (ages 5+) ──────────────────────────────────────── */
+
+function formatSceneText(
+  text: string,
+  profile: AgeProfile,
+  fontSize: number,
+  lineHeight: number,
+): string {
+  const safeText = truncateToWords(text, profile.wordsPerScene);
+
+  // Ages 3-4: plain text, no dialogue formatting
+  if (profile.minAge < 5) {
+    return `<p style="
+      margin: 0;
+      font-family: ${NUNITO};
+      font-size: ${fontSize}px;
+      font-weight: 600;
+      color: ${TEXT_DARK};
+      line-height: ${lineHeight};
+      text-align: left;
+      width: 100%;
+    ">${escapeHtml(safeText)}</p>`;
+  }
+
+  // Ages 5+: detect quoted dialogue and render with indent + italic
+  const parts = safeText.split(/(\u201c[^\u201d]*\u201d|"[^"]*")/g);
+  let html = "";
+  for (const part of parts) {
+    if (!part) continue;
+    const isDialogue =
+      (part.startsWith("\u201c") && part.endsWith("\u201d")) ||
+      (part.startsWith('"') && part.endsWith('"'));
+    if (isDialogue) {
+      html += `<span style="
+        display: block;
+        margin: 6px 0 6px 24px;
+        font-style: italic;
+        color: ${NAVY};
+      ">${escapeHtml(part)}</span>`;
+    } else {
+      html += escapeHtml(part);
+    }
+  }
+
+  return `<p style="
+    margin: 0;
+    font-family: ${NUNITO};
+    font-size: ${fontSize}px;
+    font-weight: 600;
+    color: ${TEXT_DARK};
+    line-height: ${lineHeight};
+    text-align: left;
+    width: 100%;
+  ">${html}</p>`;
+}
+
 /* ─── Main export ─────────────────────────────────────────────────────────── */
 
 export function generateBookHTML(params: BookParams): string {
@@ -443,24 +494,60 @@ export function generateBookHTML(params: BookParams): string {
   // 2. Dedication
   pages.push(dedicationPage(params.dedication));
 
-  // 3. Scene pages (combined image + text on one page)
-  // Page numbering: dedication is page 1, first scene is page 2
+  // 3. Scene pages — beat-aware layout variety
+  // Key emotional beats get full-bleed illustration + separate text page;
+  // all others get combined image+text on one page.
+  // Cap full-bleed at 3 to control page count.
+  const FULL_BLEED_BEATS = new Set(["setup", "turning_point", "celebration"]);
+  const MAX_FULL_BLEED = 3;
+  let fullBleedCount = 0;
   let pageNum = 2;
+
   for (const scene of params.scenes) {
-    pages.push(combinedScenePage(scene, profile, seasonLabel, pageNum));
-    pageNum += 1;
+    const useFullBleed =
+      scene.beat &&
+      FULL_BLEED_BEATS.has(scene.beat) &&
+      fullBleedCount < MAX_FULL_BLEED;
+
+    if (useFullBleed) {
+      pages.push(illustrationPage(scene));
+      pages.push(textPage(scene, profile, seasonLabel, pageNum));
+      fullBleedCount++;
+      pageNum += 1; // text page gets the number
+    } else {
+      pages.push(combinedScenePage(scene, profile, seasonLabel, pageNum));
+      pageNum += 1;
+    }
   }
 
-  // 4. Final page
+  // 4. Final page (with optional vignette from last scene)
+  const finalVignette = params.finalPageImageBase64 ? `
+      <div style="
+        width: 200px;
+        height: 200px;
+        margin: 0 auto 24px;
+        border-radius: 50%;
+        overflow: hidden;
+        border: 3px solid ${GOLD};
+        opacity: 0.85;
+      ">
+        <img
+          src="data:image/png;base64,${params.finalPageImageBase64}"
+          style="width: 100%; height: 100%; object-fit: cover; display: block;"
+        />
+      </div>` : "";
+
   pages.push(page(`
     <div style="
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100%;
       padding: 60px;
       box-sizing: border-box;
     ">
+      ${finalVignette}
       <p style="
         margin: 0;
         font-family: ${SERIF};

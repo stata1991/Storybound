@@ -79,83 +79,150 @@ lora_volume = modal.Volume.from_name(
 )
 
 
-# ─── Forehead mark cleanup (fixed-region, no face detection) ─────────────────
+# ─── Forehead mark cleanup (photorealistic proxy + InsightFace bbox) ─────────
 
-def cleanup_forehead_region(image_np_bgr, label: str = "Image"):
+def cleanup_forehead_via_proxy(image_pil, pipe, rank_app, label: str = "Image"):
     """
-    Detect and remove forehead marks (bindi/tilak/decorative) using
-    contrast-based spot detection. A bindi is a tight cluster of ~20-400
-    pixels that stands out from surrounding skin, regardless of color.
+    Detect and remove forehead marks (bindi/tilak/decorative) using a
+    photorealistic proxy for face detection.
 
-    Uses Gaussian blur to estimate local skin color, then finds small
-    high-contrast spots via absolute difference thresholding + contour
-    filtering.
+    1. Run img2img at low strength to create a semi-realistic proxy image
+       where InsightFace can reliably detect faces (gouache art fails).
+    2. Use the detected face bbox to locate the forehead on the ORIGINAL
+       illustration (same pixel dimensions — 1:1 mapping).
+    3. Detect bindi via contrast-based spot detection within the forehead ROI.
+    4. Inpaint with cv2.inpaint (deterministic, fast, no FLUX call needed).
 
-    Returns (image_np_bgr, was_cleaned: bool).
+    Returns (cleaned_pil_image, was_cleaned: bool).
     """
     import cv2
     import numpy as np
+    from PIL import Image
 
-    h, w = image_np_bgr.shape[:2]
-    x1, x2 = int(w * 0.42), int(w * 0.58)
-    y1, y2 = int(h * 0.26), int(h * 0.36)
-    region = image_np_bgr[y1:y2, x1:x2].copy()
+    if rank_app is None:
+        print(f"  {label}: no rank_app available, skipping forehead cleanup")
+        return image_pil, False
 
-    if region.size == 0:
-        return image_np_bgr, False
+    # ── Step 1: Generate photorealistic proxy via img2img ──
+    try:
+        from diffusers import FluxImg2ImgPipeline
+        img2img_pipe = FluxImg2ImgPipeline.from_pipe(pipe)
+        proxy_method = "FluxImg2ImgPipeline"
+    except (ImportError, Exception) as e:
+        print(f"  {label}: FluxImg2ImgPipeline unavailable ({e}), using manual VAE fallback")
+        img2img_pipe = None
+        proxy_method = "manual_vae"
 
-    # Convert to grayscale
-    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+    import torch
 
-    # Gaussian blur to get expected local skin color
+    if img2img_pipe is not None:
+        proxy_result = img2img_pipe(
+            prompt="photorealistic portrait photo of a child, clear skin, studio lighting",
+            image=image_pil,
+            strength=0.2,
+            num_inference_steps=10,
+            guidance_scale=3.5,
+        )
+        proxy_image = proxy_result.images[0]
+    else:
+        # Manual fallback: encode with VAE, add noise at ~0.2, denoise
+        img_np = np.array(image_pil)
+        img_tensor = torch.from_numpy(img_np).float().permute(2, 0, 1).unsqueeze(0) / 127.5 - 1.0
+        img_tensor = img_tensor.to("cuda", dtype=torch.bfloat16)
+
+        with torch.no_grad():
+            latent = pipe.vae.encode(img_tensor).latent_dist.sample()
+            shift_factor = getattr(pipe.vae.config, 'shift_factor', 0.0)
+            scaling_factor = getattr(pipe.vae.config, 'scaling_factor', 0.18215)
+            latent = (latent - shift_factor) * scaling_factor
+
+            # Add noise at strength ~0.2
+            noise = torch.randn_like(latent)
+            t = torch.tensor([0.2], device="cuda", dtype=torch.bfloat16)
+            noisy_latent = (1 - t) * latent + t * noise
+
+            # Decode back (no denoising — just enough perturbation for face detection)
+            noisy_latent = noisy_latent / scaling_factor + shift_factor
+            decoded = pipe.vae.decode(noisy_latent).sample
+            decoded = ((decoded.clamp(-1, 1) + 1) * 127.5).to(torch.uint8)
+            proxy_np = decoded[0].permute(1, 2, 0).cpu().numpy()
+            proxy_image = Image.fromarray(proxy_np)
+
+    print(f"  {label}: proxy generated via {proxy_method}")
+
+    # ── Step 2: Detect face on proxy image ──
+    proxy_bgr = cv2.cvtColor(np.array(proxy_image), cv2.COLOR_RGB2BGR)
+    faces = rank_app.get(proxy_bgr)
+
+    if not faces:
+        print(f"  {label}: no face detected on proxy, skipping cleanup")
+        return image_pil, False
+
+    face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+
+    # ── Step 3: Compute forehead ROI on the ORIGINAL illustration ──
+    original_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+    img_h, img_w = original_bgr.shape[:2]
+
+    face_x1, face_y1, face_x2, face_y2 = [int(c) for c in face.bbox]
+    face_w = face_x2 - face_x1
+    face_h = face_y2 - face_y1
+
+    # Forehead region: central 40% width, top 5-35% height of face box
+    fh_x1 = face_x1 + int(0.30 * face_w)
+    fh_x2 = face_x1 + int(0.70 * face_w)
+    fh_y1 = face_y1 + int(0.05 * face_h)
+    fh_y2 = face_y1 + int(0.35 * face_h)
+
+    # Clamp to image bounds
+    fh_x1 = max(0, fh_x1)
+    fh_y1 = max(0, fh_y1)
+    fh_x2 = min(img_w, fh_x2)
+    fh_y2 = min(img_h, fh_y2)
+
+    roi = original_bgr[fh_y1:fh_y2, fh_x1:fh_x2].copy()
+    if roi.size == 0:
+        print(f"  {label}: forehead ROI empty, skipping")
+        return image_pil, False
+
+    # ── Step 4: Detect bindi via contrast in the forehead ROI ──
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blurred_gray = cv2.GaussianBlur(gray, (15, 15), 0)
-    blurred_color = cv2.GaussianBlur(region, (15, 15), 0)
-
-    # Absolute difference — highlights any spot that differs from surroundings
     diff = cv2.absdiff(gray, blurred_gray)
+    _, thresh = cv2.threshold(diff, 15, 255, cv2.THRESH_BINARY)
 
-    # Threshold at >30 intensity difference
-    _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
-
-    # Find contours and filter for bindi-sized spots (20-400 pixels)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    bindi_contours = [c for c in contours if 20 <= cv2.contourArea(c) <= 400]
-
-    # Diagnostic logging
-    center_y = region.shape[0] // 2
-    center_x = region.shape[1] // 2
-    sample_radius = 10
-    sample = region[max(0, center_y - sample_radius):center_y + sample_radius,
-                    max(0, center_x - sample_radius):center_x + sample_radius]
-    s_b, s_g, s_r = sample[:, :, 0].mean(), sample[:, :, 1].mean(), sample[:, :, 2].mean()
-    max_diff = diff.max()
-    total_spot_pixels = sum(cv2.contourArea(c) for c in bindi_contours)
-    print(f"  {label}: forehead center RGB=({s_r:.0f},{s_g:.0f},{s_b:.0f}), "
-          f"max_diff={max_diff}, contours={len(contours)}, "
-          f"bindi_sized={len(bindi_contours)}, spot_pixels={total_spot_pixels:.0f}")
+    bindi_contours = [c for c in contours if 10 <= cv2.contourArea(c) <= 600]
 
     if not bindi_contours:
-        return image_np_bgr, False
+        print(f"  {label}: proxy face detected at ({face_x1},{face_y1})-({face_x2},{face_y2}), "
+              f"forehead ROI {fh_x1},{fh_y1}-{fh_x2},{fh_y2}, "
+              f"contours={len(contours)}, bindi_contours=0, inpainted=0px")
+        return image_pil, False
 
-    # Replace each bindi contour with the blurred (skin-colored) version
-    mask = np.zeros(gray.shape, dtype=np.uint8)
-    cv2.drawContours(mask, bindi_contours, -1, 255, -1)
+    # ── Step 5: Inpaint bindi on the original illustration ──
+    # Build mask in full image coordinates
+    full_mask = np.zeros((img_h, img_w), dtype=np.uint8)
+    roi_mask = np.zeros(gray.shape, dtype=np.uint8)
+    cv2.drawContours(roi_mask, bindi_contours, -1, 255, -1)
 
-    # Dilate 1px for edge blending
-    dilated = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
+    # Dilate 4px for margin
+    roi_mask = cv2.dilate(roi_mask, np.ones((3, 3), np.uint8), iterations=4)
+    full_mask[fh_y1:fh_y2, fh_x1:fh_x2] = roi_mask
 
-    # Replace: core pixels get blurred color, edge pixels get blended
-    core = mask > 0
-    edge = (dilated > 0) & ~core
-    region[core] = blurred_color[core]
-    # Blend edges: 50/50 mix of original and blurred
-    region[edge] = (region[edge].astype(np.float32) * 0.5 +
-                    blurred_color[edge].astype(np.float32) * 0.5).astype(np.uint8)
+    n_pixels = int(full_mask.sum() / 255)
 
-    image_np_bgr[y1:y2, x1:x2] = region
-    cleaned_pixels = core.sum() + edge.sum()
-    print(f"{label}: removed forehead mark ({cleaned_pixels} pixels, contrast-based)")
-    return image_np_bgr, True
+    # cv2.inpaint — deterministic, fast, works great for small dots
+    inpainted_bgr = cv2.inpaint(original_bgr, full_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+
+    # ── Step 6: Diagnostic logging ──
+    print(f"  {label}: proxy face detected at ({face_x1},{face_y1})-({face_x2},{face_y2}), "
+          f"forehead ROI {fh_x1},{fh_y1}-{fh_x2},{fh_y2}, "
+          f"contours={len(contours)}, bindi_contours={len(bindi_contours)}, "
+          f"inpainted={n_pixels}px")
+
+    cleaned_pil = Image.fromarray(cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB))
+    return cleaned_pil, True
 
 
 # ─── Training ────────────────────────────────────────────────────────────────
@@ -864,10 +931,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             print("Cover generated")
 
             # ── Post-generation forehead cleanup on cover ──
-            cover_np = cv2.cvtColor(np.array(cover_image), cv2.COLOR_RGB2BGR)
-            cover_np, cover_cleaned = cleanup_forehead_region(cover_np, "Cover")
-            if cover_cleaned:
-                cover_image = Image.fromarray(cv2.cvtColor(cover_np, cv2.COLOR_BGR2RGB))
+            cover_image, _ = cleanup_forehead_via_proxy(cover_image, pipe, rank_app, "Cover")
 
             # ── Generate scenes with reranking ──
             scene_images = []
@@ -1018,10 +1082,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                                   f"best_score={best_score:.3f}")
 
                 # ── Post-generation forehead cleanup on scene ──
-                best_np = cv2.cvtColor(np.array(best_image), cv2.COLOR_RGB2BGR)
-                best_np, scene_cleaned = cleanup_forehead_region(best_np, f"Scene {i+1}")
-                if scene_cleaned:
-                    best_image = Image.fromarray(cv2.cvtColor(best_np, cv2.COLOR_BGR2RGB))
+                best_image, _ = cleanup_forehead_via_proxy(best_image, pipe, rank_app, f"Scene {i+1}")
 
                 scene_images.append(best_image)
 

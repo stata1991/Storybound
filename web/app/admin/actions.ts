@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { logEvent } from "@/lib/audit";
-import { buildCoverPrompt } from "@/lib/book/cover-prompt";
+
 import { sanitizeForPrompt, sanitizeArrayForPrompt } from "@/lib/utils/sanitize";
 
 /* ─── Pipeline toggle ─────────────────────────────────────────────────────── */
@@ -691,9 +691,8 @@ export async function completeIllustrationGeneration(
 
   const episode = episodeRaw as unknown as (EpisodeDbRow & { illustration_status?: string }) | null;
 
-  // ── Build cover prompt + character description ─────────────────────────────
+  // ── Build character description ──────────────────────────────────────────
 
-  let coverPrompt: string | undefined;
   let characterDescription = "";
   let hairDescription = "";
 
@@ -724,12 +723,8 @@ export async function completeIllustrationGeneration(
           .filter(Boolean)
           .join(", ")
       : "";
-    const personality = traits?.join(", ") ?? "";
-    const theme =
-      (arc?.overarching_theme as string) ?? harvest.season ?? "adventure";
 
     if (appearance) {
-      coverPrompt = buildCoverPrompt(appearance, personality, theme);
       characterDescription = appearance;
     }
 
@@ -803,7 +798,7 @@ export async function completeIllustrationGeneration(
         face_model_id: faceModelId,
         prompts,
         scene_has_humans: sceneHasHumans,
-        ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
+
         ...modalSharedParams,
         ...(USE_FLUX ? {
           harvest_id: harvestId,
@@ -1001,9 +996,8 @@ export async function triggerIllustrationPipeline(
     faceRefPath: harvest.face_ref_path,
   });
 
-  // ── Build cover prompt + character description ─────────────────────────────
+  // ── Build character description ──────────────────────────────────────────
 
-  let coverPrompt: string | undefined;
   let characterDescription = "";
   let hairDescription = "";
 
@@ -1034,12 +1028,8 @@ export async function triggerIllustrationPipeline(
           .filter(Boolean)
           .join(", ")
       : "";
-    const personality = traits?.join(", ") ?? "";
-    const theme =
-      (arc?.overarching_theme as string) ?? harvest.season ?? "adventure";
 
     if (appearance) {
-      coverPrompt = buildCoverPrompt(appearance, personality, theme);
       characterDescription = appearance;
     }
 
@@ -1129,7 +1119,7 @@ export async function triggerIllustrationPipeline(
           prompts,
           scene_has_humans: sceneHasHumans,
           skip_lora: true,
-          ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
+  
           ...modalSharedParams,
           ...fluxExtraFields,
         }
@@ -1163,7 +1153,7 @@ export async function triggerIllustrationPipeline(
           face_model_id: existingModelId,
           prompts,
           scene_has_humans: sceneHasHumans,
-          ...(coverPrompt ? { cover_prompt: coverPrompt } : {}),
+  
           ...modalSharedParams,
           ...fluxExtraFields,
         }
@@ -2110,10 +2100,15 @@ Another valid sequence:
   setup → setup → escalation → escalation → setback → turning_point → resolution → celebration
 
 Illustration prompt rules:
-- Every illustration_prompt must describe the hero using the EXACT physical details from the character block (hair, eyes, skin tone, signature look)
-- Keep each illustration_prompt under 20 words — focus on the single most important visual element of the scene
-- Describe the companion using their EXACT physical description from the character block
-- Maintain visual consistency: same clothes, same hair, same features in every scene
+- Do NOT include character appearance details (hair color, eye color, skin tone, clothing, facial features) in the illustration_prompt. Character appearance is handled automatically by the illustration system. Including appearance words will degrade quality.
+- Keep each illustration_prompt between 20 and 40 words. Every prompt MUST include ALL of these elements:
+  (1) Scene action — what the child is doing
+  (2) Setting/environment — where they are (specific, not generic)
+  (3) Lighting or time of day — golden hour, dappled sunlight, moonlit, cozy lamplight, etc.
+  (4) Mood or atmosphere — magical, tense, joyful, peaceful, mysterious
+  (5) One composition hint — wide shot, close-up, overhead view, child small in frame, etc.
+- Example GOOD prompt: "child kneels beside a glowing forest pond at golden hour, fireflies rising from still water, wide shot with child small against towering trees, quiet wonder"
+- Example BAD prompt: "brown-haired child with big eyes wearing a red shirt stands by a pond" — NO character appearance words
 
 Content safety:
 - No violence, blood, death, or injury
@@ -2160,7 +2155,7 @@ Output this exact JSON structure:
   }
 }
 
-Remember: exactly ${sceneCount} scenes. Each illustration_prompt must describe ${heroName} using the exact physical details from the Characters block. Keep each illustration_prompt under 20 words.`,
+Remember: exactly ${sceneCount} scenes. Each illustration_prompt describes the SCENE (action, setting, lighting, mood, composition) in 20-40 words. Do NOT include character appearance details — the illustration system handles that automatically.`,
   };
 }
 
@@ -2340,12 +2335,14 @@ async function enrichScenePromptsWithMemories(
     const result = await callClaude(
       `You are given illustration prompts for a children's book and memory photo captions submitted by a parent.
 
-Your job: for each scene prompt, check if any memory caption is thematically relevant and add ONE specific visual detail from it to the prompt.
+Your job: for each scene prompt, check if any memory caption is thematically relevant and add 2-3 specific ENVIRONMENTAL visual details from the photos to the prompt.
 
 Rules:
-- Only add details that fit naturally
-- Never force all captions into every scene
-- Keep additions under 10 words
+- Add details like: clothing colors, toys, room decor, furniture, objects, weather, seasonal details visible in photos
+- NEVER add character appearance details (hair color, eye color, skin tone, facial features) — those are handled separately by the illustration system
+- Only add details that fit naturally with the scene
+- Skip scenes where no caption is relevant — do not force details
+- Keep total additions between 15 and 20 words per prompt
 - Return the same number of prompts
 - Return JSON array only`,
       `Child: ${childName}

@@ -10,7 +10,7 @@ interface EpisodeRow {
   harvest_id: string;
   title: string;
   dedication: string;
-  scenes: { number: number; text: string; illustration_prompt: string }[];
+  scenes: { number: number; text: string; illustration_prompt: string; beat?: string }[];
   final_page: string;
   illustration_paths: string[];
   year: number;
@@ -149,7 +149,13 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
     number: scene.number,
     text: scene.text,
     imageBase64: sceneImages[i] ?? sceneImages[sceneImages.length - 1],
+    beat: scene.beat,
   }));
+
+  // Reuse last scene illustration for the final page vignette (no extra GPU)
+  const finalPageImageBase64 = sceneImages.length > 0
+    ? sceneImages[sceneImages.length - 1]
+    : undefined;
 
   const bookParams: BookParams = {
     childName: child.name,
@@ -162,6 +168,7 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
     scenes,
     coverImageBase64,
     finalPage: episode.final_page,
+    finalPageImageBase64,
   };
 
   const html = generateBookHTML(bookParams);
