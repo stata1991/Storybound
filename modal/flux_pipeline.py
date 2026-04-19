@@ -222,6 +222,11 @@ def cleanup_forehead_via_proxy(image_pil, pipe, rank_app, label: str = "Image"):
           f"inpainted={n_pixels}px")
 
     cleaned_pil = Image.fromarray(cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB))
+
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
+
     return cleaned_pil, True
 
 
@@ -932,6 +937,10 @@ def generate_flux_illustrations(body: dict) -> dict:
 
             # ── Post-generation forehead cleanup on cover ──
             cover_image, _ = cleanup_forehead_via_proxy(cover_image, pipe, rank_app, "Cover")
+
+            # Reclaim VRAM before generating 5 candidates per scene
+            gc.collect()
+            torch.cuda.empty_cache()
 
             # ── Generate scenes with reranking ──
             scene_images = []
