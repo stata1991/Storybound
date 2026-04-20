@@ -79,16 +79,49 @@ lora_volume = modal.Volume.from_name(
 )
 
 
-# ─── Forehead mark cleanup (reuses face bbox from reranking) ─────────────────
+# ─── Forehead mark detection + cleanup ────────────────────────────────────────
+
+def has_forehead_mark(image_bgr, face_bbox):
+    """
+    Pure detection: check if a forehead mark exists in the forehead ROI.
+    Returns (has_mark: bool, num_bindi_contours: int).
+    CPU-only, no side effects.
+    """
+    import cv2
+    import numpy as np
+
+    img_h, img_w = image_bgr.shape[:2]
+    fx1, fy1, fx2, fy2 = [int(c) for c in face_bbox]
+    fw, fh = fx2 - fx1, fy2 - fy1
+
+    roi_x1 = max(0, fx1 + int(0.30 * fw))
+    roi_x2 = min(img_w, fx1 + int(0.70 * fw))
+    roi_y1 = max(0, fy1 + int(0.05 * fh))
+    roi_y2 = min(img_h, fy1 + int(0.35 * fh))
+
+    roi = image_bgr[roi_y1:roi_y2, roi_x1:roi_x2]
+    if roi.size == 0:
+        return False, 0
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (15, 15), 0)
+    diff = cv2.absdiff(gray, blurred)
+    _, thresh = cv2.threshold(diff, 15, 255, cv2.THRESH_BINARY)
+
+    thresh = cv2.dilate(thresh, np.ones((3, 3), np.uint8), iterations=3)
+    thresh = cv2.erode(thresh, np.ones((3, 3), np.uint8), iterations=2)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    bindi_contours = [c for c in contours if 10 <= cv2.contourArea(c) <= 600]
+
+    return len(bindi_contours) > 0, len(bindi_contours)
+
 
 def cleanup_forehead_from_bbox(image_pil, face_bbox, label: str = "Image"):
     """
     Detect and remove forehead marks (bindi/tilak/decorative) using a
     pre-detected face bounding box from InsightFace reranking.
-
-    1. Compute forehead ROI from face bbox (center 40% width, top 5-35% height).
-    2. Detect bindi via contrast-based spot detection within the forehead ROI.
-    3. Inpaint with cv2.inpaint (deterministic, fast, CPU-only — zero GPU cost).
+    Last-resort safety net — primary defense is candidate selection.
 
     Returns (cleaned_pil_image, was_cleaned: bool).
     """
@@ -99,44 +132,36 @@ def cleanup_forehead_from_bbox(image_pil, face_bbox, label: str = "Image"):
     original_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
     img_h, img_w = original_bgr.shape[:2]
 
+    has_mark, n_contours = has_forehead_mark(original_bgr, face_bbox)
+    if not has_mark:
+        fx1, fy1, fx2, fy2 = [int(c) for c in face_bbox]
+        print(f"  {label}: face bbox ({fx1},{fy1})-({fx2},{fy2}), "
+              f"bindi_contours=0, inpainted=0px")
+        return image_pil, False
+
     fx1, fy1, fx2, fy2 = [int(c) for c in face_bbox]
     fw, fh = fx2 - fx1, fy2 - fy1
 
-    # Forehead: center 40% of face width, top 5-35% of face height
     roi_x1 = max(0, fx1 + int(0.30 * fw))
     roi_x2 = min(img_w, fx1 + int(0.70 * fw))
     roi_y1 = max(0, fy1 + int(0.05 * fh))
     roi_y2 = min(img_h, fy1 + int(0.35 * fh))
 
-    roi = original_bgr[roi_y1:roi_y2, roi_x1:roi_x2].copy()
-    if roi.size == 0:
-        print(f"  {label}: forehead ROI empty, skipping")
-        return image_pil, False
-
-    # Scale dilation and inpaint radius based on image size
     dilate_px = max(4, int(img_h / 200))
     inpaint_radius = max(5, int(img_h / 150))
 
-    # Contrast-based bindi detection
+    # ── First inpaint pass ──
+    roi = original_bgr[roi_y1:roi_y2, roi_x1:roi_x2].copy()
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    blurred_gray = cv2.GaussianBlur(gray, (15, 15), 0)
-    diff = cv2.absdiff(gray, blurred_gray)
+    blurred = cv2.GaussianBlur(gray, (15, 15), 0)
+    diff = cv2.absdiff(gray, blurred)
     _, thresh = cv2.threshold(diff, 15, 255, cv2.THRESH_BINARY)
-
-    # Merge nearby blobs: dilate then erode to connect adjacent small spots
     thresh = cv2.dilate(thresh, np.ones((3, 3), np.uint8), iterations=3)
     thresh = cv2.erode(thresh, np.ones((3, 3), np.uint8), iterations=2)
 
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     bindi_contours = [c for c in contours if 10 <= cv2.contourArea(c) <= 600]
 
-    if not bindi_contours:
-        print(f"  {label}: face bbox ({fx1},{fy1})-({fx2},{fy2}), "
-              f"forehead ROI {roi_x1},{roi_y1}-{roi_x2},{roi_y2}, "
-              f"contours={len(contours)}, bindi_contours=0, inpainted=0px")
-        return image_pil, False
-
-    # ── First inpaint pass ──
     full_mask = np.zeros((img_h, img_w), dtype=np.uint8)
     roi_mask = np.zeros(gray.shape, dtype=np.uint8)
     cv2.drawContours(roi_mask, bindi_contours, -1, 255, -1)
@@ -144,27 +169,26 @@ def cleanup_forehead_from_bbox(image_pil, face_bbox, label: str = "Image"):
     full_mask[roi_y1:roi_y2, roi_x1:roi_x2] = roi_mask
 
     n_pixels = int(full_mask.sum() / 255)
-
     inpainted_bgr = cv2.inpaint(original_bgr, full_mask, inpaintRadius=inpaint_radius, flags=cv2.INPAINT_TELEA)
 
     print(f"  {label}: face bbox ({fx1},{fy1})-({fx2},{fy2}), "
           f"forehead ROI {roi_x1},{roi_y1}-{roi_x2},{roi_y2}, "
-          f"contours={len(contours)}, bindi_contours={len(bindi_contours)}, "
+          f"bindi_contours={len(bindi_contours)}, "
           f"inpainted={n_pixels}px, dilate={dilate_px}, radius={inpaint_radius}")
 
-    # ── Second verification pass — catch any residual ──
-    roi2 = inpainted_bgr[roi_y1:roi_y2, roi_x1:roi_x2].copy()
-    gray2 = cv2.cvtColor(roi2, cv2.COLOR_BGR2GRAY)
-    blurred2 = cv2.GaussianBlur(gray2, (15, 15), 0)
-    diff2 = cv2.absdiff(gray2, blurred2)
-    _, thresh2 = cv2.threshold(diff2, 15, 255, cv2.THRESH_BINARY)
-    thresh2 = cv2.dilate(thresh2, np.ones((3, 3), np.uint8), iterations=3)
-    thresh2 = cv2.erode(thresh2, np.ones((3, 3), np.uint8), iterations=2)
+    # ── Second verification pass ──
+    has_mark2, n_contours2 = has_forehead_mark(inpainted_bgr, face_bbox)
+    if has_mark2:
+        roi2 = inpainted_bgr[roi_y1:roi_y2, roi_x1:roi_x2].copy()
+        gray2 = cv2.cvtColor(roi2, cv2.COLOR_BGR2GRAY)
+        blurred2 = cv2.GaussianBlur(gray2, (15, 15), 0)
+        diff2 = cv2.absdiff(gray2, blurred2)
+        _, thresh2 = cv2.threshold(diff2, 15, 255, cv2.THRESH_BINARY)
+        thresh2 = cv2.dilate(thresh2, np.ones((3, 3), np.uint8), iterations=3)
+        thresh2 = cv2.erode(thresh2, np.ones((3, 3), np.uint8), iterations=2)
+        contours2, _ = cv2.findContours(thresh2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        bindi_contours2 = [c for c in contours2 if 10 <= cv2.contourArea(c) <= 600]
 
-    contours2, _ = cv2.findContours(thresh2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    bindi_contours2 = [c for c in contours2 if 10 <= cv2.contourArea(c) <= 600]
-
-    if bindi_contours2:
         full_mask2 = np.zeros((img_h, img_w), dtype=np.uint8)
         roi_mask2 = np.zeros(gray2.shape, dtype=np.uint8)
         cv2.drawContours(roi_mask2, bindi_contours2, -1, 255, -1)
@@ -172,7 +196,7 @@ def cleanup_forehead_from_bbox(image_pil, face_bbox, label: str = "Image"):
         full_mask2[roi_y1:roi_y2, roi_x1:roi_x2] = roi_mask2
         n_pixels2 = int(full_mask2.sum() / 255)
         inpainted_bgr = cv2.inpaint(inpainted_bgr, full_mask2, inpaintRadius=inpaint_radius, flags=cv2.INPAINT_TELEA)
-        print(f"  {label}: second pass: {len(bindi_contours2)} contours remaining, inpainted {n_pixels2}px")
+        print(f"  {label}: second pass: {n_contours2} contours remaining, inpainted {n_pixels2}px")
     else:
         print(f"  {label}: second pass: 0 contours remaining, clean")
 
@@ -871,29 +895,65 @@ def generate_flux_illustrations(body: dict) -> dict:
             print(f"Cover CLIP prompt: {cover_clip}")
             print(f"Cover T5 prompt: {cover_t5}")
 
-            cover_result = pipe(
+            cover_candidates = pipe(
                 prompt=cover_clip,
                 prompt_2=cover_t5,
                 height=1024,
                 width=1024,
                 num_inference_steps=35,
                 guidance_scale=3.5,
+                num_images_per_prompt=5,
                 generator=torch.Generator("cuda").manual_seed(
                     int(hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16)
                 ),
-            )
-            cover_image = cover_result.images[0]
-            print("Cover generated")
+            ).images
+            print(f"Cover: {len(cover_candidates)} candidates generated")
 
-            # ── Post-generation forehead cleanup on cover ──
-            if rank_app is not None:
-                cover_bgr = cv2.cvtColor(np.array(cover_image), cv2.COLOR_RGB2BGR)
-                cover_faces = rank_app.get(cover_bgr)
-                if cover_faces:
-                    cover_face = max(cover_faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-                    cover_image, _ = cleanup_forehead_from_bbox(cover_image, cover_face.bbox, "Cover")
-                else:
-                    print("  Cover: no face detected, skipping forehead cleanup")
+            # ── Rerank cover candidates with cosine + bindi penalty ──
+            cover_image = cover_candidates[0]
+            cover_best_score = -1.0
+            cover_face_bbox = None
+
+            if rank_app is not None and face_embedding is not None:
+                ref_emb = face_embedding.cpu().float()
+                for j, candidate in enumerate(cover_candidates):
+                    candidate_np = cv2.cvtColor(
+                        np.array(candidate), cv2.COLOR_RGB2BGR
+                    )
+                    faces = rank_app.get(candidate_np)
+                    if not faces:
+                        print(f"  Cover candidate {j}: no face detected")
+                        continue
+                    face = max(
+                        faces,
+                        key=lambda f: (
+                            (f.bbox[2]-f.bbox[0]) *
+                            (f.bbox[3]-f.bbox[1])
+                        )
+                    )
+                    gen_emb = torch.from_numpy(
+                        face.normed_embedding
+                    ).unsqueeze(0).float()
+                    raw_score = torch.nn.functional.cosine_similarity(
+                        ref_emb, gen_emb, dim=1
+                    ).item()
+                    has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
+                    score = raw_score * 0.3 if has_mark else raw_score
+                    print(f"  Cover candidate {j}: "
+                          f"cosine={raw_score:.3f}, bindi={has_mark}, "
+                          f"adjusted={score:.3f}")
+                    if score > cover_best_score:
+                        cover_best_score = score
+                        cover_image = candidate
+                        cover_face_bbox = face.bbox
+
+                print(f"Cover reranking: best_score={cover_best_score:.3f}")
+
+            # ── Post-generation forehead cleanup on cover (safety net) ──
+            if cover_face_bbox is not None:
+                cover_image, _ = cleanup_forehead_from_bbox(cover_image, cover_face_bbox, "Cover")
+            else:
+                print("  Cover: no face bbox available, skipping forehead cleanup")
 
             # ── Generate scenes with reranking ──
             scene_images = []
@@ -979,11 +1039,14 @@ def generate_flux_illustrations(body: dict) -> dict:
                         gen_emb = torch.from_numpy(
                             face.normed_embedding
                         ).unsqueeze(0).float()
-                        score = torch.nn.functional.cosine_similarity(
+                        raw_score = torch.nn.functional.cosine_similarity(
                             ref_emb, gen_emb, dim=1
                         ).item()
+                        has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
+                        score = raw_score * 0.3 if has_mark else raw_score
                         print(f"  Scene {i+1} candidate {j}: "
-                              f"cosine={score:.3f}")
+                              f"cosine={raw_score:.3f}, bindi={has_mark}, "
+                              f"adjusted={score:.3f}")
                         if score > best_score:
                             best_score = score
                             best_image = candidate
@@ -1028,11 +1091,14 @@ def generate_flux_illustrations(body: dict) -> dict:
                             gen_emb = torch.from_numpy(
                                 face.normed_embedding
                             ).unsqueeze(0).float()
-                            score = torch.nn.functional.cosine_similarity(
+                            raw_score = torch.nn.functional.cosine_similarity(
                                 ref_emb, gen_emb, dim=1
                             ).item()
+                            has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
+                            score = raw_score * 0.3 if has_mark else raw_score
                             print(f"  Scene {i+1} retry candidate {j}: "
-                                  f"cosine={score:.3f}")
+                                  f"cosine={raw_score:.3f}, bindi={has_mark}, "
+                                  f"adjusted={score:.3f}")
                             if score > best_score:
                                 best_score = score
                                 best_image = candidate
