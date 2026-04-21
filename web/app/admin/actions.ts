@@ -2091,14 +2091,26 @@ Another valid sequence:
 
 Illustration prompt rules:
 - Do NOT include character appearance details (hair color, eye color, skin tone, clothing, facial features) in the illustration_prompt. Character appearance is handled automatically by the illustration system. Including appearance words will degrade quality.
+- The MOST FANTASTICAL or MAGICAL visual element in each scene MUST be the dominant feature of that scene's illustration_prompt. If the story mentions flying bikes, cloud stations, sky-paths, glowing rivers, talking trees — those must be prominently and vividly described. The child is secondary to the world. Describe the magical world FIRST, then place the child within it.
 - Keep each illustration_prompt between 20 and 40 words. Every prompt MUST include ALL of these elements:
-  (1) Scene action — what the child is doing
-  (2) Setting/environment — where they are (specific, not generic)
+  (1) Fantastical centerpiece — the most magical/imaginative visual element from the scene, described vividly and specifically as the dominant feature
+  (2) Setting/environment — where they are, rendered with rich sensory detail (specific, not generic)
   (3) Lighting or time of day — golden hour, dappled sunlight, moonlit, cozy lamplight, etc.
   (4) Mood or atmosphere — magical, tense, joyful, peaceful, mysterious
-  (5) One composition hint — wide shot, close-up, overhead view, child small in frame, etc.
-- Example GOOD prompt: "child kneels beside a glowing forest pond at golden hour, fireflies rising from still water, wide shot with child small against towering trees, quiet wonder"
-- Example BAD prompt: "brown-haired child with big eyes wearing a red shirt stands by a pond" — NO character appearance words
+  (5) Composition type — see composition variety rules below
+- COMPOSITION VARIETY (hard constraint): Across all ${sceneCount} scenes, you MUST use a mix of compositions. Required minimums:
+  - At least ${sceneCount >= 6 ? 2 : 1} WIDE/ENVIRONMENTAL shots (child small in a big magical world, vast landscapes, sweeping vistas)
+  - At least ${sceneCount >= 6 ? 2 : 1} MEDIUM ACTION shots (child actively interacting with story elements, dynamic movement)
+  - No more than ${sceneCount >= 6 ? 2 : 1} CLOSE-UP portraits (face/upper body focus)
+  - Remaining scenes: use dramatic angles (overhead, low angle, over-shoulder, bird's-eye, worm's-eye)
+  Tag each prompt's composition type in the prompt itself (e.g., "wide shot", "over-shoulder view", "low angle", "bird's-eye view").
+- Example prompt transformations — BAD vs GOOD:
+  BAD: "child smiling on a path with mountains" — generic, no magic, default composition
+  GOOD: "golden winding mountain path stretching to horizon, warm sunset light casting long shadows, child on bicycle at a fork in the road, dramatic clouds overhead, wildflowers along the trail edges, wide shot"
+  BAD: "child riding a flying bike in the sky" — magic mentioned but not vivid, child-centered
+  GOOD: "vast golden sky filled with spiraling cloud trails left by flying bicycles, tiny luminous sky-stations dotting the horizon, child banking into a wide turn on a glowing bike, bird's-eye view, sense of boundless freedom"
+  BAD: "child talking to a tree" — flat, no wonder
+  GOOD: "enormous ancient oak with a glowing face formed in the bark, roots twisting like frozen rivers across mossy ground, dappled green light filtering through canopy, child looking up with arms outstretched, low angle shot, deep forest mystery"
 
 Content safety:
 - No violence, blood, death, or injury
@@ -2145,7 +2157,7 @@ Output this exact JSON structure:
   }
 }
 
-Remember: exactly ${sceneCount} scenes. Each illustration_prompt describes the SCENE (action, setting, lighting, mood, composition) in 20-40 words. Do NOT include character appearance details — the illustration system handles that automatically.`,
+Remember: exactly ${sceneCount} scenes. Each illustration_prompt MUST lead with the most fantastical/magical visual element as the dominant feature, describe the world vividly, and place the child within it — NOT the other way around. Enforce composition variety: at least 2 wide/environmental, at least 2 medium action, no more than 2 close-ups. Tag composition type in each prompt. 20-40 words. Do NOT include character appearance details — the illustration system handles that automatically.`,
   };
 }
 
