@@ -2091,26 +2091,20 @@ Another valid sequence:
 
 Illustration prompt rules:
 - Do NOT include character appearance details (hair color, eye color, skin tone, clothing, facial features) in the illustration_prompt. Character appearance is handled automatically by the illustration system. Including appearance words will degrade quality.
-- The MOST FANTASTICAL or MAGICAL visual element in each scene MUST be the dominant feature of that scene's illustration_prompt. If the story mentions flying bikes, cloud stations, sky-paths, glowing rivers, talking trees — those must be prominently and vividly described. The child is secondary to the world. Describe the magical world FIRST, then place the child within it.
+- CHILD FRAMING (hard rule): In EVERY scene, the child must be the dominant subject in the foreground with their face clearly visible at close-up or medium-close framing (head and shoulders or waist-up). The magical/fantastical elements from the story should fill the background behind the child. Never show the child from behind, far away, as a silhouette, or with their face obscured.
+- The background MUST feature the most fantastical or magical visual element from the scene. If the story mentions flying bikes, cloud stations, sky-paths, glowing rivers, talking trees — those must be vividly described as the background environment behind the child.
 - Keep each illustration_prompt between 20 and 40 words. Every prompt MUST include ALL of these elements:
-  (1) Fantastical centerpiece — the most magical/imaginative visual element from the scene, described vividly and specifically as the dominant feature
-  (2) Setting/environment — where they are, rendered with rich sensory detail (specific, not generic)
+  (1) Child in foreground — the child as the dominant subject, face visible, close-up or medium-close framing
+  (2) Fantastical background — the most magical/imaginative visual element from the scene filling the space behind the child
   (3) Lighting or time of day — golden hour, dappled sunlight, moonlit, cozy lamplight, etc.
   (4) Mood or atmosphere — magical, tense, joyful, peaceful, mysterious
-  (5) Composition type — see composition variety rules below
-- COMPOSITION VARIETY (hard constraint): Across all ${sceneCount} scenes, you MUST use a mix of compositions. Required minimums:
-  - At least ${sceneCount >= 6 ? 2 : 1} WIDE/ENVIRONMENTAL shots (child small in a big magical world, vast landscapes, sweeping vistas)
-  - At least ${sceneCount >= 6 ? 2 : 1} MEDIUM ACTION shots (child actively interacting with story elements, dynamic movement)
-  - No more than ${sceneCount >= 6 ? 2 : 1} CLOSE-UP portraits (face/upper body focus)
-  - Remaining scenes: use dramatic angles (overhead, low angle, over-shoulder, bird's-eye, worm's-eye)
-  Tag each prompt's composition type in the prompt itself (e.g., "wide shot", "over-shoulder view", "low angle", "bird's-eye view").
 - Example prompt transformations — BAD vs GOOD:
-  BAD: "child smiling on a path with mountains" — generic, no magic, default composition
-  GOOD: "golden winding mountain path stretching to horizon, warm sunset light casting long shadows, child on bicycle at a fork in the road, dramatic clouds overhead, wildflowers along the trail edges, wide shot"
-  BAD: "child riding a flying bike in the sky" — magic mentioned but not vivid, child-centered
-  GOOD: "vast golden sky filled with spiraling cloud trails left by flying bicycles, tiny luminous sky-stations dotting the horizon, child banking into a wide turn on a glowing bike, bird's-eye view, sense of boundless freedom"
-  BAD: "child talking to a tree" — flat, no wonder
-  GOOD: "enormous ancient oak with a glowing face formed in the bark, roots twisting like frozen rivers across mossy ground, dappled green light filtering through canopy, child looking up with arms outstretched, low angle shot, deep forest mystery"
+  BAD: "child smiling on a path with mountains" — generic, no magic, flat background
+  GOOD: "child looking ahead with wonder, golden winding mountain path stretching to horizon behind them, warm sunset light, dramatic clouds overhead, wildflowers along trail edges, medium-close shot"
+  BAD: "vast sky filled with flying bicycles, tiny child banking into a turn" — child too small, face not visible
+  GOOD: "child gripping glowing bicycle handlebars, face lit with excitement, spiraling cloud trails and luminous sky-stations filling the vast golden sky behind them, medium-close shot, sense of boundless freedom"
+  BAD: "child from behind looking at a glowing tree" — face not visible, child from behind
+  GOOD: "child gazing upward in awe, enormous ancient oak with a glowing face in the bark behind them, dappled green light filtering through canopy, mossy roots framing the scene, close-up, deep forest mystery"
 
 Content safety:
 - No violence, blood, death, or injury
@@ -2157,7 +2151,7 @@ Output this exact JSON structure:
   }
 }
 
-Remember: exactly ${sceneCount} scenes. Each illustration_prompt MUST lead with the most fantastical/magical visual element as the dominant feature, describe the world vividly, and place the child within it — NOT the other way around. Enforce composition variety: at least 2 wide/environmental, at least 2 medium action, no more than 2 close-ups. Tag composition type in each prompt. 20-40 words. Do NOT include character appearance details — the illustration system handles that automatically.`,
+Remember: exactly ${sceneCount} scenes. Each illustration_prompt MUST show the child as the dominant foreground subject with face clearly visible (close-up or medium-close). Fantastical/magical elements fill the background behind the child. Never show child from behind, far away, as silhouette, or face obscured. 20-40 words. Do NOT include character appearance details — the illustration system handles that automatically.`,
   };
 }
 
