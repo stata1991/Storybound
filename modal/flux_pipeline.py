@@ -466,7 +466,7 @@ def train_flux_lora(
     print(f"Packed latent: [1, {packed_h * packed_w}, {latent_c * 4}]")
 
     # ── STEP 7: Encode text prompt ──
-    instance_prompt = "a photo of sks child"
+    instance_prompt = "a photo of sks child, clear smooth forehead, plain forehead skin, no forehead markings"
 
     # FLUX uses both CLIP-L and T5-XXL — no 77-token limit on T5
     with torch.no_grad():
