@@ -204,12 +204,14 @@ export default async function DashboardPage({
                   Get it printed + 3 more books this year.
                 </p>
               </div>
-              <Link
-                href={`/dashboard/preview/${children[0].harvests[0]?.id || ""}`}
-                className="flex-shrink-0 rounded-full border border-gold px-5 py-2.5 font-sans text-sm font-semibold text-gold transition-all hover:bg-gold hover:text-white"
+              <span
+                className="flex-shrink-0 rounded-full border border-navy/15 px-5 py-2.5 font-sans text-sm font-semibold text-navy/30 cursor-not-allowed"
               >
-                Upgrade to Print
-              </Link>
+                Print Coming Soon
+              </span>
+              <p className="mt-1 font-sans text-xs text-navy/30">
+                Physical books arriving soon &mdash; we&rsquo;ll notify you when available.
+              </p>
             </div>
           </div>
         )}

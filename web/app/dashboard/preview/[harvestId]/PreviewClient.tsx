@@ -354,22 +354,24 @@ export default function PreviewClient({
             Loving {childName}&rsquo;s book? Get it printed + 3 more this year.
           </p>
           <button
-            onClick={handleSubscribePrint}
-            disabled={loading}
+            disabled
             style={{
               padding: "12px 28px",
               backgroundColor: "transparent",
-              color: GOLD,
+              color: "#9CA3AF",
               fontSize: 15,
               fontWeight: 600,
-              border: `2px solid ${GOLD}`,
+              border: "2px solid #D1D5DB",
               borderRadius: 9999,
-              cursor: loading ? "not-allowed" : "pointer",
-              opacity: loading ? 0.6 : 1,
+              cursor: "not-allowed",
+              opacity: 0.6,
             }}
           >
-            {loading ? "Loading..." : "Upgrade to Print"}
+            Print Coming Soon
           </button>
+          <p style={{ margin: "6px 0 0", fontSize: 12, color: "#9CA3AF" }}>
+            Physical books arriving soon &mdash; we&rsquo;ll notify you when available.
+          </p>
           {error && (
             <p style={{ margin: "8px 0 0", fontSize: 13, color: "#DC2626" }}>
               {error}
@@ -652,23 +654,25 @@ export default function PreviewClient({
                 <li>$89/year</li>
               </ul>
               <button
-                onClick={handleSubscribePrint}
-                disabled={loading}
+                disabled
                 style={{
                   width: "100%",
                   padding: "12px 16px",
-                  backgroundColor: GOLD,
+                  backgroundColor: "#D1D5DB",
                   color: "#fff",
                   fontSize: 15,
                   fontWeight: 600,
                   border: "none",
                   borderRadius: 9999,
-                  cursor: loading ? "not-allowed" : "pointer",
-                  opacity: loading ? 0.6 : 1,
+                  cursor: "not-allowed",
+                  opacity: 0.6,
                 }}
               >
-                {loading ? "Loading..." : "Subscribe & Print"}
+                Print Coming Soon
               </button>
+              <p style={{ margin: "6px 0 0", fontSize: 11, color: "#9CA3AF" }}>
+                Physical books arriving soon &mdash; we&rsquo;ll notify you when available.
+              </p>
             </div>
 
             {/* Digital card */}
@@ -725,8 +729,8 @@ export default function PreviewClient({
             </div>
           </div>
 
-          {/* Inline address form (shown when no address on file) */}
-          {showAddressForm && (
+          {/* Inline address form — hidden until Gelato integration is ready */}
+          {false && showAddressForm && (
             <div
               style={{
                 maxWidth: 480,
@@ -876,21 +880,24 @@ export default function PreviewClient({
           >
             <button
               onClick={handleApprove}
-              disabled={loading}
+              disabled
               style={{
                 padding: "14px 32px",
-                backgroundColor: GOLD,
+                backgroundColor: "#D1D5DB",
                 color: "#fff",
                 fontSize: 16,
                 fontWeight: 600,
                 border: "none",
                 borderRadius: 9999,
-                cursor: loading ? "not-allowed" : "pointer",
-                opacity: loading ? 0.6 : 1,
+                cursor: "not-allowed",
+                opacity: 0.6,
               }}
             >
-              {loading ? "Submitting..." : "Looks great \u2014 send to print!"}
+              Print Coming Soon
             </button>
+            <p style={{ margin: "6px 0 0", fontSize: 12, color: "#9CA3AF" }}>
+              Physical books arriving soon &mdash; we&rsquo;ll notify you when available.
+            </p>
             <button
               onClick={() => setShowFlagForm(true)}
               disabled={loading}
