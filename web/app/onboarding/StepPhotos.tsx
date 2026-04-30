@@ -1,10 +1,38 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { uploadCharacterPhotos } from "./actions";
+import {
+  createCharacterPhotoUploadUrls,
+  confirmCharacterPhotosUploaded,
+} from "./actions";
 
 const MIN_PHOTOS = 5;
 const MAX_PHOTOS = 10;
+const UPLOAD_CONCURRENCY = 3;
+
+/** Upload items with a concurrency cap. Returns results in input order. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  fn: (item: T, index: number) => Promise<R>,
+  limit: number
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        results[i] = { status: "fulfilled", value: await fn(items[i], i) };
+      } catch (reason) {
+        results[i] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
 
 export default function StepPhotos({
   childName,
@@ -18,7 +46,9 @@ export default function StepPhotos({
   const [photos, setPhotos] = useState<{ file: File; preview: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const submittingRef = useRef(false);
 
   const canSubmit = photos.length >= MIN_PHOTOS && !loading;
 
@@ -45,33 +75,117 @@ export default function StepPhotos({
   }
 
   async function handleSubmit() {
-    if (!canSubmit) return;
+    if (!canSubmit || submittingRef.current) return;
+    submittingRef.current = true;
     setLoading(true);
     setError(null);
+    setProgress("");
 
-    const formData = new FormData();
-    for (const p of photos) {
-      formData.append("photos", p.file);
-    }
+    try {
+      // Step A — get signed upload URLs (also cleans the folder)
+      setProgress("Preparing uploads\u2026");
+      const urlResult = await createCharacterPhotoUploadUrls(
+        childId,
+        photos.map((p) => ({
+          name: p.file.name,
+          type: p.file.type,
+          size: p.file.size,
+        }))
+      );
 
-    const result = await uploadCharacterPhotos(childId, formData);
-    if (result?.error) {
-      setError(result.error);
+      if ("error" in urlResult) {
+        setError(urlResult.error);
+        return;
+      }
+
+      const { urls } = urlResult;
+
+      // Step B — upload each file directly to Supabase (max 3 concurrent)
+      let completed = 0;
+      const total = photos.length;
+      setProgress(`Uploading 0 of ${total}\u2026`);
+
+      const results = await mapWithConcurrency(
+        photos,
+        async (p, i) => {
+          const { signedUrl, storagePath } = urls[i];
+
+          const res = await fetch(signedUrl, {
+            method: "PUT",
+            headers: { "Content-Type": p.file.type },
+            body: p.file,
+          });
+
+          if (!res.ok) {
+            throw new Error(`Upload failed (${res.status})`);
+          }
+
+          completed++;
+          setProgress(`Uploading ${completed} of ${total}\u2026`);
+
+          return storagePath;
+        },
+        UPLOAD_CONCURRENCY
+      );
+
+      // Step C — check for failures
+      const succeeded: string[] = [];
+      const failedNames: string[] = [];
+
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === "fulfilled") {
+          succeeded.push(r.value);
+        } else {
+          failedNames.push(photos[i].file.name);
+        }
+      }
+
+      if (failedNames.length > 0) {
+        setError(
+          `${failedNames.length} photo(s) failed: ${failedNames.join(", ")}. Tap retry to re-upload all photos.`
+        );
+        return;
+      }
+
+      // Step D — confirm all uploads landed in storage
+      setProgress("Verifying uploads\u2026");
+      const confirmResult = await confirmCharacterPhotosUploaded(
+        childId,
+        succeeded
+      );
+
+      if ("error" in confirmResult) {
+        setError(confirmResult.error);
+        return;
+      }
+
+      // Step E — success, advance to next step
+      onComplete?.();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong. Please try again."
+      );
+    } finally {
       setLoading(false);
-      return;
+      setProgress("");
+      submittingRef.current = false;
     }
-    setLoading(false);
-    onComplete?.();
   }
+
+  const displayName =
+    childName.charAt(0).toUpperCase() + childName.slice(1);
 
   return (
     <div>
       <p className="mb-1 font-sans text-base font-semibold text-navy/80">
-        Help us capture {childName.charAt(0).toUpperCase() + childName.slice(1)}&apos;s magic &#10024;
+        Help us capture {displayName}&apos;s magic &#10024;
       </p>
       <p className="mb-4 font-sans text-sm leading-relaxed text-navy/50">
         The closer and clearer the photo, the more{" "}
-        {childName.charAt(0).toUpperCase() + childName.slice(1)} will shine in their story.
+        {displayName} will shine in their story.
       </p>
 
       <div className="mb-5 grid grid-cols-4 gap-2">
@@ -116,28 +230,30 @@ export default function StepPhotos({
               alt={`Photo ${i + 1}`}
               className="h-full w-full object-cover"
             />
-            <button
-              type="button"
-              onClick={() => removePhoto(i)}
-              className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
-            >
-              <svg
-                className="h-3 w-3"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2.5}
+            {!loading && (
+              <button
+                type="button"
+                onClick={() => removePhoto(i)}
+                className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
+                <svg
+                  className="h-3 w-3"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            )}
           </div>
         ))}
-        {photos.length < MAX_PHOTOS && (
+        {photos.length < MAX_PHOTOS && !loading && (
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
@@ -216,8 +332,10 @@ export default function StepPhotos({
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                 />
               </svg>
-              Uploading photos...
+              {progress || "Uploading\u2026"}
             </span>
+          ) : error ? (
+            "Re-upload all \u2192"
           ) : (
             "Begin our story \u2192"
           )}

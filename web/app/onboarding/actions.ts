@@ -245,7 +245,44 @@ export async function addAnotherChild() {
   redirect("/onboarding?additional=true");
 }
 
-export async function uploadCharacterPhotos(childId: string, formData: FormData) {
+/* ─── Signed-URL Photo Upload ─────────────────────────────────────────────── */
+
+const ALLOWED_PHOTO_TYPES = ["image/jpeg", "image/png"];
+const MAX_PHOTO_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_PHOTO_COUNT = 10;
+const MIN_PHOTO_COUNT = 5;
+
+interface FileMetadata {
+  name: string;
+  type: string;
+  size: number;
+}
+
+interface SignedUploadUrl {
+  signedUrl: string;
+  storagePath: string;
+  token: string;
+}
+
+/**
+ * Validates file metadata and returns per-file signed upload URLs for
+ * direct browser-to-Supabase uploads.
+ *
+ * Ownership is enforced by RLS (user-scoped client queries children table
+ * and creates signed URLs — both gated by auth_family_id()).
+ *
+ * Cleans the folder first so every upload session starts from a fresh slate.
+ * This means retries don't accumulate stale files, and confirmCharacterPhotosUploaded
+ * can trust that any files present were uploaded in this session.
+ *
+ * Tradeoff: if the client crashes after create (folder cleaned) but before
+ * any uploads complete, previous photos are lost. Acceptable v1 — user retries.
+ */
+export async function createCharacterPhotoUploadUrls(
+  childId: string,
+  files: FileMetadata[]
+): Promise<{ error: string } | { urls: SignedUploadUrl[] }> {
+  // ── Auth ─────────────────────────────────────────────────────────────────
   const supabase = await createClient();
   const {
     data: { user },
@@ -256,72 +293,166 @@ export async function uploadCharacterPhotos(childId: string, formData: FormData)
     return { error: "Not authenticated. Please sign in." };
   }
 
+  // ── Validate file metadata ───────────────────────────────────────────────
+  if (!files || files.length === 0) {
+    return { error: "No files provided." };
+  }
+  if (files.length > MAX_PHOTO_COUNT) {
+    return { error: `Maximum ${MAX_PHOTO_COUNT} photos allowed.` };
+  }
+  for (const f of files) {
+    if (!ALLOWED_PHOTO_TYPES.includes(f.type)) {
+      return { error: `${f.name}: only JPEG and PNG files are accepted.` };
+    }
+    if (f.size > MAX_PHOTO_SIZE) {
+      return { error: `${f.name} exceeds the 10 MB limit.` };
+    }
+    if (f.size === 0) {
+      return { error: `${f.name} is empty.` };
+    }
+  }
+
+  // ── Verify child ownership (RLS-scoped — only returns children in user's family) ──
+  const { data: child } = await supabase
+    .from("children")
+    .select("id")
+    .eq("id", childId)
+    .single();
+
+  if (!child) return { error: "Child not found." };
+
+  // ── Create signed upload URLs (user-scoped — RLS enforces INSERT policy) ──
+  // Generated BEFORE folder cleanup so a partial failure here doesn't
+  // destroy existing photos for nothing.
+  const urls: SignedUploadUrl[] = [];
+
+  for (const f of files) {
+    const ext = f.name.split(".").pop()?.toLowerCase() || "jpg";
+    const safeName = `${crypto.randomUUID()}.${ext}`;
+    const storagePath = `${childId}/${safeName}`;
+
+    const { data, error } = await supabase.storage
+      .from("character-photos")
+      .createSignedUploadUrl(storagePath);
+
+    if (error || !data) {
+      return {
+        error: `Failed to prepare upload for ${f.name}: ${error?.message ?? "unknown error"}`,
+      };
+    }
+
+    urls.push({
+      signedUrl: data.signedUrl,
+      storagePath,
+      token: data.token,
+    });
+  }
+
+  // ── Clean folder (fresh slate) ───────────────────────────────────────────
+  // Runs ONLY after all signed URLs succeeded. Admin client required
+  // because there is no DELETE RLS policy on the character-photos bucket.
+  // Guarded by the user-scoped ownership check above — no path reaches
+  // here without passing RLS on the children table first.
   const admin = createAdminClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { autoRefreshToken: false, persistSession: false } }
   );
 
-  // Verify child belongs to user's family
-  const { data: parent } = await admin
-    .from("parents")
-    .select("family_id")
-    .eq("id", user.id)
-    .single();
+  const { data: existing } = await admin.storage
+    .from("character-photos")
+    .list(childId, { limit: 100 });
 
-  if (!parent) return { error: "Parent record not found." };
+  if (existing && existing.length > 0) {
+    const toDelete = existing
+      .filter((f) => f.name !== ".emptyFolderPlaceholder")
+      .map((f) => `${childId}/${f.name}`);
+    if (toDelete.length > 0) {
+      await admin.storage.from("character-photos").remove(toDelete);
+    }
+  }
 
-  const { data: child } = await admin
+  return { urls };
+}
+
+/**
+ * Verifies that all claimed storage paths actually exist in the
+ * character-photos bucket, enforces min/max photo count, and logs
+ * the audit event. Call this after all browser uploads complete.
+ *
+ * Because createCharacterPhotoUploadUrls cleans the folder first,
+ * any files present at confirm-time must be from this upload session.
+ * Ownership is enforced by RLS (user-scoped client for child query
+ * and storage listing).
+ */
+export async function confirmCharacterPhotosUploaded(
+  childId: string,
+  storagePaths: string[]
+): Promise<{ error: string } | { success: true; count: number }> {
+  // ── Auth ─────────────────────────────────────────────────────────────────
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return { error: "Not authenticated. Please sign in." };
+  }
+
+  // ── Verify child ownership (RLS-scoped) ──────────────────────────────────
+  const { data: child } = await supabase
     .from("children")
     .select("id")
     .eq("id", childId)
-    .eq("family_id", parent.family_id)
     .single();
 
   if (!child) return { error: "Child not found." };
 
-  // Ensure bucket exists (idempotent)
-  await admin.storage.createBucket("character-photos", {
-    public: false,
-    fileSizeLimit: 10 * 1024 * 1024,
-    allowedMimeTypes: ["image/jpeg", "image/png"],
-  });
+  // ── List bucket folder and verify uploads (RLS SELECT policy enforces) ──
+  const { data: files, error: listError } = await supabase.storage
+    .from("character-photos")
+    .list(childId, { limit: 100 });
 
-  const photos = formData.getAll("photos") as File[];
-  if (photos.length < 5) return { error: "At least 5 photos required." };
-  if (photos.length > 10) return { error: "Maximum 10 photos allowed." };
-
-  for (const photo of photos) {
-    if (!photo.size) continue;
-
-    const ext = photo.name.split(".").pop()?.toLowerCase() || "jpg";
-    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const storagePath = `${childId}/${fileName}`;
-
-    const { error: uploadError } = await admin.storage
-      .from("character-photos")
-      .upload(storagePath, photo, { contentType: photo.type, upsert: false });
-
-    if (uploadError) {
-      logEvent({
-        event_type: "onboarding.character_photos",
-        status: "error",
-        child_id: childId,
-        message: `Failed to upload photo: ${uploadError.message}`,
-      });
-      return { error: `Failed to upload photo: ${uploadError.message}` };
-    }
+  if (listError) {
+    return { error: "Failed to verify uploads. Please try again." };
   }
 
+  const existingFiles = new Set(
+    (files ?? [])
+      .filter((f) => f.name !== ".emptyFolderPlaceholder")
+      .map((f) => `${childId}/${f.name}`)
+  );
+
+  const missing = storagePaths.filter((p) => !existingFiles.has(p));
+  if (missing.length > 0) {
+    return {
+      error: `${missing.length} photo(s) failed to upload. Please retry the failed uploads.`,
+    };
+  }
+
+  // ── Enforce photo count bounds ───────────────────────────────────────────
+  if (existingFiles.size < MIN_PHOTO_COUNT) {
+    return {
+      error: `At least ${MIN_PHOTO_COUNT} photos are required. ${existingFiles.size} found.`,
+    };
+  }
+  if (existingFiles.size > MAX_PHOTO_COUNT) {
+    return {
+      error: `Maximum ${MAX_PHOTO_COUNT} photos allowed. ${existingFiles.size} found.`,
+    };
+  }
+
+  // ── Audit ────────────────────────────────────────────────────────────────
   logEvent({
     event_type: "onboarding.character_photos",
     status: "success",
     child_id: childId,
-    message: "Character photos uploaded",
-    metadata: { photo_count: photos.length },
+    message: "Character photos uploaded (direct)",
+    metadata: { photo_count: storagePaths.length, total_in_bucket: existingFiles.size },
   });
 
-  return { success: true };
+  return { success: true, count: storagePaths.length };
 }
 
 export async function getChildForCharacterPhotos(
