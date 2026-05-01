@@ -2,10 +2,19 @@
 
 import { useState, useRef } from "react";
 import Link from "next/link";
-import { submitMemoryDrop } from "./actions";
+import {
+  createHarvestPhotoUploadUrls,
+  submitHarvestMemory,
+} from "./actions";
 import type { ChildData, HarvestData } from "./actions";
 
-/* ─── Helpers ──────────────────────────────────────────────────────────────── */
+/* ─── Constants ───────────────────────────────────────────────────────────── */
+
+const MIN_PHOTOS = 5;
+const MAX_PHOTOS = 12;
+const UPLOAD_CONCURRENCY = 3;
+
+/* ─── Helpers ─────────────────────────────────────────────────────────────── */
 
 function daysUntil(dateStr: string): number {
   const target = new Date(dateStr);
@@ -31,6 +40,32 @@ const SEASON_LABELS: Record<string, string> = {
   birthday: "Birthday",
 };
 
+/** Upload items with a concurrency cap. Returns results in input order. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  fn: (item: T, index: number) => Promise<R>,
+  limit: number
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        results[i] = { status: "fulfilled", value: await fn(items[i], i) };
+      } catch (reason) {
+        results[i] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker())
+  );
+  return results;
+}
+
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
 interface PhotoSlot {
@@ -49,6 +84,7 @@ function createEmptySlot(): PhotoSlot {
 function PhotoSlotCard({
   slot,
   index,
+  disabled,
   onUpload,
   onRemove,
   onCaptionChange,
@@ -56,6 +92,7 @@ function PhotoSlotCard({
 }: {
   slot: PhotoSlot;
   index: number;
+  disabled: boolean;
   onUpload: (index: number, file: File) => void;
   onRemove: (index: number) => void;
   onCaptionChange: (index: number, caption: string) => void;
@@ -66,8 +103,8 @@ function PhotoSlotCard({
   if (!slot.file) {
     return (
       <div
-        onClick={() => inputRef.current?.click()}
-        className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-navy/15 px-6 py-8 transition-colors hover:border-gold/40"
+        onClick={() => !disabled && inputRef.current?.click()}
+        className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-navy/15 px-6 py-8 transition-colors ${disabled ? "opacity-50 cursor-not-allowed" : "hover:border-gold/40"}`}
       >
         <svg
           className="mb-2 h-6 w-6 text-navy/20"
@@ -121,13 +158,15 @@ function PhotoSlotCard({
             alt={`Photo ${index + 1}`}
             className="h-16 w-16 rounded-lg object-cover"
           />
-          <button
-            type="button"
-            onClick={() => onRemove(index)}
-            className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-navy text-[10px] text-white hover:bg-red-500"
-          >
-            &times;
-          </button>
+          {!disabled && (
+            <button
+              type="button"
+              onClick={() => onRemove(index)}
+              className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-navy text-[10px] text-white hover:bg-red-500"
+            >
+              &times;
+            </button>
+          )}
         </div>
         <div className="flex-1">
           <label className="mb-1 block font-sans text-xs font-medium text-navy/50">
@@ -139,8 +178,9 @@ function PhotoSlotCard({
             onChange={(e) =>
               onCaptionChange(index, e.target.value.slice(0, 150))
             }
+            disabled={disabled}
             placeholder="Her first day of kindergarten..."
-            className="w-full rounded-full border border-navy/15 bg-white px-4 py-2.5 font-sans text-sm text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm focus:ring-2 focus:ring-gold/40"
+            className="w-full rounded-full border border-navy/15 bg-white px-4 py-2.5 font-sans text-sm text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm focus:ring-2 focus:ring-gold/40 disabled:opacity-50"
           />
           <span
             className={`mt-1 block text-right font-sans text-[10px] ${
@@ -174,11 +214,15 @@ export default function MemoryDropForm({
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState("");
+  const submittingRef = useRef(false);
 
   const seasonLabel = SEASON_LABELS[harvest.season] || harvest.season;
   const daysLeft = daysUntil(harvest.window_closes_at);
   const closeDate = formatDate(harvest.window_closes_at);
   const uploadedCount = photoSlots.filter((s) => s.file !== null).length;
+
+  const canSubmit = uploadedCount >= MIN_PHOTOS && !loading;
 
   /* ─── Photo handling ─────────────────────────────────────────────────────── */
 
@@ -220,7 +264,7 @@ export default function MemoryDropForm({
   }
 
   function addSlot() {
-    if (photoSlots.length < 5) {
+    if (photoSlots.length < MAX_PHOTOS) {
       setPhotoSlots((prev) => [...prev, createEmptySlot()]);
     }
   }
@@ -229,10 +273,13 @@ export default function MemoryDropForm({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canSubmit || submittingRef.current) return;
+
     setError(null);
 
-    if (uploadedCount === 0) {
-      setError("Please upload at least one photo.");
+    // ── Client-side validation ────────────────────────────────────────────
+    if (uploadedCount < MIN_PHOTOS) {
+      setError(`Please upload at least ${MIN_PHOTOS} photos.`);
       return;
     }
 
@@ -258,23 +305,105 @@ export default function MemoryDropForm({
       return;
     }
 
+    submittingRef.current = true;
     setLoading(true);
+    setProgress("");
 
-    const formData = new FormData();
-    const filledSlots = photoSlots.filter((s) => s.file !== null);
-    filledSlots.forEach((s) => {
-      formData.append("photos", s.file!);
-      formData.append("captions", s.caption);
-    });
-    formData.set("milestone", milestone);
-    formData.set("interests", interests);
-    formData.set("archetype", archetype);
-    formData.set("notes", notes);
+    try {
+      const filledSlots = photoSlots.filter((s) => s.file !== null);
 
-    const result = await submitMemoryDrop(child.id, formData);
-    if (result?.error) {
-      setError(result.error);
+      // Step A — get signed upload URLs (also cleans the folder)
+      setProgress("Preparing uploads\u2026");
+      const urlResult = await createHarvestPhotoUploadUrls(
+        child.id,
+        filledSlots.map((s) => ({
+          name: s.file!.name,
+          type: s.file!.type,
+          size: s.file!.size,
+        }))
+      );
+
+      if ("error" in urlResult) {
+        setError(urlResult.error);
+        return;
+      }
+
+      const { uploads } = urlResult;
+
+      // Step B — upload each file directly to Supabase (max 3 concurrent)
+      let completed = 0;
+      const total = filledSlots.length;
+      setProgress(`Uploading 0 of ${total}\u2026`);
+
+      const results = await mapWithConcurrency(
+        filledSlots,
+        async (slot, i) => {
+          const { signedUrl, storagePath } = uploads[i];
+
+          const res = await fetch(signedUrl, {
+            method: "PUT",
+            headers: { "Content-Type": slot.file!.type },
+            body: slot.file!,
+          });
+
+          if (!res.ok) {
+            throw new Error(`Upload failed (${res.status})`);
+          }
+
+          completed++;
+          setProgress(`Uploading ${completed} of ${total}\u2026`);
+
+          return { path: storagePath, caption: slot.caption };
+        },
+        UPLOAD_CONCURRENCY
+      );
+
+      // Step C — check for upload failures
+      const succeeded: { path: string; caption: string }[] = [];
+      const failedNames: string[] = [];
+
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === "fulfilled") {
+          succeeded.push(r.value);
+        } else {
+          failedNames.push(filledSlots[i].file!.name);
+        }
+      }
+
+      if (failedNames.length > 0) {
+        setError(
+          `${failedNames.length} photo(s) failed: ${failedNames.join(", ")}. Tap retry to re-upload all photos.`
+        );
+        return;
+      }
+
+      // Step D — submit text fields + verified photo paths atomically
+      setProgress("Saving your memory\u2026");
+      const submitResult = await submitHarvestMemory(child.id, {
+        textFields: {
+          milestone,
+          interests,
+          character: archetype,
+          notes,
+        },
+        photos: succeeded,
+      });
+
+      // submitHarvestMemory redirects on success — if we reach here, it's an error
+      if (submitResult?.error) {
+        setError(submitResult.error);
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong. Please try again."
+      );
+    } finally {
       setLoading(false);
+      setProgress("");
+      submittingRef.current = false;
     }
   }
 
@@ -326,7 +455,11 @@ export default function MemoryDropForm({
             <label className="mb-4 block font-sans text-sm font-medium text-navy">
               Photos
               <span className="ml-1 font-normal text-navy/40">
-                {uploadedCount} of 5 photos
+                {uploadedCount < MIN_PHOTOS
+                  ? `${uploadedCount} of ${MIN_PHOTOS} minimum`
+                  : uploadedCount < MAX_PHOTOS
+                    ? `${uploadedCount} of ${MAX_PHOTOS} photos \u2713`
+                    : `${uploadedCount} of ${MAX_PHOTOS} photos \u2713 (max reached)`}
               </span>
             </label>
 
@@ -336,6 +469,7 @@ export default function MemoryDropForm({
                   key={i}
                   slot={slot}
                   index={i}
+                  disabled={loading}
                   onUpload={handleUpload}
                   onRemove={handleRemove}
                   onCaptionChange={handleCaptionChange}
@@ -345,9 +479,10 @@ export default function MemoryDropForm({
             </div>
 
             {/* Add another photo */}
-            {uploadedCount > 0 &&
+            {!loading &&
+              uploadedCount > 0 &&
               uploadedCount === photoSlots.length &&
-              photoSlots.length < 5 && (
+              photoSlots.length < MAX_PHOTOS && (
                 <button
                   type="button"
                   onClick={addSlot}
@@ -387,7 +522,8 @@ export default function MemoryDropForm({
               placeholder="Lost her first tooth, learned to ride a bike, started a new school..."
               rows={3}
               required
-              className="w-full rounded-2xl border border-navy/15 bg-white px-6 py-4 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm resize-none"
+              disabled={loading}
+              className="w-full rounded-2xl border border-navy/15 bg-white px-6 py-4 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm resize-none disabled:opacity-50"
             />
             <div className="mt-1.5 flex items-center justify-between">
               <p className="font-sans text-xs text-navy/40">
@@ -414,7 +550,8 @@ export default function MemoryDropForm({
               placeholder="Still dinosaurs, but now also space and building things..."
               rows={3}
               required
-              className="w-full rounded-2xl border border-navy/15 bg-white px-6 py-4 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm resize-none"
+              disabled={loading}
+              className="w-full rounded-2xl border border-navy/15 bg-white px-6 py-4 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm resize-none disabled:opacity-50"
             />
             <div className="mt-1.5 flex items-center justify-between">
               <p className="font-sans text-xs text-navy/40">
@@ -441,7 +578,8 @@ export default function MemoryDropForm({
               value={archetype}
               onChange={(e) => setArchetype(e.target.value)}
               placeholder="Elsa, Superman, a friendly dragon..."
-              className="w-full rounded-full border border-navy/15 bg-white px-6 py-3.5 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm"
+              disabled={loading}
+              className="w-full rounded-full border border-navy/15 bg-white px-6 py-3.5 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm disabled:opacity-50"
             />
             <p className="mt-1.5 font-sans text-xs text-navy/40">
               We&rsquo;ll reimagine them as an original companion — no
@@ -460,7 +598,8 @@ export default function MemoryDropForm({
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="New baby sibling, big move, starting kindergarten..."
-              className="w-full rounded-full border border-navy/15 bg-white px-6 py-3.5 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm"
+              disabled={loading}
+              className="w-full rounded-full border border-navy/15 bg-white px-6 py-3.5 font-sans text-base text-navy placeholder:text-navy/30 outline-none transition-shadow focus:border-gold focus:shadow-warm disabled:opacity-50"
             />
             <p className="mt-1.5 font-sans text-xs text-navy/40">
               We&rsquo;ll handle it with care.
@@ -470,7 +609,7 @@ export default function MemoryDropForm({
           {/* Submit */}
           <button
             type="submit"
-            disabled={loading}
+            disabled={!canSubmit}
             className="w-full rounded-full bg-gold py-3.5 text-center font-sans text-base font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? (
@@ -494,8 +633,10 @@ export default function MemoryDropForm({
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                   />
                 </svg>
-                Saving your memory...
+                {progress || "Uploading\u2026"}
               </span>
+            ) : error ? (
+              "Re-upload all \u2192"
             ) : (
               "Send this memory \u2192"
             )}
