@@ -264,7 +264,7 @@ const MemoryPhotoUpload = forwardRef<
         (s) => s.file !== null && !s.uploadedPath
       );
 
-      let newlyUploaded: { slotIndex: number; path: string; caption: string }[] = [];
+      const newlyUploaded: { slotIndex: number; path: string; caption: string }[] = [];
 
       if (slotsToUpload.length > 0) {
         setProgress("Preparing upload\u2026");
@@ -286,11 +286,9 @@ const MemoryPhotoUpload = forwardRef<
 
         // Map slotsToUpload back to their indices in photoSlots
         const slotIndices: number[] = [];
-        let pendingIdx = 0;
         for (let i = 0; i < photoSlots.length; i++) {
           if (photoSlots[i].file !== null && !photoSlots[i].uploadedPath) {
             slotIndices.push(i);
-            pendingIdx++;
           }
         }
 
