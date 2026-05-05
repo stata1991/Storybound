@@ -443,14 +443,37 @@ export async function createPhysicalCheckoutSession(
   return { url: session.url };
 }
 
-/* ─── Memory photo upload ─────────────────────────────────────────────────── */
+/* ─── Memory photo upload (signed-URL pattern) ────────────────────────────── */
 
-export async function addMemoryPhotos(
+interface MemoryPhotoFileMetadata {
+  name: string;
+  type: string;
+  size: number;
+}
+
+interface MemoryPhotoSignedUrl {
+  signedUrl: string;
+  storagePath: string;
+}
+
+const ALLOWED_PHOTO_TYPES = ["image/jpeg", "image/png"];
+const MAX_PHOTO_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_PHOTO_TOTAL = 12;
+const VALID_ADD_PHOTO_STATUSES = ["pending", "submitted", "processing"];
+
+/**
+ * Generates signed upload URLs for additive harvest photo uploads.
+ * Does NOT clean the folder — new photos are appended to existing ones.
+ *
+ * Ownership chain: user → family → child → harvest (RLS-scoped).
+ * Storage path pattern: {family_id}/{child_id}/{harvest_id}/{uuid}.{ext}
+ */
+export async function addHarvestPhotos(
   childId: string,
   harvestId: string,
-  formData: FormData
-): Promise<{ success: true; photoCount: number } | { error: string }> {
-  // Auth check
+  files: MemoryPhotoFileMetadata[]
+): Promise<{ error: string } | { uploads: MemoryPhotoSignedUrl[] }> {
+  // ── Auth ─────────────────────────────────────────────────────────────────
   const supabase = await createClient();
   const {
     data: { user },
@@ -461,23 +484,124 @@ export async function addMemoryPhotos(
     return { error: "Not authenticated. Please sign in." };
   }
 
-  // Verify child ownership via RLS
+  // ── Validate file metadata ─────────────────────────────────────────────
+  if (!files || files.length === 0) {
+    return { error: "No files provided." };
+  }
+  for (const f of files) {
+    if (!ALLOWED_PHOTO_TYPES.includes(f.type)) {
+      return { error: `${f.name}: only JPEG and PNG files are accepted.` };
+    }
+    if (f.size > MAX_PHOTO_SIZE) {
+      return { error: `${f.name} exceeds the 10 MB limit.` };
+    }
+    if (f.size === 0) {
+      return { error: `${f.name} is empty.` };
+    }
+  }
+
+  // ── Verify child ownership (RLS-scoped) ────────────────────────────────
   const { data: child } = await supabase
     .from("children")
     .select("id, family_id")
     .eq("id", childId)
     .single();
 
-  if (!child) {
-    return { error: "Child not found." };
+  if (!child) return { error: "Child not found." };
+
+  // ── Verify harvest belongs to child and is in a valid status ───────────
+  const admin = getAdmin();
+  const { data: harvest } = await admin
+    .from("harvests")
+    .select("id, status, photo_count")
+    .eq("id", harvestId)
+    .eq("child_id", childId)
+    .single();
+
+  if (!harvest) return { error: "Harvest not found." };
+
+  if (!VALID_ADD_PHOTO_STATUSES.includes(harvest.status)) {
+    return { error: "Photos can no longer be added to this memory drop." };
   }
 
-  const familyId = child.family_id;
+  // ── Check total count (existing + new ≤ MAX) ──────────────────────────
+  const existingCount = harvest.photo_count ?? 0;
+  if (existingCount + files.length > MAX_PHOTO_TOTAL) {
+    return {
+      error: `Maximum ${MAX_PHOTO_TOTAL} photos allowed. You already have ${existingCount}.`,
+    };
+  }
 
-  // Admin client for storage + harvest update
+  // ── Generate signed upload URLs (no folder cleanup) ────────────────────
+  const folderPath = `${child.family_id}/${childId}/${harvestId}`;
+  const uploads: MemoryPhotoSignedUrl[] = [];
+
+  for (const f of files) {
+    const ext = f.name.split(".").pop()?.toLowerCase() || "jpg";
+    const safeName = `${crypto.randomUUID()}.${ext}`;
+    const storagePath = `${folderPath}/${safeName}`;
+
+    const { data, error } = await supabase.storage
+      .from("harvest-photos")
+      .createSignedUploadUrl(storagePath);
+
+    if (error || !data) {
+      return {
+        error: `Failed to prepare upload for ${f.name}: ${error?.message ?? "unknown error"}`,
+      };
+    }
+
+    uploads.push({
+      signedUrl: data.signedUrl,
+      storagePath,
+    });
+  }
+
+  return { uploads };
+}
+
+/**
+ * Confirms that additive photo uploads completed successfully.
+ * Verifies each claimed path exists in storage, validates path format
+ * for traversal protection, then atomically appends to the harvest row.
+ */
+export async function confirmAddedHarvestPhotos(
+  childId: string,
+  harvestId: string,
+  photos: { path: string; caption: string }[]
+): Promise<{ error: string } | { success: true; photoCount: number }> {
+  // ── Auth ─────────────────────────────────────────────────────────────────
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return { error: "Not authenticated. Please sign in." };
+  }
+
+  // ── Validate input ─────────────────────────────────────────────────────
+  if (!photos || photos.length === 0) {
+    return { error: "No photos to confirm." };
+  }
+  for (const p of photos) {
+    if (p.caption.length > 200) {
+      return { error: "Each photo caption must be 200 characters or less." };
+    }
+  }
+
+  // ── Verify child ownership (RLS-scoped) ────────────────────────────────
+  const { data: child } = await supabase
+    .from("children")
+    .select("id, family_id")
+    .eq("id", childId)
+    .single();
+
+  if (!child) return { error: "Child not found." };
+
+  // ── Verify harvest ─────────────────────────────────────────────────────
   const admin = getAdmin();
-
-  // Fetch harvest — verify it belongs to this child and is in a valid status
   const { data: harvest } = await admin
     .from("harvests")
     .select("id, status, photo_paths, photo_captions, photo_count")
@@ -485,81 +609,52 @@ export async function addMemoryPhotos(
     .eq("child_id", childId)
     .single();
 
-  if (!harvest) {
-    return { error: "Harvest not found." };
-  }
+  if (!harvest) return { error: "Harvest not found." };
 
-  const validStatuses = ["pending", "submitted", "processing"];
-  if (!validStatuses.includes(harvest.status)) {
+  if (!VALID_ADD_PHOTO_STATUSES.includes(harvest.status)) {
     return { error: "Photos can no longer be added to this memory drop." };
   }
 
-  // Ensure harvest-photos bucket exists (idempotent)
-  await admin.storage.createBucket("harvest-photos", {
-    public: false,
-    fileSizeLimit: 10 * 1024 * 1024,
-    allowedMimeTypes: ["image/jpeg", "image/png"],
-  });
-
-  // Parse photos + captions from FormData
-  const photos = formData.getAll("photos") as File[];
-  const captions = formData.getAll("captions") as string[];
-
-  if (photos.length === 0) {
-    return { error: "No photos provided." };
-  }
-
-  // Validate captions
-  for (const cap of captions) {
-    if (cap.length > 200) {
-      return { error: "Each photo caption must be 200 characters or less." };
+  // ── Path traversal protection ──────────────────────────────────────────
+  const expectedPrefix = `${child.family_id}/${childId}/${harvestId}/`;
+  for (const p of photos) {
+    if (!p.path.startsWith(expectedPrefix)) {
+      return { error: "Invalid photo path detected." };
     }
   }
 
-  // Check max photos limit (5 total)
+  // ── Verify each file exists in storage ─────────────────────────────────
+  for (const p of photos) {
+    // Extract folder and filename from the path
+    const lastSlash = p.path.lastIndexOf("/");
+    const folder = p.path.slice(0, lastSlash);
+    const fileName = p.path.slice(lastSlash + 1);
+
+    const { data: listing } = await admin.storage
+      .from("harvest-photos")
+      .list(folder, { limit: 200, search: fileName });
+
+    const found = listing?.some((f) => f.name === fileName);
+    if (!found) {
+      return { error: "One or more photos failed to upload. Please retry." };
+    }
+  }
+
+  // ── Count validation (existing + new ≤ MAX) ────────────────────────────
   const existingPaths: string[] = harvest.photo_paths ?? [];
   const existingCaptions: string[] = harvest.photo_captions ?? [];
   const existingCount = existingPaths.length;
 
-  if (existingCount + photos.length > 5) {
+  if (existingCount + photos.length > MAX_PHOTO_TOTAL) {
     return {
-      error: `Maximum 5 photos allowed. You already have ${existingCount}.`,
+      error: `Maximum ${MAX_PHOTO_TOTAL} photos allowed. You already have ${existingCount}.`,
     };
   }
 
-  // Upload each photo
-  const newPaths: string[] = [];
+  // ── Atomic append to harvest row ───────────────────────────────────────
+  const allPaths = [...existingPaths, ...photos.map((p) => p.path)];
+  const allCaptions = [...existingCaptions, ...photos.map((p) => p.caption)];
 
-  for (const photo of photos) {
-    if (!photo.size) continue;
-
-    const ext = photo.name.split(".").pop()?.toLowerCase() || "jpg";
-    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const storagePath = `${familyId}/${childId}/${harvestId}/${fileName}`;
-
-    const { error: uploadError } = await admin.storage
-      .from("harvest-photos")
-      .upload(storagePath, photo, {
-        contentType: photo.type,
-        upsert: false,
-      });
-
-    if (uploadError) {
-      return { error: `Failed to upload ${photo.name}. Please try again.` };
-    }
-
-    newPaths.push(storagePath);
-  }
-
-  if (newPaths.length === 0) {
-    return { error: "No valid photos to upload." };
-  }
-
-  // Append new paths + captions to existing
-  const allPaths = [...existingPaths, ...newPaths];
-  const allCaptions = [...existingCaptions, ...captions];
-
-  // Update harvest
   const { error: updateError } = await admin
     .from("harvests")
     .update({
@@ -573,14 +668,16 @@ export async function addMemoryPhotos(
     return { error: "Failed to save photos. Please try again." };
   }
 
+  // ── Audit log ──────────────────────────────────────────────────────────
   logEvent({
     event_type: "harvest.photos_added",
     status: "success",
     harvest_id: harvestId,
     child_id: childId,
-    message: `Added ${newPaths.length} photo(s)`,
-    metadata: { new_count: newPaths.length, total_count: allPaths.length },
+    message: `Added ${photos.length} photo(s) via signed-URL upload`,
+    metadata: { new_count: photos.length, total_count: allPaths.length },
   });
 
   return { success: true, photoCount: allPaths.length };
 }
+
