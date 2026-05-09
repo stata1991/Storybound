@@ -1632,37 +1632,22 @@ const STORY_STYLE: Record<string, StoryStyle> = {
     exampleSentence:
       "The mud stretched across the whole road like a brown sea. Suppu crossed his arms and thought. There had to be a way.",
   },
-  "9-10": {
-    wordsPerScene: 130,
-    sentenceLength: "varied — short for impact, long for atmosphere",
-    vocabulary:
-      "early chapter book level — metaphors, some complex sentences, emotional nuance",
-    tone: "the child faces a real challenge and grows through it — emotional arc matters",
-    tension:
-      "genuine stakes — something the child cares about is at risk before it resolves",
-    emotionalArc: "genuine stakes → self-doubt moment → growth → resolution that changes something",
-    catchphrase: false,
-    exampleSentence:
-      "Standing at the edge of the flooded road, Suppu felt the familiar knot in his stomach — the one that always showed up right before something hard.",
-  },
 };
 
 // Scene counts are intentionally age-scaled. Total illustrations = SCENE_COUNT + 1 (cover).
-// Age 3-4: 8 scenes + 1 cover = 9 images. Age 5-6: 8+1=9. Age 7-8: 10+1=11. Age 9-10: 12+1=13.
+// Age 3-4: 8 scenes + 1 cover = 9 images. Age 5-6: 8+1=9. Age 7-8: 10+1=11.
 const SCENE_COUNT: Record<string, number> = {
   "3-4": 8,
   "5-6": 8,
   "7-8": 10,
-  "9-10": 12,
 };
 
 function getStoryStyle(age: number): { style: StoryStyle; sceneCount: number; band: string } {
-  const clamped = Math.max(3, Math.min(10, age));
+  const clamped = Math.max(3, Math.min(8, age));
   let band: string;
   if (clamped <= 4) band = "3-4";
   else if (clamped <= 6) band = "5-6";
-  else if (clamped <= 8) band = "7-8";
-  else band = "9-10";
+  else band = "7-8";
   return { style: STORY_STYLE[band], sceneCount: SCENE_COUNT[band], band };
 }
 

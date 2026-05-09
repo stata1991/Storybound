@@ -32,11 +32,10 @@ const AGE_PROFILES: AgeProfile[] = [
   { label: "3-4", minAge: 3, maxAge: 4, fontSize: 24, lineHeight: 1.9, chapterLabel: false, wordsPerScene: 40 },
   { label: "5-6", minAge: 5, maxAge: 6, fontSize: 20, lineHeight: 1.8, chapterLabel: false, wordsPerScene: 60 },
   { label: "7-8", minAge: 7, maxAge: 8, fontSize: 16, lineHeight: 1.7, chapterLabel: true,  wordsPerScene: 120 },
-  { label: "9-10", minAge: 9, maxAge: 10, fontSize: 14, lineHeight: 1.65, chapterLabel: true,  wordsPerScene: 180 },
 ];
 
 function getAgeProfile(age: number): AgeProfile {
-  const clamped = Math.max(3, Math.min(10, age));
+  const clamped = Math.max(3, Math.min(8, age));
   return AGE_PROFILES.find((p) => clamped >= p.minAge && clamped <= p.maxAge) ?? AGE_PROFILES[0];
 }
 

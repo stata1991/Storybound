@@ -26,7 +26,7 @@ Existing personalized storybooks:
 
 ## Who We Serve
 
-**Primary customer:** Parents of children aged 3–10
+**Primary customer:** Parents of children aged 1–8
 **Sweet spot:** Ages 4–8, first-time parents, value memorable experiences over things
 **Secondary:** Grandparents buying as gifts
 

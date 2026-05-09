@@ -15,7 +15,6 @@ const READING_LEVELS = [
   { value: "pre_reader", label: "Pre-reader (1–4)" },
   { value: "early_reader", label: "Early reader (4–6)" },
   { value: "independent", label: "Independent (6–8)" },
-  { value: "chapter_book", label: "Chapter book (8–10)" },
 ];
 
 /* ─── Helpers ──────────────────────────────────────────────────────────────── */
@@ -37,7 +36,7 @@ function isDobValid(dob: string): boolean {
   const today = new Date();
   if (birth > today) return false;
   const age = calculateAge(dob);
-  return age >= 1 && age <= 12;
+  return age >= 1 && age <= 8;
 }
 
 /* ─── Component ────────────────────────────────────────────────────────────── */
@@ -75,7 +74,7 @@ export default function EditChildForm({ child }: { child: EditableChild }) {
       return;
     }
     if (!isDobValid(dateOfBirth)) {
-      setError("Please enter a valid birthday for a child aged 1–12.");
+      setError("Please enter a valid birthday for a child aged 1–8.");
       return;
     }
 
@@ -154,7 +153,7 @@ export default function EditChildForm({ child }: { child: EditableChild }) {
               />
               {dobTouched && !dobValid && (
                 <p className="mt-1.5 font-sans text-xs text-red-500">
-                  Please enter a valid birthday for a child aged 1–12.
+                  Please enter a valid birthday for a child aged 1–8.
                 </p>
               )}
             </div>
