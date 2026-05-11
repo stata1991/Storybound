@@ -571,6 +571,35 @@ export type Database = {
           },
         ]
       }
+      onboarding_drafts: {
+        Row: {
+          user_id: string
+          child_id: string | null
+          data: Json
+          updated_at: string
+        }
+        Insert: {
+          user_id: string
+          child_id?: string | null
+          data?: Json
+          updated_at?: string
+        }
+        Update: {
+          user_id?: string
+          child_id?: string | null
+          data?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_drafts_child_id_fkey"
+            columns: ["child_id"]
+            isOneToOne: false
+            referencedRelation: "children"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

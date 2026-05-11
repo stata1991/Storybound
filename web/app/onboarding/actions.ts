@@ -597,3 +597,278 @@ export async function submitOnboardingMemoryDrop(
 
   return { success: true };
 }
+
+/* ─── Additional-child detection ───────────────────────────────────────────── */
+
+/**
+ * Determine whether `childId` belongs to a family with more than one child.
+ * Used by the character-photos and memory-drop routes to choose the correct
+ * progress-indicator labels (5-step normal vs 4-step additional).
+ */
+export async function isAdditionalChild(
+  childId: string
+): Promise<boolean> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return false;
+
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  const { data: parent } = await admin
+    .from("parents")
+    .select("family_id")
+    .eq("id", user.id)
+    .single();
+
+  if (!parent) return false;
+
+  const { count } = await admin
+    .from("children")
+    .select("id", { count: "exact", head: true })
+    .eq("family_id", parent.family_id)
+    .is("deleted_at", null)
+    .eq("active", true);
+
+  return (count ?? 0) > 1;
+}
+
+/* ─── Draft persistence ────────────────────────────────────────────────────── */
+
+/**
+ * Shape of the JSON blob stored in onboarding_drafts.data.
+ * Steps 1–3 form fields live under `form`, memory-drop text under `memoryDrop`.
+ */
+export interface OnboardingDraftData {
+  step: number;
+  isAdditional: boolean;
+  form: {
+    name: string;
+    dateOfBirth: string;
+    pronouns: string;
+    readingLevel: string;
+    interests: string;
+    avoidances: string;
+    defaultArchetype: string;
+    parentFirstName: string;
+    shippingName: string;
+    addressLine1: string;
+    addressLine2: string;
+    city: string;
+    state: string;
+    zip: string;
+    country: string;
+  };
+  memoryDrop: {
+    milestone: string;
+    notes: string;
+  };
+}
+
+/**
+ * Load the current user's onboarding draft (if any).
+ * Returns null if no draft exists or user is unauthenticated.
+ */
+export async function loadDraft(): Promise<{
+  data: OnboardingDraftData;
+  childId: string | null;
+} | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  const { data: draft } = await admin
+    .from("onboarding_drafts")
+    .select("data, child_id")
+    .eq("user_id", user.id)
+    .single();
+
+  if (!draft) return null;
+
+  return {
+    data: draft.data as unknown as OnboardingDraftData,
+    childId: draft.child_id,
+  };
+}
+
+/**
+ * Upsert the user's onboarding draft.
+ * Called on debounced input changes and on step transitions.
+ * Uses service-role client because new users don't have a parents row yet
+ * (auth_family_id() returns null), so RLS select/update would fail.
+ */
+export async function saveDraft(
+  data: OnboardingDraftData,
+  childId: string | null
+): Promise<{ success: true } | { error: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated." };
+
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  const { error } = await admin.from("onboarding_drafts").upsert(
+    {
+      user_id: user.id,
+      child_id: childId,
+      data: data as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" }
+  );
+
+  if (error) return { error: "Failed to save draft." };
+  return { success: true };
+}
+
+/**
+ * Delete the user's onboarding draft.
+ * Called after saveChildProfile + submitOnboardingMemoryDrop complete
+ * (i.e., onboarding is fully done).
+ */
+export async function deleteDraft(): Promise<void> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  await admin.from("onboarding_drafts").delete().eq("user_id", user.id);
+}
+
+/**
+ * Detect where an authenticated user should resume onboarding.
+ * Priority order:
+ *  1. Most-recently-created child with no character photos → character-photos route
+ *  2. Most-recently-created child with photos but unsubmitted harvest → memory-drop route
+ *  3. Draft exists (no child row yet, or child_id stale-cleaned) → load draft into wizard
+ *  4. Nothing → fresh start
+ */
+export async function detectOnboardingResume(): Promise<
+  | { redirect: "character-photos"; childId: string }
+  | { redirect: "memory-drop"; childId: string }
+  | { redirect: "draft"; data: OnboardingDraftData; childId: string | null }
+  | { redirect: "fresh" }
+> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { redirect: "fresh" };
+
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  // Check for parent → family → children
+  const { data: parent } = await admin
+    .from("parents")
+    .select("family_id")
+    .eq("id", user.id)
+    .single();
+
+  if (parent) {
+    // Most-recently-created child first — so multi-child families resume
+    // the newest incomplete child, not an arbitrary one.
+    const { data: children } = await admin
+      .from("children")
+      .select("id, character_photos_deleted_at")
+      .eq("family_id", parent.family_id)
+      .is("deleted_at", null)
+      .eq("active", true)
+      .order("created_at", { ascending: false });
+
+    if (children && children.length > 0) {
+      for (const child of children) {
+        // Check if child has character photos in bucket
+        const { data: photos } = await admin.storage
+          .from("character-photos")
+          .list(child.id, { limit: 1 });
+
+        const hasPhotos =
+          photos &&
+          photos.filter((f) => f.name !== ".emptyFolderPlaceholder").length > 0;
+
+        // Photos already deleted post-training means this child is done with photos
+        if (!hasPhotos && !child.character_photos_deleted_at) {
+          return { redirect: "character-photos", childId: child.id };
+        }
+
+        // Check for unsubmitted harvest
+        const { data: harvests } = await admin
+          .from("harvests")
+          .select("id, status")
+          .eq("child_id", child.id)
+          .eq("status", "pending")
+          .limit(1);
+
+        if (harvests && harvests.length > 0) {
+          return { redirect: "memory-drop", childId: child.id };
+        }
+      }
+    }
+  }
+
+  // Check for draft — clean up stale drafts before returning them
+  const draft = await loadDraft();
+  if (draft && draft.childId) {
+    // If draft points to a soft-deleted child, discard it
+    const { data: draftChild } = await admin
+      .from("children")
+      .select("id, deleted_at")
+      .eq("id", draft.childId)
+      .single();
+
+    if (!draftChild || draftChild.deleted_at) {
+      await admin.from("onboarding_drafts").delete().eq("user_id", user.id);
+      return { redirect: "fresh" };
+    }
+
+    // If draft's child already has a submitted harvest, onboarding is done
+    const { data: submittedHarvest } = await admin
+      .from("harvests")
+      .select("id")
+      .eq("child_id", draft.childId)
+      .eq("status", "submitted")
+      .limit(1)
+      .single();
+
+    if (submittedHarvest) {
+      await admin.from("onboarding_drafts").delete().eq("user_id", user.id);
+      return { redirect: "fresh" };
+    }
+  }
+
+  if (draft) {
+    return { redirect: "draft", data: draft.data, childId: draft.childId };
+  }
+
+  return { redirect: "fresh" };
+}
