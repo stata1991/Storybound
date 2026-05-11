@@ -2,30 +2,11 @@
 
 /**
  * Full-journey progress indicator shared by all onboarding routes.
- *
- * Normal new-user flow (5 steps):
- *   About → Their world → Address → Photos → Memory drop
- *
- * Additional child flow (4 steps):
- *   About → Their world → Photos → Memory drop
- *
  * Each route passes its own `currentStep` value; the component just renders.
+ *
+ * Step label constants live in ./steps.ts (plain TS, no "use client")
+ * so server components can safely import them.
  */
-
-export const STEPS_NORMAL = [
-  "About",
-  "Their world",
-  "Address",
-  "Photos",
-  "Memory drop",
-];
-
-export const STEPS_ADDITIONAL = [
-  "About",
-  "Their world",
-  "Photos",
-  "Memory drop",
-];
 
 export default function ProgressIndicator({
   currentStep,

@@ -4,10 +4,8 @@ import {
   getChildForCharacterPhotos,
   isAdditionalChild,
 } from "../../actions";
-import ProgressIndicator, {
-  STEPS_NORMAL,
-  STEPS_ADDITIONAL,
-} from "../../_shared/ProgressIndicator";
+import ProgressIndicator from "../../_shared/ProgressIndicator";
+import { STEPS_NORMAL, STEPS_ADDITIONAL } from "../../_shared/steps";
 import CharacterPhotosClient from "./CharacterPhotosClient";
 
 export default async function CharacterPhotosPage({

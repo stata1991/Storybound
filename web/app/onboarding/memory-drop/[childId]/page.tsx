@@ -5,10 +5,8 @@ import {
   isAdditionalChild,
   loadDraft,
 } from "../../actions";
-import ProgressIndicator, {
-  STEPS_NORMAL,
-  STEPS_ADDITIONAL,
-} from "../../_shared/ProgressIndicator";
+import ProgressIndicator from "../../_shared/ProgressIndicator";
+import { STEPS_NORMAL, STEPS_ADDITIONAL } from "../../_shared/steps";
 import MemoryDropForm from "./MemoryDropForm";
 
 export default async function MemoryDropPage({

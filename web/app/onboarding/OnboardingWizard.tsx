@@ -4,10 +4,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { saveChildProfile, saveDraft } from "./actions";
 import type { OnboardingDraftData } from "./actions";
-import ProgressIndicator, {
-  STEPS_NORMAL,
-  STEPS_ADDITIONAL,
-} from "./_shared/ProgressIndicator";
+import ProgressIndicator from "./_shared/ProgressIndicator";
+import { STEPS_NORMAL, STEPS_ADDITIONAL } from "./_shared/steps";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
