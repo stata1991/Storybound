@@ -605,9 +605,7 @@ export async function submitOnboardingMemoryDrop(
  * Used by the character-photos and memory-drop routes to choose the correct
  * progress-indicator labels (5-step normal vs 4-step additional).
  */
-export async function isAdditionalChild(
-  childId: string
-): Promise<boolean> {
+export async function isAdditionalChild(): Promise<boolean> {
   const supabase = await createClient();
   const {
     data: { user },

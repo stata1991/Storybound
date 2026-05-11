@@ -25,7 +25,7 @@ export default async function CharacterPhotosPage({
   const child = await getChildForCharacterPhotos(params.childId);
   if (!child) redirect("/dashboard");
 
-  const additional = await isAdditionalChild(child.id);
+  const additional = await isAdditionalChild();
   const labels = additional ? STEPS_ADDITIONAL : STEPS_NORMAL;
   // Photos is step 4 of 5 (normal) or step 3 of 4 (additional)
   const currentStep = additional ? 3 : 4;

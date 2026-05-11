@@ -79,7 +79,7 @@ export default async function MemoryDropPage({
   const draft = await loadDraft();
   const draftMemoryDrop = draft?.data?.memoryDrop ?? { milestone: "", notes: "" };
 
-  const additional = await isAdditionalChild(child.id);
+  const additional = await isAdditionalChild();
   const labels = additional ? STEPS_ADDITIONAL : STEPS_NORMAL;
   // Memory drop is the last step: 5 of 5 (normal) or 4 of 4 (additional)
   const currentStep = labels.length;
