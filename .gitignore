@@ -3,3 +3,5 @@ node_modules/
 output/
 __pycache__/
 *.pyc
+scripts/loadtest-sessions.json
+scripts/loadtest-results-*.txt
