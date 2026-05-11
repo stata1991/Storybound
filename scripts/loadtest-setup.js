@@ -156,7 +156,7 @@ async function main() {
         const { data: users } = await admin.auth.admin.listUsers();
         const existing = users?.users?.find((u) => u.email === email);
         if (existing) {
-          await admin.auth.admin.updateUser(existing.id, { password });
+          await admin.auth.admin.updateUserById(existing.id, { password });
         }
         skipped++;
       } else {
@@ -167,9 +167,20 @@ async function main() {
       created++;
     }
 
-    // Sign in to get a real session
-    const { data: signInData, error: signInError } =
-      await anonClient.auth.signInWithPassword({ email, password });
+    // Rate-limit guard: pause 300ms between sign-ins to stay under Supabase auth limits
+    if (i > 1) await new Promise((r) => setTimeout(r, 300));
+
+    // Sign in to get a real session (retry once after 2s on rate limit)
+    let signInData, signInError;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await anonClient.auth.signInWithPassword({ email, password });
+      signInData = result.data;
+      signInError = result.error;
+      if (!signInError) break;
+      if (signInError.message.includes("rate limit") && attempt === 0) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
 
     if (signInError || !signInData.session) {
       console.error(`Failed to sign in ${email}:`, signInError?.message ?? "no session");

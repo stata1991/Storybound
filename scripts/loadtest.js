@@ -4,7 +4,7 @@
  * Usage:
  *   k6 run scripts/loadtest.js \
  *     --out csv=scripts/loadtest-results-$(date +%s).txt \
- *     -e BASE_URL=https://thestoryboundapp.com \
+ *     -e BASE_URL=https://www.thestoryboundapp.com \
  *     -e LOADTEST_SECRET=<your-secret>
  *
  * Prerequisites:
@@ -18,7 +18,7 @@ import { sleep, check } from "k6";
 // ── Load sessions at init time (runs once per VU process) ──────────────────
 const sessions = JSON.parse(open("./loadtest-sessions.json"));
 
-const BASE_URL = __ENV.BASE_URL || "https://thestoryboundapp.com";
+const BASE_URL = __ENV.BASE_URL || "https://www.thestoryboundapp.com";
 const LOADTEST_SECRET = __ENV.LOADTEST_SECRET || "";
 
 // ── Scenarios ──────────────────────────────────────────────────────────────
