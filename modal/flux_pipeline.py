@@ -241,10 +241,15 @@ def train_flux_lora(
     import requests
     import io
     import base64
+    import time as _time
 
     from diffusers import FluxPipeline
     from peft import LoraConfig
     from insightface.app import FaceAnalysis
+
+    _t0 = _time.perf_counter()
+    _cum = lambda: _time.perf_counter() - _t0
+    print(f"[TIMING] phase=container_start elapsed=0.0s cumulative=0.0s")
 
     os.environ["HF_TOKEN"] = os.environ.get("HF_TOKEN", "")
 
@@ -379,11 +384,14 @@ def train_flux_lora(
 
     # ── STEP 4: Load FLUX pipeline for training ──
     print("Loading FLUX.1-dev pipeline...")
+    _t_model = _time.perf_counter()
 
     pipe = FluxPipeline.from_pretrained(
         f"{MODEL_CACHE}/flux",
         torch_dtype=torch.bfloat16,
     ).to("cuda")
+
+    print(f"[TIMING] phase=model_load elapsed={_time.perf_counter()-_t_model:.1f}s cumulative={_cum():.1f}s")
 
     transformer = pipe.transformer
     vae = pipe.vae
@@ -418,6 +426,7 @@ def train_flux_lora(
     trainable = sum(p.numel() for p in transformer.parameters()
                    if p.requires_grad)
     print(f"Trainable LoRA params: {trainable:,}")
+    print(f"[TIMING] phase=lora_init elapsed={_time.perf_counter()-_t_model:.1f}s cumulative={_cum():.1f}s")
 
     # ── STEP 6: Encode training images ──
     # FLUX VAE encodes at 8x spatial compression, 16 channels
@@ -501,6 +510,7 @@ def train_flux_lora(
     text_encoder_2.to("cpu")
     gc.collect()
     torch.cuda.empty_cache()
+    print(f"[TIMING] phase=latent_cache elapsed={_time.perf_counter()-_t_model:.1f}s cumulative={_cum():.1f}s")
 
     # ── STEP 8: Training loop ──
     optimizer = torch.optim.AdamW(
@@ -517,6 +527,8 @@ def train_flux_lora(
           f"min-snr-gamma=5.0")
 
     transformer.to("cuda")
+    _t_train = _time.perf_counter()
+    print(f"[TIMING] phase=training_loop_start elapsed=0.0s cumulative={_cum():.1f}s")
 
     for step in range(num_steps):
         latent = latents_list[step % len(latents_list)].to(
@@ -573,8 +585,10 @@ def train_flux_lora(
             print(f"Step {step}/{num_steps} — loss={loss.item():.4f}")
 
     print("Training complete")
+    print(f"[TIMING] phase=training_loop_end elapsed={_time.perf_counter()-_t_train:.1f}s cumulative={_cum():.1f}s")
 
     # ── STEP 9: Save and upload ──
+    _t_save = _time.perf_counter()
     save_dir = Path(f"/lora-weights/{face_model_id}")
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -606,7 +620,10 @@ def train_flux_lora(
             f"FLUX LoRA weights unstable (max={max_val:.4f})"
         )
 
+    print(f"[TIMING] phase=lora_save elapsed={_time.perf_counter()-_t_save:.1f}s cumulative={_cum():.1f}s")
+
     # Upload to Supabase
+    _t_upload = _time.perf_counter()
     import supabase as sb_module
     supabase_url = os.environ["SUPABASE_URL"]
     supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -626,10 +643,12 @@ def train_flux_lora(
 
     # Commit to Modal volume
     lora_volume.commit()
+    print(f"[TIMING] phase=supabase_upload elapsed={_time.perf_counter()-_t_upload:.1f}s cumulative={_cum():.1f}s")
 
     # Privacy: clear photos from memory
     del pil_images
     gc.collect()
+    print(f"[TIMING] phase=container_total elapsed={_cum():.1f}s cumulative={_cum():.1f}s")
 
     # Fire webhook
     try:
@@ -654,432 +673,305 @@ def train_flux_lora(
 
 # ─── Generation ──────────────────────────────────────────────────────────────
 
-@app.function(
+@app.cls(
     image=flux_image,
     gpu="L40S",
     timeout=1800,
     volumes={"/lora-weights": lora_volume},
     secrets=[modal.Secret.from_name("storybound-secrets")],
     memory=32768,
+    scaledown_window=300,
+    concurrency_limit=1,
 )
-def generate_flux_illustrations(body: dict) -> dict:
+class FluxGenerator:
     """
-    Generate illustrations using FLUX.1-dev + LoRA.
+    FLUX.1-dev illustration generator with persistent model loading.
 
-    Key differences from SDXL:
-    - No IP-Adapter — FLUX LoRA handles identity directly
-    - No 77-token limit — use full scene descriptions
-    - No skin tone prompt hack needed — FLUX has less bias
-    - Gender in prompt is more reliable
-    - Reranking still used for best candidate selection
+    @modal.enter() loads the base model and FaceAnalysis once per container.
+    @modal.method() generate() handles per-child LoRA loading and generation.
     """
-    import os
-    import gc
-    import hashlib
-    import requests
-    import torch
-    import numpy as np
-    import cv2
-    from PIL import Image
-    from pathlib import Path
-    import base64
-    import io
-    import tempfile
 
-    from diffusers import FluxPipeline
-    from insightface.app import FaceAnalysis
+    @modal.enter()
+    def startup(self):
+        """Runs ONCE when container starts. Not per invocation."""
+        import time as _time
+        import torch
+        from diffusers import FluxPipeline
+        from insightface.app import FaceAnalysis
 
-    face_model_id = body.get("face_model_id")
-    scene_prompts = body.get("scene_prompts", [])
-    scene_has_humans = body.get("scene_has_humans", [False] * len(scene_prompts))
-    child_age = body.get("child_age", 3)
-    pronouns = body.get("pronouns", "child")
-    skin_tone = body.get("skin_tone_hint", "")
-    harvest_id = body.get("harvest_id")
-    episode_id = body.get("episode_id")
-    child_id = body.get("child_id")
+        _t_enter = _time.perf_counter()
 
-    # Gender word from pronouns
-    if pronouns == "boy":
-        gender_word = "boy"
-        gender_clip_reinforcement = (
-            "boy, male child, short hair, "
+        print("Loading FLUX.1-dev...")
+        self.pipe = FluxPipeline.from_pretrained(
+            f"{MODEL_CACHE}/flux",
+            torch_dtype=torch.bfloat16,
         )
-        gender_t5_reinforcement = (
-            "boy with short hair, male child, "
-            "short straight hair, hair cut above ears, "
-            "no hair accessories, no hair ties, "
+        self.pipe.enable_model_cpu_offload()
+
+        self.rank_app = FaceAnalysis(
+            name="buffalo_l",
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         )
-        gender_negative = (
-            "girl, female, feminine, "
-            "bindi, tilak, forehead dot, forehead mark, dot on forehead, red dot, sindoor, "
-            "pigtails, ponytails, twin tails, side tails, "
-            "hair ties, hair ribbons, hair clips, hair bows, "
-            "braids, plaits, "
-            "dress, skirt, frock, feminine clothing, "
-            "long hair, "
+        self.rank_app.prepare(ctx_id=0, det_size=(640, 640))
+
+        self._enter_time = _time.perf_counter()
+        self._call_count = 0
+        print(f"[TIMING] phase=container_enter elapsed={self._enter_time - _t_enter:.1f}s")
+
+    @modal.method()
+    def generate(self, body: dict) -> dict:
+        """
+        Generate illustrations using FLUX.1-dev + LoRA.
+
+        Key differences from SDXL:
+        - No IP-Adapter — FLUX LoRA handles identity directly
+        - No 77-token limit — use full scene descriptions
+        - No skin tone prompt hack needed — FLUX has less bias
+        - Gender in prompt is more reliable
+        - Reranking still used for best candidate selection
+        """
+        import os
+        import gc
+        import hashlib
+        import requests
+        import torch
+        import numpy as np
+        import cv2
+        from PIL import Image
+        from pathlib import Path
+        import base64
+        import io
+        import tempfile
+        import time as _time
+
+
+        self._call_count += 1
+        _t0 = _time.perf_counter()
+        _cum = lambda: _time.perf_counter() - _t0
+
+        if self._call_count > 1:
+            print(f"[TIMING] phase=container_warm_reuse "
+                  f"elapsed={_t0 - self._enter_time:.1f}s")
+
+        print(f"[TIMING] phase=container_start elapsed=0.0s cumulative=0.0s")
+
+        face_model_id = body.get("face_model_id")
+        scene_prompts = body.get("scene_prompts", [])
+        scene_has_humans = body.get("scene_has_humans", [False] * len(scene_prompts))
+        child_age = body.get("child_age", 3)
+        pronouns = body.get("pronouns", "child")
+        skin_tone = body.get("skin_tone_hint", "")
+        harvest_id = body.get("harvest_id")
+        episode_id = body.get("episode_id")
+        child_id = body.get("child_id")
+
+        # Gender word from pronouns
+        if pronouns == "boy":
+            gender_word = "boy"
+            gender_clip_reinforcement = (
+                "boy, male child, short hair, "
+            )
+            gender_t5_reinforcement = (
+                "boy with short hair, male child, "
+                "short straight hair, hair cut above ears, "
+                "no hair accessories, no hair ties, "
+            )
+            gender_negative = (
+                "girl, female, feminine, "
+                "bindi, tilak, forehead dot, forehead mark, dot on forehead, red dot, sindoor, "
+                "pigtails, ponytails, twin tails, side tails, "
+                "hair ties, hair ribbons, hair clips, hair bows, "
+                "braids, plaits, "
+                "dress, skirt, frock, feminine clothing, "
+                "long hair, "
+            )
+        elif pronouns == "girl":
+            gender_word = "girl"
+            gender_clip_reinforcement = (
+                "girl, female child, "
+            )
+            gender_t5_reinforcement = (
+                "girl with long hair, female child, "
+            )
+            gender_negative = (
+                "boy, male, masculine, "
+                "short hair, buzz cut, "
+            )
+        else:
+            gender_word = "child"
+            gender_clip_reinforcement = ""
+            gender_t5_reinforcement = ""
+            gender_negative = ""
+
+        age_prefix = f"{child_age}-year-old toddler {gender_word}"
+
+        # Style anchor — applied to EVERY scene and cover without exception
+        STYLE_SUFFIX = (
+            ", children's picture book illustration, gouache painting style, "
+            "soft warm colors, consistent art style, flat lighting, "
+            "2D illustrated, painterly, "
+            "realistic head-to-body ratio, natural proportions"
         )
-    elif pronouns == "girl":
-        gender_word = "girl"
-        gender_clip_reinforcement = (
-            "girl, female child, "
+
+        NEGATIVE_PROMPT = (
+            gender_negative +
+            "photorealistic, hyperrealistic, photograph, "
+            "realistic photography, photo, camera, DSLR, "
+            "3D render, CGI, Pixar, Disney 3D, animated film, "
+            "digital painting, oil painting, watercolor, "
+            "disproportionate head, oversized head, chibi, bobblehead, "
+            "back of head, facing away, looking away, "
+            "black and white, monochrome, "
+            "sketch, line art, text, watermark, blurry, deformed, "
+            "extra limbs, adult, teenager, low quality face, "
+            "blurry face"
         )
-        gender_t5_reinforcement = (
-            "girl with long hair, female child, "
-        )
-        gender_negative = (
-            "boy, male, masculine, "
-            "short hair, buzz cut, "
-        )
-    else:
-        gender_word = "child"
-        gender_clip_reinforcement = ""
-        gender_t5_reinforcement = ""
-        gender_negative = ""
 
-    age_prefix = f"{child_age}-year-old toddler {gender_word}"
+        # ── Load LoRA weights ──
+        import supabase as sb_module
+        supabase_url = os.environ["SUPABASE_URL"]
+        supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+        sb = sb_module.create_client(supabase_url, supabase_key)
 
-    # Style anchor — applied to EVERY scene and cover without exception
-    STYLE_SUFFIX = (
-        ", children's picture book illustration, gouache painting style, "
-        "soft warm colors, consistent art style, flat lighting, "
-        "2D illustrated, painterly, "
-        "realistic head-to-body ratio, natural proportions"
-    )
+        lora_dir = None
+        face_embedding = None
 
-    NEGATIVE_PROMPT = (
-        gender_negative +
-        "photorealistic, hyperrealistic, photograph, "
-        "realistic photography, photo, camera, DSLR, "
-        "3D render, CGI, Pixar, Disney 3D, animated film, "
-        "digital painting, oil painting, watercolor, "
-        "disproportionate head, oversized head, chibi, bobblehead, "
-        "back of head, facing away, looking away, "
-        "black and white, monochrome, "
-        "sketch, line art, text, watermark, blurry, deformed, "
-        "extra limbs, adult, teenager, low quality face, "
-        "blurry face"
-    )
+        if face_model_id:
+            with tempfile.TemporaryDirectory() as tmp:
+                lora_dir = Path(tmp)
+                _lora_loaded = False
+                try:
+                    # Download LoRA files from Supabase with retry
+                    for fname in ["adapter_model.safetensors",
+                                  "adapter_config.json",
+                                  "face_embedding.pt",
+                                  "best_face_crop.jpg"]:
+                        for attempt in range(3):
+                            try:
+                                data = sb.storage.from_("lora-weights").download(
+                                    f"{face_model_id}/{fname}"
+                                )
+                                (lora_dir / fname).write_bytes(data)
+                                print(f"Downloaded {fname}")
+                                break
+                            except Exception as e:
+                                if attempt == 2:
+                                    print(f"Download {fname} failed after 3 attempts: {e}")
+                                else:
+                                    print(f"Download {fname} attempt {attempt+1} failed, retrying...")
+                                    _time.sleep(2)
 
-    # ── Load LoRA weights ──
-    import supabase as sb_module
-    supabase_url = os.environ["SUPABASE_URL"]
-    supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-    sb = sb_module.create_client(supabase_url, supabase_key)
-
-    lora_dir = None
-    face_embedding = None
-
-    if face_model_id:
-        with tempfile.TemporaryDirectory() as tmp:
-            lora_dir = Path(tmp)
-            # Download LoRA files from Supabase with retry
-            import time as _time
-            for fname in ["adapter_model.safetensors",
-                          "adapter_config.json",
-                          "face_embedding.pt",
-                          "best_face_crop.jpg"]:
-                for attempt in range(3):
-                    try:
-                        data = sb.storage.from_("lora-weights").download(
-                            f"{face_model_id}/{fname}"
+                    # Load face embedding
+                    emb_path = lora_dir / "face_embedding.pt"
+                    if emb_path.exists():
+                        face_embedding = torch.load(
+                            str(emb_path), map_location="cpu"
                         )
-                        (lora_dir / fname).write_bytes(data)
-                        print(f"Downloaded {fname}")
-                        break
-                    except Exception as e:
-                        if attempt == 2:
-                            print(f"Download {fname} failed after 3 attempts: {e}")
-                        else:
-                            print(f"Download {fname} attempt {attempt+1} failed, retrying...")
-                            _time.sleep(2)
+                        print(f"Face embedding: {face_embedding.shape}")
 
-            # Load face embedding
-            emb_path = lora_dir / "face_embedding.pt"
-            if emb_path.exists():
-                face_embedding = torch.load(
-                    str(emb_path), map_location="cpu"
-                )
-                print(f"Face embedding: {face_embedding.shape}")
+                    # Load LoRA state dict manually
+                    from safetensors.torch import load_file
+                    lora_path = lora_dir / "adapter_model.safetensors"
 
-            # Load FLUX pipeline
-            print("Loading FLUX.1-dev...")
-            pipe = FluxPipeline.from_pretrained(
-                f"{MODEL_CACHE}/flux",
-                torch_dtype=torch.bfloat16,
-            )
+                    if lora_path.exists():
+                        lora_state_dict = load_file(str(lora_path))
 
-            # Load LoRA state dict manually
-            from safetensors.torch import load_file
-            lora_path = lora_dir / "adapter_model.safetensors"
+                        # PEFT saves: base_model.model.single_transformer_blocks.X...
+                        # diffusers FluxPipeline.load_lora_weights expects:
+                        # transformer.single_transformer_blocks.X...
+                        remapped = {}
+                        for key, val in lora_state_dict.items():
+                            new_key = key
+                            # Remove PEFT prefix
+                            if key.startswith("base_model.model."):
+                                new_key = key[len("base_model.model."):]
+                            # Add transformer prefix that diffusers expects
+                            new_key = "transformer." + new_key
+                            remapped[new_key] = val
 
-            if lora_path.exists():
-                lora_state_dict = load_file(str(lora_path))
+                        print(f"Remapped {len(remapped)} FLUX LoRA keys")
+                        print(f"Sample keys: {list(remapped.keys())[:3]}")
 
-                # PEFT saves: base_model.model.single_transformer_blocks.X...
-                # diffusers FluxPipeline.load_lora_weights expects:
-                # transformer.single_transformer_blocks.X...
-                remapped = {}
-                for key, val in lora_state_dict.items():
-                    new_key = key
-                    # Remove PEFT prefix
-                    if key.startswith("base_model.model."):
-                        new_key = key[len("base_model.model."):]
-                    # Add transformer prefix that diffusers expects
-                    new_key = "transformer." + new_key
-                    remapped[new_key] = val
+                        # Save remapped weights to temp file for loading
+                        from safetensors.torch import save_file
+                        remapped_path = lora_dir / "adapter_model_remapped.safetensors"
+                        save_file(remapped, str(remapped_path))
 
-                print(f"Remapped {len(remapped)} FLUX LoRA keys")
-                print(f"Sample keys: {list(remapped.keys())[:3]}")
+                        # Load using remapped file
+                        self.pipe.load_lora_weights(
+                            str(lora_dir),
+                            weight_name="adapter_model_remapped.safetensors"
+                        )
+                        self.pipe.fuse_lora(lora_scale=0.85)
+                        _lora_loaded = True
+                        print("FLUX LoRA loaded and fused")
+                        print(f"[TIMING] phase=lora_load elapsed={_time.perf_counter()-_t0:.1f}s cumulative={_cum():.1f}s")
+                    else:
+                        print("No adapter_model.safetensors found — skipping LoRA")
 
-                # Save remapped weights to temp file for loading
-                from safetensors.torch import save_file
-                remapped_path = lora_dir / "adapter_model_remapped.safetensors"
-                save_file(remapped, str(remapped_path))
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
-                # Load using remapped file
-                pipe.load_lora_weights(
-                    str(lora_dir),
-                    weight_name="adapter_model_remapped.safetensors"
-                )
-                pipe.fuse_lora(lora_scale=0.85)
-                print("FLUX LoRA loaded and fused")
-            else:
-                print("No adapter_model.safetensors found — skipping LoRA")
-
-            # Enable CPU offloading — lets diffusers manage VRAM on A10G
-            pipe.enable_model_cpu_offload()
-
-            gc.collect()
-            torch.cuda.empty_cache()
-
-            # ── Generate cover ──
-            # FLUX uses CLIP-L (77 token limit) + T5-XXL (512 tokens)
-            # Split prompts: short for CLIP-L, full detail for T5-XXL
-            # Cover always gets full people-suppression
-            PEOPLE_SUPPRESSION = (
-                "multiple children, two children, siblings, brother, sister, "
-                "other child, second child, background children, extra person, "
-                "parent, mother, father, grandparent, family members, "
-                "crowd, group of people, "
-            )
-            cover_avoid_str = f"avoid: {PEOPLE_SUPPRESSION}{NEGATIVE_PROMPT}. "
-
-            # CLIP-L prompt — short, under 60 tokens
-            cover_clip = (
-                f"{gender_clip_reinforcement}"
-                f"{age_prefix}, sks child, "
-                f"realistic proportions, portrait, children's photo book"
-            )
-            # T5-XXL prompt — full detail with avoid_str
-            cover_t5 = (
-                f"{cover_avoid_str}"
-                f"{gender_t5_reinforcement}"
-                f"{age_prefix}, sks child, "
-                f"{skin_tone + ', ' if skin_tone else ''}"
-                f"portrait, magical storybook world, "
-                f"looking at viewer, warm smile"
-                f"{STYLE_SUFFIX}"
-            )
-
-            # Init InsightFace for reranking + forehead cleanup
-            rank_app = None
-            if face_embedding is not None:
-                rank_app = FaceAnalysis(
-                    name="buffalo_l",
-                    providers=["CUDAExecutionProvider",
-                               "CPUExecutionProvider"]
-                )
-                rank_app.prepare(ctx_id=0, det_size=(640, 640))
-
-            print(f"Cover CLIP prompt: {cover_clip}")
-            print(f"Cover T5 prompt: {cover_t5}")
-
-            cover_candidates = pipe(
-                prompt=cover_clip,
-                prompt_2=cover_t5,
-                height=1024,
-                width=1024,
-                num_inference_steps=35,
-                guidance_scale=3.5,
-                num_images_per_prompt=5,
-                generator=torch.Generator("cuda").manual_seed(
-                    int(hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16)
-                ),
-            ).images
-            print(f"Cover: {len(cover_candidates)} candidates generated")
-
-            # ── Rerank cover candidates with cosine + bindi penalty ──
-            cover_image = cover_candidates[0]
-            cover_best_score = -1.0
-            cover_face_bbox = None
-
-            if rank_app is not None and face_embedding is not None:
-                ref_emb = face_embedding.cpu().float()
-                for j, candidate in enumerate(cover_candidates):
-                    candidate_np = cv2.cvtColor(
-                        np.array(candidate), cv2.COLOR_RGB2BGR
+                    # ── Generate cover ──
+                    # FLUX uses CLIP-L (77 token limit) + T5-XXL (512 tokens)
+                    # Split prompts: short for CLIP-L, full detail for T5-XXL
+                    # Cover always gets full people-suppression
+                    PEOPLE_SUPPRESSION = (
+                        "multiple children, two children, siblings, brother, sister, "
+                        "other child, second child, background children, extra person, "
+                        "parent, mother, father, grandparent, family members, "
+                        "crowd, group of people, "
                     )
-                    faces = rank_app.get(candidate_np)
-                    if not faces:
-                        print(f"  Cover candidate {j}: no face detected")
-                        continue
-                    face = max(
-                        faces,
-                        key=lambda f: (
-                            (f.bbox[2]-f.bbox[0]) *
-                            (f.bbox[3]-f.bbox[1])
-                        )
+                    cover_avoid_str = f"avoid: {PEOPLE_SUPPRESSION}{NEGATIVE_PROMPT}. "
+
+                    # CLIP-L prompt — short, under 60 tokens
+                    cover_clip = (
+                        f"{gender_clip_reinforcement}"
+                        f"{age_prefix}, sks child, "
+                        f"realistic proportions, portrait, children's photo book"
                     )
-                    gen_emb = torch.from_numpy(
-                        face.normed_embedding
-                    ).unsqueeze(0).float()
-                    raw_score = torch.nn.functional.cosine_similarity(
-                        ref_emb, gen_emb, dim=1
-                    ).item()
-                    has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
-                    score = raw_score * 0.3 if has_mark else raw_score
-                    print(f"  Cover candidate {j}: "
-                          f"cosine={raw_score:.3f}, bindi={has_mark}, "
-                          f"adjusted={score:.3f}")
-                    if score > cover_best_score:
-                        cover_best_score = score
-                        cover_image = candidate
-                        cover_face_bbox = face.bbox
+                    # T5-XXL prompt — full detail with avoid_str
+                    cover_t5 = (
+                        f"{cover_avoid_str}"
+                        f"{gender_t5_reinforcement}"
+                        f"{age_prefix}, sks child, "
+                        f"{skin_tone + ', ' if skin_tone else ''}"
+                        f"portrait, magical storybook world, "
+                        f"looking at viewer, warm smile"
+                        f"{STYLE_SUFFIX}"
+                    )
 
-                print(f"Cover reranking: best_score={cover_best_score:.3f}")
+                    print(f"Cover CLIP prompt: {cover_clip}")
+                    print(f"Cover T5 prompt: {cover_t5}")
 
-            # ── Post-generation forehead cleanup on cover (safety net) ──
-            if cover_face_bbox is not None:
-                cover_image, _ = cleanup_forehead_from_bbox(cover_image, cover_face_bbox, "Cover")
-            else:
-                print("  Cover: no face bbox available, skipping forehead cleanup")
+                    cover_candidates = self.pipe(
+                        prompt=cover_clip,
+                        prompt_2=cover_t5,
+                        height=1024,
+                        width=1024,
+                        num_inference_steps=35,
+                        guidance_scale=3.5,
+                        num_images_per_prompt=5,
+                        generator=torch.Generator("cuda").manual_seed(
+                            int(hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16)
+                        ),
+                    ).images
+                    print(f"Cover: {len(cover_candidates)} candidates generated")
 
-            # ── Generate scenes with reranking ──
-            scene_images = []
+                    # ── Rerank cover candidates with cosine + bindi penalty ──
+                    cover_image = cover_candidates[0]
+                    cover_best_score = -1.0
+                    cover_face_bbox = None
 
-            seed_base = int(
-                hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16
-            ) & 0x7FFFFFFF
-
-            for i, scene_desc in enumerate(scene_prompts):
-                has_humans = scene_has_humans[i] if i < len(scene_has_humans) else False
-
-                people_suppression = (
-                    "" if has_humans else
-                    PEOPLE_SUPPRESSION
-                )
-
-                scene_negative = people_suppression + NEGATIVE_PROMPT
-                avoid_str = f"avoid: {scene_negative}. "
-
-                # CLIP-L prompt — short, under 60 tokens
-                scene_clip = (
-                    f"{gender_clip_reinforcement}"
-                    f"{age_prefix}, sks child, "
-                    f"realistic proportions, foreground, facing camera, "
-                    f"{scene_desc}, children's photo book"
-                )
-                # T5-XXL prompt — full detail with avoid_str
-                scene_t5 = (
-                    f"{avoid_str}"
-                    f"{gender_t5_reinforcement}"
-                    f"{age_prefix}, sks child, "
-                    f"{skin_tone + ', ' if skin_tone else ''}"
-                    f"foreground, facing camera, "
-                    f"{scene_desc}"
-                    f"{STYLE_SUFFIX}"
-                )
-
-                print(f"Scene {i+1} has_humans={has_humans}")
-                print(f"Scene {i+1} CLIP ({len(scene_clip.split())} words): "
-                      f"{scene_clip[:80]}...")
-                print(f"Scene {i+1} T5 ({len(scene_t5.split())} words): "
-                      f"{scene_t5[:80]}...")
-
-                # Generate 5 candidates for reranking
-                candidates = pipe(
-                    prompt=scene_clip,
-                    prompt_2=scene_t5,
-                    height=768,
-                    width=768,
-                    num_inference_steps=35,
-                    guidance_scale=4.5,
-                    num_images_per_prompt=5,
-                    generator=torch.Generator("cuda").manual_seed(
-                        seed_base + i * 1000
-                    ),
-                ).images
-
-                print(f"Scene {i+1}: {len(candidates)} candidates generated")
-
-                # Rerank by face similarity
-                best_image = candidates[0]
-                best_score = -1.0
-                best_face_bbox = None
-
-                if rank_app is not None and face_embedding is not None:
-                    ref_emb = face_embedding.cpu().float()
-                    for j, candidate in enumerate(candidates):
-                        candidate_np = cv2.cvtColor(
-                            np.array(candidate), cv2.COLOR_RGB2BGR
-                        )
-                        faces = rank_app.get(candidate_np)
-                        if not faces:
-                            print(f"  Scene {i+1} candidate {j}: "
-                                  "no face detected")
-                            continue
-                        face = max(
-                            faces,
-                            key=lambda f: (
-                                (f.bbox[2]-f.bbox[0]) *
-                                (f.bbox[3]-f.bbox[1])
-                            )
-                        )
-                        gen_emb = torch.from_numpy(
-                            face.normed_embedding
-                        ).unsqueeze(0).float()
-                        raw_score = torch.nn.functional.cosine_similarity(
-                            ref_emb, gen_emb, dim=1
-                        ).item()
-                        has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
-                        score = raw_score * 0.3 if has_mark else raw_score
-                        print(f"  Scene {i+1} candidate {j}: "
-                              f"cosine={raw_score:.3f}, bindi={has_mark}, "
-                              f"adjusted={score:.3f}")
-                        if score > best_score:
-                            best_score = score
-                            best_image = candidate
-                            best_face_bbox = face.bbox
-
-                    print(f"Scene {i+1} reranking: "
-                          f"best_score={best_score:.3f}")
-
-                    # Low confidence or all failed — regenerate with offset seed
-                    if best_score < 0.2:
-                        print(f"Scene {i+1}: low confidence ({best_score:.3f}), "
-                              "regenerating with offset seed")
-                        candidates_retry = pipe(
-                            prompt=scene_clip,
-                            prompt_2=scene_t5,
-                            height=768,
-                            width=768,
-                            num_inference_steps=35,
-                            guidance_scale=4.5,
-                            num_images_per_prompt=5,
-                            generator=torch.Generator("cuda").manual_seed(
-                                seed_base + i * 1000 + 500
-                            ),
-                        ).images
-                        print(f"Scene {i+1} retry: "
-                              f"{len(candidates_retry)} candidates")
-
-                        for j, candidate in enumerate(candidates_retry):
+                    if self.rank_app is not None and face_embedding is not None:
+                        ref_emb = face_embedding.cpu().float()
+                        for j, candidate in enumerate(cover_candidates):
                             candidate_np = cv2.cvtColor(
                                 np.array(candidate), cv2.COLOR_RGB2BGR
                             )
-                            faces = rank_app.get(candidate_np)
+                            faces = self.rank_app.get(candidate_np)
                             if not faces:
+                                print(f"  Cover candidate {j}: no face detected")
                                 continue
                             face = max(
                                 faces,
@@ -1096,84 +988,261 @@ def generate_flux_illustrations(body: dict) -> dict:
                             ).item()
                             has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
                             score = raw_score * 0.3 if has_mark else raw_score
-                            print(f"  Scene {i+1} retry candidate {j}: "
+                            print(f"  Cover candidate {j}: "
                                   f"cosine={raw_score:.3f}, bindi={has_mark}, "
                                   f"adjusted={score:.3f}")
-                            if score > best_score:
-                                best_score = score
-                                best_image = candidate
-                                best_face_bbox = face.bbox
+                            if score > cover_best_score:
+                                cover_best_score = score
+                                cover_image = candidate
+                                cover_face_bbox = face.bbox
 
-                        if best_score < 0.2:
-                            best_image = candidates_retry[0]
-                            print(f"Scene {i+1}: retry still low ({best_score:.3f}), "
-                                  "using first retry candidate as fallback")
-                            # Detect face on fallback image for cleanup
-                            fallback_np = cv2.cvtColor(np.array(best_image), cv2.COLOR_RGB2BGR)
-                            fallback_faces = rank_app.get(fallback_np)
-                            if fallback_faces:
-                                fallback_face = max(fallback_faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-                                best_face_bbox = fallback_face.bbox
-                            else:
-                                best_face_bbox = None
-                        else:
-                            print(f"Scene {i+1} retry reranking: "
+                        print(f"Cover reranking: best_score={cover_best_score:.3f}")
+
+                    # ── Post-generation forehead cleanup on cover (safety net) ──
+                    if cover_face_bbox is not None:
+                        cover_image, _ = cleanup_forehead_from_bbox(cover_image, cover_face_bbox, "Cover")
+                    else:
+                        print("  Cover: no face bbox available, skipping forehead cleanup")
+
+                    print(f"[TIMING] phase=cover_generation elapsed={_time.perf_counter()-_t0:.1f}s cumulative={_cum():.1f}s")
+
+                    # ── Generate scenes with reranking ──
+                    scene_images = []
+
+                    seed_base = int(
+                        hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16
+                    ) & 0x7FFFFFFF
+
+                    for i, scene_desc in enumerate(scene_prompts):
+                        has_humans = scene_has_humans[i] if i < len(scene_has_humans) else False
+
+                        people_suppression = (
+                            "" if has_humans else
+                            PEOPLE_SUPPRESSION
+                        )
+
+                        scene_negative = people_suppression + NEGATIVE_PROMPT
+                        avoid_str = f"avoid: {scene_negative}. "
+
+                        # CLIP-L prompt — short, under 60 tokens
+                        scene_clip = (
+                            f"{gender_clip_reinforcement}"
+                            f"{age_prefix}, sks child, "
+                            f"realistic proportions, foreground, facing camera, "
+                            f"{scene_desc}, children's photo book"
+                        )
+                        # T5-XXL prompt — full detail with avoid_str
+                        scene_t5 = (
+                            f"{avoid_str}"
+                            f"{gender_t5_reinforcement}"
+                            f"{age_prefix}, sks child, "
+                            f"{skin_tone + ', ' if skin_tone else ''}"
+                            f"foreground, facing camera, "
+                            f"{scene_desc}"
+                            f"{STYLE_SUFFIX}"
+                        )
+
+                        print(f"Scene {i+1} has_humans={has_humans}")
+                        print(f"Scene {i+1} CLIP ({len(scene_clip.split())} words): "
+                              f"{scene_clip[:80]}...")
+                        print(f"Scene {i+1} T5 ({len(scene_t5.split())} words): "
+                              f"{scene_t5[:80]}...")
+
+                        # Generate 5 candidates for reranking
+                        candidates = self.pipe(
+                            prompt=scene_clip,
+                            prompt_2=scene_t5,
+                            height=768,
+                            width=768,
+                            num_inference_steps=35,
+                            guidance_scale=4.5,
+                            num_images_per_prompt=5,
+                            generator=torch.Generator("cuda").manual_seed(
+                                seed_base + i * 1000
+                            ),
+                        ).images
+
+                        print(f"Scene {i+1}: {len(candidates)} candidates generated")
+
+                        # Rerank by face similarity
+                        best_image = candidates[0]
+                        best_score = -1.0
+                        best_face_bbox = None
+
+                        if self.rank_app is not None and face_embedding is not None:
+                            ref_emb = face_embedding.cpu().float()
+                            for j, candidate in enumerate(candidates):
+                                candidate_np = cv2.cvtColor(
+                                    np.array(candidate), cv2.COLOR_RGB2BGR
+                                )
+                                faces = self.rank_app.get(candidate_np)
+                                if not faces:
+                                    print(f"  Scene {i+1} candidate {j}: "
+                                          "no face detected")
+                                    continue
+                                face = max(
+                                    faces,
+                                    key=lambda f: (
+                                        (f.bbox[2]-f.bbox[0]) *
+                                        (f.bbox[3]-f.bbox[1])
+                                    )
+                                )
+                                gen_emb = torch.from_numpy(
+                                    face.normed_embedding
+                                ).unsqueeze(0).float()
+                                raw_score = torch.nn.functional.cosine_similarity(
+                                    ref_emb, gen_emb, dim=1
+                                ).item()
+                                has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
+                                score = raw_score * 0.3 if has_mark else raw_score
+                                print(f"  Scene {i+1} candidate {j}: "
+                                      f"cosine={raw_score:.3f}, bindi={has_mark}, "
+                                      f"adjusted={score:.3f}")
+                                if score > best_score:
+                                    best_score = score
+                                    best_image = candidate
+                                    best_face_bbox = face.bbox
+
+                            print(f"Scene {i+1} reranking: "
                                   f"best_score={best_score:.3f}")
 
-                # ── Post-generation forehead cleanup on scene ──
-                if best_face_bbox is not None:
-                    best_image, _ = cleanup_forehead_from_bbox(best_image, best_face_bbox, f"Scene {i+1}")
-                else:
-                    print(f"  Scene {i+1}: no face bbox available, skipping forehead cleanup")
+                            # Low confidence or all failed — regenerate with offset seed
+                            if best_score < 0.2:
+                                print(f"Scene {i+1}: low confidence ({best_score:.3f}), "
+                                      "regenerating with offset seed")
+                                candidates_retry = self.pipe(
+                                    prompt=scene_clip,
+                                    prompt_2=scene_t5,
+                                    height=768,
+                                    width=768,
+                                    num_inference_steps=35,
+                                    guidance_scale=4.5,
+                                    num_images_per_prompt=5,
+                                    generator=torch.Generator("cuda").manual_seed(
+                                        seed_base + i * 1000 + 500
+                                    ),
+                                ).images
+                                print(f"Scene {i+1} retry: "
+                                      f"{len(candidates_retry)} candidates")
 
-                scene_images.append(best_image)
+                                for j, candidate in enumerate(candidates_retry):
+                                    candidate_np = cv2.cvtColor(
+                                        np.array(candidate), cv2.COLOR_RGB2BGR
+                                    )
+                                    faces = self.rank_app.get(candidate_np)
+                                    if not faces:
+                                        continue
+                                    face = max(
+                                        faces,
+                                        key=lambda f: (
+                                            (f.bbox[2]-f.bbox[0]) *
+                                            (f.bbox[3]-f.bbox[1])
+                                        )
+                                    )
+                                    gen_emb = torch.from_numpy(
+                                        face.normed_embedding
+                                    ).unsqueeze(0).float()
+                                    raw_score = torch.nn.functional.cosine_similarity(
+                                        ref_emb, gen_emb, dim=1
+                                    ).item()
+                                    has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
+                                    score = raw_score * 0.3 if has_mark else raw_score
+                                    print(f"  Scene {i+1} retry candidate {j}: "
+                                          f"cosine={raw_score:.3f}, bindi={has_mark}, "
+                                          f"adjusted={score:.3f}")
+                                    if score > best_score:
+                                        best_score = score
+                                        best_image = candidate
+                                        best_face_bbox = face.bbox
 
-            # ── Upload illustrations ──
-            all_images = [cover_image] + scene_images
-            illustration_paths = []
+                                if best_score < 0.2:
+                                    best_image = candidates_retry[0]
+                                    print(f"Scene {i+1}: retry still low ({best_score:.3f}), "
+                                          "using first retry candidate as fallback")
+                                    # Detect face on fallback image for cleanup
+                                    fallback_np = cv2.cvtColor(np.array(best_image), cv2.COLOR_RGB2BGR)
+                                    fallback_faces = self.rank_app.get(fallback_np)
+                                    if fallback_faces:
+                                        fallback_face = max(fallback_faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                                        best_face_bbox = fallback_face.bbox
+                                    else:
+                                        best_face_bbox = None
+                                else:
+                                    print(f"Scene {i+1} retry reranking: "
+                                          f"best_score={best_score:.3f}")
 
-            for idx, img in enumerate(all_images):
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                buf.seek(0)
-                path = f"{child_id}/{episode_id}/{idx}.png"
-                sb.storage.from_("illustrations").upload(
-                    path, buf.read(),
-                    {"content-type": "image/png", "upsert": "true"}
-                )
-                illustration_paths.append(path)
-                print(f"Uploaded illustration {idx}")
+                        # ── Post-generation forehead cleanup on scene ──
+                        if best_face_bbox is not None:
+                            best_image, _ = cleanup_forehead_from_bbox(best_image, best_face_bbox, f"Scene {i+1}")
+                        else:
+                            print(f"  Scene {i+1}: no face bbox available, skipping forehead cleanup")
 
-            # Update episode
-            sb.table("episodes").update({
-                "illustration_paths": illustration_paths,
-                "illustration_status": "review",
-            }).eq("id", episode_id).execute()
+                        _retried = best_score < 0.2 if (self.rank_app is not None and face_embedding is not None) else False
+                        print(f"[TIMING] phase=scene_{i}_generation retried={_retried} elapsed={_time.perf_counter()-_t0:.1f}s cumulative={_cum():.1f}s")
 
-            print(f"All {len(all_images)} illustrations uploaded")
+                        scene_images.append(best_image)
 
-            # Fire webhook callback to notify web app
-            callback_url = body.get("callback_url")
-            if callback_url:
-                try:
-                    requests.post(
-                        callback_url,
-                        json={"harvest_id": harvest_id, "status": "complete"},
-                        headers={
-                            "x-webhook-secret": body.get("webhook_secret", ""),
-                            "Content-Type": "application/json",
-                        },
-                        timeout=30,
-                        allow_redirects=True,
-                    )
-                    print(f"Webhook fired to {callback_url}")
-                except Exception as e:
-                    print(f"Webhook failed: {e}")
+                    # ── Upload illustrations ──
+                    all_images = [cover_image] + scene_images
+                    illustration_paths = []
 
-            return {"status": "complete",
-                    "count": len(all_images)}
+                    for idx, img in enumerate(all_images):
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        buf.seek(0)
+                        path = f"{child_id}/{episode_id}/{idx}.png"
+                        sb.storage.from_("illustrations").upload(
+                            path, buf.read(),
+                            {"content-type": "image/png", "upsert": "true"}
+                        )
+                        illustration_paths.append(path)
+                        print(f"Uploaded illustration {idx}")
 
-    return {"status": "error", "message": "No face_model_id provided"}
+                    # Update episode
+                    sb.table("episodes").update({
+                        "illustration_paths": illustration_paths,
+                        "illustration_status": "review",
+                    }).eq("id", episode_id).execute()
+
+                    print(f"All {len(all_images)} illustrations uploaded")
+                    print(f"[TIMING] phase=upload_loop count={len(all_images)} elapsed={_time.perf_counter()-_t0:.1f}s cumulative={_cum():.1f}s")
+
+                    # Fire webhook callback to notify web app
+                    callback_url = body.get("callback_url")
+                    if callback_url:
+                        try:
+                            requests.post(
+                                callback_url,
+                                json={"harvest_id": harvest_id, "status": "complete"},
+                                headers={
+                                    "x-webhook-secret": body.get("webhook_secret", ""),
+                                    "Content-Type": "application/json",
+                                },
+                                timeout=30,
+                                allow_redirects=True,
+                            )
+                            print(f"Webhook fired to {callback_url}")
+                        except Exception as e:
+                            print(f"Webhook failed: {e}")
+
+                    print(f"[TIMING] phase=container_total elapsed={_time.perf_counter()-_t0:.1f}s cumulative={_cum():.1f}s")
+
+                    return {"status": "complete",
+                            "count": len(all_images)}
+
+                finally:
+                    if _lora_loaded:
+                        _t_cleanup_start = _time.perf_counter()
+                        self.pipe.unfuse_lora()
+                        self.pipe.unload_lora_weights()
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        print(f"[TIMING] phase=lora_cleanup "
+                              f"elapsed={_time.perf_counter()-_t_cleanup_start:.1f}s "
+                              f"cumulative={_cum():.1f}s")
+                    print("LoRA cleanup complete — base model restored")
+
+        return {"status": "error", "message": "No face_model_id provided"}
 
 
 # ─── HTTP wrappers (web endpoints for Next.js integration) ──────────────────
@@ -1281,7 +1350,7 @@ def generate_illustrations_http(request: dict) -> dict:
         "webhook_secret": os.environ.get("MODAL_WEBHOOK_SECRET", ""),
     }
 
-    generate_flux_illustrations.spawn(flux_payload)
+    FluxGenerator().generate.spawn(flux_payload)
     return {"status": "generating", "message": "Generation started"}
 
 

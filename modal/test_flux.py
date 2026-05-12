@@ -7,9 +7,7 @@ from pathlib import Path
 train_flux_lora = modal.Function.from_name(
     "storybound-flux", "train_flux_lora"
 )
-generate_flux_illustrations = modal.Function.from_name(
-    "storybound-flux", "generate_flux_illustrations"
-)
+FluxGenerator = modal.Cls.from_name("storybound-flux", "FluxGenerator")
 
 app = modal.App("test-flux")
 
@@ -59,14 +57,24 @@ def main():
         print(f"Training FAILED: {e}")
         sys.exit(1)
 
-    print("Starting FLUX illustration generation on A10G...")
+    print("Starting FLUX illustration generation on L40S...")
 
     try:
-        result = generate_flux_illustrations.remote({
+        result = FluxGenerator().generate.remote({
             "face_model_id": face_model_id,
             "scene_prompts": [
-                "playing in a sunny garden with colorful flowers",
-                "reading a big book under an oak tree",
+                "playing with wooden blocks on a colorful rug in a cozy living room",
+                "splashing in rain puddles wearing yellow rain boots on a village path",
+                "sitting at a kitchen table painting with watercolors, paint on fingers",
+                "running through a sunflower field with arms wide open, golden hour light",
+                "being read a bedtime story by a parent on a cozy armchair",
+                "feeding ducks at a pond in a green park, bread crumbs in hand",
+                "building a sandcastle on a beach with gentle waves in the background",
+                "hugging a grandparent in a warm kitchen with cookies cooling on the counter",
+            ],
+            "scene_has_humans": [
+                False, False, False, False,
+                True, False, False, True,
             ],
             "child_age": 3,
             "pronouns": "boy",
