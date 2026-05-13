@@ -452,7 +452,7 @@ export async function confirmCharacterPhotosUploaded(
     metadata: { photo_count: storagePaths.length, total_in_bucket: existingFiles.size },
   });
 
-  // ── Fire-and-forget: dispatch photo validator ────────────────────────────
+  // ── Dispatch photo validator ──────────────────────────────────────────────
   try {
     const admin = createAdminClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -462,12 +462,19 @@ export async function confirmCharacterPhotosUploaded(
 
     const { data: harvest } = await admin
       .from("harvests")
-      .select("id")
+      .select("id, status")
       .eq("child_id", childId)
-      .eq("status", "pending")
       .order("created_at", { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
+
+    console.log("Photo validator: harvest lookup result", {
+      childId,
+      found: !!harvest,
+      harvest_id: harvest?.id,
+      harvest_status: harvest?.status,
+      env_set: !!process.env.MODAL_VALIDATE_PHOTOS_URL,
+    });
 
     if (harvest && process.env.MODAL_VALIDATE_PHOTOS_URL) {
       const { data: signedUrls } = await admin.storage
@@ -479,21 +486,33 @@ export async function confirmCharacterPhotosUploaded(
         .filter(Boolean);
 
       if (urls.length > 0) {
-        fetch(process.env.MODAL_VALIDATE_PHOTOS_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-webhook-secret": process.env.MODAL_WEBHOOK_SECRET ?? "",
-          },
-          body: JSON.stringify({
-            urls,
+        console.log("Photo validator: dispatching", {
+          harvest_id: harvest.id,
+          url_count: urls.length,
+        });
+        try {
+          const res = await fetch(process.env.MODAL_VALIDATE_PHOTOS_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-webhook-secret": process.env.MODAL_WEBHOOK_SECRET ?? "",
+            },
+            body: JSON.stringify({
+              urls,
+              harvest_id: harvest.id,
+              webhook_url:
+                process.env.PHOTO_VALIDATION_COMPLETE_WEBHOOK_URL ?? "",
+            }),
+          });
+          console.log("Photo validator: dispatch response", {
             harvest_id: harvest.id,
-            webhook_url:
-              process.env.PHOTO_VALIDATION_COMPLETE_WEBHOOK_URL ?? "",
-          }),
-        }).catch((e) =>
-          console.error("Photo validator dispatch failed:", e)
-        );
+            status: res.status,
+          });
+        } catch (e) {
+          console.error("Photo validator dispatch failed:", e);
+        }
+      } else {
+        console.log("Photo validator: no signed urls generated, skipping");
       }
     }
   } catch (e) {
