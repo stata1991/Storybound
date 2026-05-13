@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { logEvent } from "@/lib/audit";
 
 export const maxDuration = 30;
 
@@ -22,10 +23,29 @@ export async function POST(req: NextRequest) {
 
   if (status !== "complete") {
     console.error("Illustration generation failed:", body);
-    return NextResponse.json(
-      { error: "Generation failed" },
-      { status: 400 }
+
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
+    const { error } = await supabase
+      .from("harvests")
+      .update({ status: "failed" })
+      .eq("id", harvest_id);
+
+    if (error) {
+      console.error("Failed to update harvest to failed:", error);
+    }
+
+    logEvent({
+      event_type: "illustration_generation_failed",
+      status: "error",
+      harvest_id,
+      message: body.message ?? "Unknown error",
+      metadata: { failed_labels: body.failed_labels },
+    });
+
+    return NextResponse.json({ status: "ok" });
   }
 
   // Update harvest status to complete
