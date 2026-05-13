@@ -452,6 +452,54 @@ export async function confirmCharacterPhotosUploaded(
     metadata: { photo_count: storagePaths.length, total_in_bucket: existingFiles.size },
   });
 
+  // ── Fire-and-forget: dispatch photo validator ────────────────────────────
+  try {
+    const admin = createAdminClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+
+    const { data: harvest } = await admin
+      .from("harvests")
+      .select("id")
+      .eq("child_id", childId)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (harvest && process.env.MODAL_VALIDATE_PHOTOS_URL) {
+      const { data: signedUrls } = await admin.storage
+        .from("character-photos")
+        .createSignedUrls(storagePaths, 600);
+
+      const urls = (signedUrls ?? [])
+        .map((s) => s.signedUrl)
+        .filter(Boolean);
+
+      if (urls.length > 0) {
+        fetch(process.env.MODAL_VALIDATE_PHOTOS_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-webhook-secret": process.env.MODAL_WEBHOOK_SECRET ?? "",
+          },
+          body: JSON.stringify({
+            urls,
+            harvest_id: harvest.id,
+            webhook_url:
+              process.env.PHOTO_VALIDATION_COMPLETE_WEBHOOK_URL ?? "",
+          }),
+        }).catch((e) =>
+          console.error("Photo validator dispatch failed:", e)
+        );
+      }
+    }
+  } catch (e) {
+    console.error("Photo validator dispatch error:", e);
+  }
+
   return { success: true, count: storagePaths.length };
 }
 

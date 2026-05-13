@@ -2,7 +2,7 @@ import { createClient as createAdminClient } from "@supabase/supabase-js";
 
 interface LogEventParams {
   event_type: string;
-  status: "started" | "success" | "error";
+  status: "started" | "success" | "error" | "info" | "warn";
   message?: string;
   harvest_id?: string;
   family_id?: string;
@@ -19,13 +19,13 @@ function getAuditClient() {
 }
 
 /**
- * Fire-and-forget audit log entry.
- * Never throws — wraps all errors in try/catch.
- * Callers should NOT await this function.
+ * Audit log entry. Never throws — wraps all errors in try/catch.
+ * Returns a Promise that callers may optionally await for reliability,
+ * or ignore for fire-and-forget semantics.
  */
-export function logEvent(params: LogEventParams): void {
+export function logEvent(params: LogEventParams): Promise<void> {
   try {
-    Promise.resolve(
+    return Promise.resolve(
       getAuditClient()
         .from("audit_log")
         .insert({
@@ -48,5 +48,6 @@ export function logEvent(params: LogEventParams): void {
       });
   } catch (err) {
     console.error("audit_log setup failed:", err);
+    return Promise.resolve();
   }
 }

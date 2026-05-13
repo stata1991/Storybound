@@ -11,6 +11,7 @@ const PUBLIC_ROUTES = [
   "/api/cron/memory-drop-notifications",
   "/api/admin/training-complete",
   "/api/admin/illustrations-complete",
+  "/api/admin/photo-validation-complete",
 ];
 
 function isPublicRoute(pathname: string): boolean {
