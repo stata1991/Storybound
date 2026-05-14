@@ -29,11 +29,25 @@ export async function POST(req: NextRequest) {
     metadata: {
       set: body.set,
       per_photo_verdicts: (body.per_photo ?? []).map(
-        (p: { verdict: string; hard_fails: string[]; warnings: string[] }) => ({
-          verdict: p.verdict,
-          hard_fails: p.hard_fails,
-          warnings: p.warnings,
-        })
+        (p: { verdict: string; hard_fails: string[]; warnings: string[]; metrics?: Record<string, unknown>; url?: string }) => {
+          let photo_path: string | null = null;
+          if (p.url) {
+            try {
+              const parsed = new URL(p.url);
+              const segments = parsed.pathname.split("/");
+              photo_path = segments[segments.length - 1] || parsed.pathname;
+            } catch {
+              photo_path = null;
+            }
+          }
+          return {
+            verdict: p.verdict,
+            hard_fails: p.hard_fails,
+            warnings: p.warnings,
+            metrics: p.metrics ?? null,
+            photo_path,
+          };
+        }
       ),
       timing_seconds: body.timing_seconds,
     },
