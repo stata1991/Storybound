@@ -19,16 +19,16 @@ from fastapi.responses import JSONResponse
 
 # Per-photo: hard-fail thresholds
 REQUIRED_FACE_COUNT = 1                # face_count != 1 → no_face / multiple_faces
-MIN_BBOX_AREA_RATIO = 0.05            # bbox area / image area → face_too_small
 MIN_LAPLACIAN_VARIANCE = 50.0         # cv2.Laplacian variance → blurry
 MIN_DET_SCORE = 0.5                   # insightface det_score → low_det_score
 
 # Per-photo: warning thresholds
-WARN_BBOX_AREA_RATIO = 0.10           # [0.05, 0.10) → small_face
+SMALL_FACE_MIN_PX = 200               # face bbox short side < 200px → small_face warning
 WARN_SHORT_SIDE_PX = 512              # < 512 → low_resolution
 
 # Set-level thresholds
-MIN_HARD_PASS_PHOTOS = 6              # set_pass requires >= 6 hard passes
+NEAR_DUPLICATE_COSINE = 0.92          # pairwise cosine above this → near-duplicate
+MIN_EFFECTIVE_PHOTOS = 8              # set_pass requires this many effective unique photos
 IDENTITY_OUTLIER_SIGMA = 2.0          # mean_cosine - 2*std → outlier threshold
 
 # ─── Modal app ───────────────────────────────────────────────────────────────
@@ -126,6 +126,7 @@ def validate_photos(urls: list[str]) -> dict:
                     "face_count": 0,
                     "det_score": None,
                     "bbox_area_ratio": None,
+                    "face_short_side_px": None,
                     "laplacian_variance": 0.0,
                     "short_side_px": 0,
                     "embedding_present": False,
@@ -147,6 +148,7 @@ def validate_photos(urls: list[str]) -> dict:
                     "face_count": 0,
                     "det_score": None,
                     "bbox_area_ratio": None,
+                    "face_short_side_px": None,
                     "laplacian_variance": 0.0,
                     "short_side_px": 0,
                     "embedding_present": False,
@@ -177,6 +179,7 @@ def validate_photos(urls: list[str]) -> dict:
 
         det_score: float | None = None
         bbox_area_ratio: float | None = None
+        face_short_side_px: int | None = None
         embedding_present = False
 
         if face_count == 0:
@@ -187,15 +190,16 @@ def validate_photos(urls: list[str]) -> dict:
             face = faces[0]
             det_score = float(face.det_score)
             x1, y1, x2, y2 = face.bbox
-            bbox_area = (x2 - x1) * (y2 - y1)
+            bbox_w = x2 - x1
+            bbox_h = y2 - y1
+            bbox_area = bbox_w * bbox_h
             bbox_area_ratio = float(bbox_area / image_area)
+            face_short_side_px = int(min(bbox_w, bbox_h))
 
             if det_score < MIN_DET_SCORE:
                 hard_fails.append("low_det_score")
 
-            if bbox_area_ratio < MIN_BBOX_AREA_RATIO:
-                hard_fails.append("face_too_small")
-            elif bbox_area_ratio < WARN_BBOX_AREA_RATIO:
+            if face_short_side_px < SMALL_FACE_MIN_PX:
                 warnings.append("small_face")
 
             if (
@@ -222,6 +226,7 @@ def validate_photos(urls: list[str]) -> dict:
                 "face_count": face_count,
                 "det_score": det_score,
                 "bbox_area_ratio": bbox_area_ratio,
+                "face_short_side_px": face_short_side_px,
                 "laplacian_variance": laplacian_var,
                 "short_side_px": short_side_px,
                 "embedding_present": embedding_present,
@@ -232,6 +237,7 @@ def validate_photos(urls: list[str]) -> dict:
 
     hard_pass_count = sum(1 for p in per_photo if not p["hard_fails"])
 
+    # --- Identity consistency (unchanged) ---
     mean_pairwise_cosine: float | None = None
     outlier_indices: list[int] = []
     outlier_threshold: float | None = None
@@ -276,13 +282,66 @@ def validate_photos(urls: list[str]) -> dict:
                 if per_photo[global_idx]["verdict"] == "pass":
                     per_photo[global_idx]["verdict"] = "warn"
 
+    # --- Near-duplicate clustering (usable photos only) ---
+    usable_indices = [
+        i for i, p in enumerate(per_photo)
+        if not p["hard_fails"] and p["metrics"]["embedding_present"]
+    ]
+
+    near_duplicate_clusters: list[list[int]] = []
+    effective_photo_count = len(usable_indices)
+
+    if len(usable_indices) >= 2:
+        # Build embedding matrix for usable photos
+        usable_embs = np.stack(
+            [embeddings_by_index[i] for i in usable_indices]
+        )
+        u_norms = np.linalg.norm(usable_embs, axis=1, keepdims=True)
+        u_norms = np.where(u_norms == 0, 1.0, u_norms)
+        usable_embs = usable_embs / u_norms
+
+        usable_sim = usable_embs @ usable_embs.T
+        nu = len(usable_indices)
+
+        # Union-Find
+        parent = list(range(nu))
+
+        def find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for i in range(nu):
+            for j in range(i + 1, nu):
+                if usable_sim[i, j] > NEAR_DUPLICATE_COSINE:
+                    union(i, j)
+
+        # Build connected components
+        components: dict[int, list[int]] = {}
+        for local_idx in range(nu):
+            root = find(local_idx)
+            components.setdefault(root, []).append(usable_indices[local_idx])
+
+        effective_photo_count = len(components)
+        near_duplicate_clusters = [
+            members for members in components.values() if len(members) > 1
+        ]
+
     timing_seconds = round(time.monotonic() - t_start, 3)
 
     return {
         "per_photo": per_photo,
         "set": {
             "hard_pass_count": hard_pass_count,
-            "set_pass": hard_pass_count >= MIN_HARD_PASS_PHOTOS,
+            "effective_photo_count": effective_photo_count,
+            "near_duplicate_clusters": near_duplicate_clusters,
+            "set_pass": effective_photo_count >= MIN_EFFECTIVE_PHOTOS,
             "identity_consistency": {
                 "mean_pairwise_cosine": mean_pairwise_cosine,
                 "outlier_indices": outlier_indices,
