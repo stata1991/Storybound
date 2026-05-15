@@ -608,20 +608,52 @@ def train_flux_lora(
 
     # Upload to Supabase
     import supabase as sb_module
+    from supabase.lib.client_options import ClientOptions
     supabase_url = os.environ["SUPABASE_URL"]
     supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-    sb = sb_module.create_client(supabase_url, supabase_key)
+    sb = sb_module.create_client(
+        supabase_url, supabase_key,
+        options=ClientOptions(storage_client_timeout=300),
+    )
+
+    import time
+    import httpx
+    max_attempts = 3
 
     for fname in os.listdir(str(save_dir)):
         fpath = save_dir / fname
         if fpath.is_file():
-            with open(str(fpath), "rb") as f:
-                sb.storage.from_("lora-weights").upload(
-                    f"{face_model_id}/{fname}",
-                    f.read(),
-                    {"content-type": "application/octet-stream",
-                     "upsert": "true"}
-                )
+            size_mb = fpath.stat().st_size / 1048576
+            data = fpath.read_bytes()
+            for attempt in range(1, max_attempts + 1):
+                print(f"Uploading {fname} ({size_mb:.1f} MB) to "
+                      f"lora-weights/{face_model_id}/{fname} "
+                      f"(attempt {attempt}/{max_attempts})")
+                t0 = time.time()
+                try:
+                    sb.storage.from_("lora-weights").upload(
+                        f"{face_model_id}/{fname}",
+                        data,
+                        {"content-type": "application/octet-stream",
+                         "upsert": "true"}
+                    )
+                    elapsed = time.time() - t0
+                    print(f"Uploaded {fname} ({size_mb:.1f} MB) in {elapsed:.1f}s")
+                    break
+                except httpx.TransportError as e:
+                    elapsed = time.time() - t0
+                    if attempt < max_attempts:
+                        backoff = 2 ** attempt
+                        print(f"Upload attempt {attempt}/{max_attempts} failed for "
+                              f"{fname} after {elapsed:.1f}s: "
+                              f"{type(e).__name__}: {e} "
+                              f"— retrying in {backoff}s")
+                        time.sleep(backoff)
+                    else:
+                        print(f"Upload failed after {max_attempts} attempts for "
+                              f"{fname} after {elapsed:.1f}s: "
+                              f"{type(e).__name__}: {e}")
+                        raise
     print(f"LoRA uploaded to Supabase: lora-weights/{face_model_id}/")
 
     # Commit to Modal volume
@@ -1191,7 +1223,8 @@ def generate_flux_illustrations(body: dict) -> dict:
                     requests.post(
                         callback_url,
                         json={"harvest_id": harvest_id, "status": "error",
-                              "message": msg},
+                              "message": msg,
+                              "failed_labels": still_failed},
                         headers={
                             "x-webhook-secret": body.get("webhook_secret", ""),
                             "Content-Type": "application/json",
@@ -1199,8 +1232,10 @@ def generate_flux_illustrations(body: dict) -> dict:
                         timeout=30,
                         allow_redirects=True,
                     )
-                except Exception:
-                    pass
+                    print(f"Webhook fired to {callback_url}")
+                except Exception as e:
+                    print(f"Webhook failed: {e}")
+            print(f"[TIMING] phase=orchestrator_total elapsed={_cum():.1f}s cumulative={_cum():.1f}s")
             return {"status": "error", "message": msg}
 
     # ── Upload illustrations to Supabase ──
