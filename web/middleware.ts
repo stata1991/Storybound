@@ -9,6 +9,7 @@ const PUBLIC_ROUTES = [
   "/dashboard/preview",
   "/api/webhooks/stripe",
   "/api/cron/memory-drop-notifications",
+  "/api/cron/health-upload",
   "/api/admin/training-complete",
   "/api/admin/illustrations-complete",
   "/api/admin/photo-validation-complete",
