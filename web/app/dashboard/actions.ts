@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { logEvent } from "@/lib/audit";
+import { dispatchPhotoValidator } from "@/lib/photo-validator";
 import { sendEmail } from "@/lib/email/resend";
 import { digitalBookReady } from "@/lib/email/templates";
 import Stripe from "stripe";
@@ -676,6 +677,13 @@ export async function confirmAddedHarvestPhotos(
     child_id: childId,
     message: `Added ${photos.length} photo(s) via signed-URL upload`,
     metadata: { new_count: photos.length, total_count: allPaths.length },
+  });
+
+  // Re-validate full photo set (existing + new) for diversity/duplicates
+  await dispatchPhotoValidator({
+    bucket: "harvest-photos",
+    storagePaths: allPaths,
+    harvestId,
   });
 
   return { success: true, photoCount: allPaths.length };

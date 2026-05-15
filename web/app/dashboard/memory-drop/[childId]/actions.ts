@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
 import { logEvent } from "@/lib/audit";
+import { dispatchPhotoValidator } from "@/lib/photo-validator";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -413,6 +414,13 @@ export async function submitHarvestMemory(
     child_id: childId,
     message: "Memory drop submitted (direct upload)",
     metadata: { photo_count: photoPaths.length },
+  });
+
+  // Dispatch photo validator (fire-and-forget — never blocks redirect)
+  await dispatchPhotoValidator({
+    bucket: "harvest-photos",
+    storagePaths: photoPaths,
+    harvestId: harvest.id,
   });
 
   redirect("/dashboard?submitted=true");
