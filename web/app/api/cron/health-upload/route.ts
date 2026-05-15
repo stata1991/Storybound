@@ -6,8 +6,11 @@ import { sendEmail } from "@/lib/email/resend";
 export const maxDuration = 30;
 
 const BUCKET = "character-photos";
-const PROBE_PATH = "_health-check/probe.txt";
-const PROBE_PAYLOAD = "health-check";
+const PROBE_PATH = "_health-check/probe.png";
+const PROBE_PAYLOAD = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg==",
+  "base64"
+);
 
 export async function GET(request: Request) {
   // ── Auth ────────────────────────────────────────────────────────────────
@@ -49,7 +52,7 @@ export async function GET(request: Request) {
     const t1 = Date.now();
     const putRes = await fetch(urlData.signedUrl, {
       method: "PUT",
-      headers: { "Content-Type": "text/plain" },
+      headers: { "Content-Type": "image/png" },
       body: PROBE_PAYLOAD,
     });
 
@@ -72,10 +75,10 @@ export async function GET(request: Request) {
       throw new Error(dlError?.message ?? "Download returned no data");
     }
 
-    const content = await downloaded.text();
-    if (content !== PROBE_PAYLOAD) {
+    const buf = Buffer.from(await downloaded.arrayBuffer());
+    if (!buf.equals(PROBE_PAYLOAD)) {
       throw new Error(
-        `Content mismatch: expected "${PROBE_PAYLOAD}", got "${content.slice(0, 50)}"`
+        `Content mismatch: expected ${PROBE_PAYLOAD.length} bytes, got ${buf.length} bytes`
       );
     }
   } catch (e: unknown) {
