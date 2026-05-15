@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
 import { logEvent } from "@/lib/audit";
+import { dispatchPhotoValidator } from "@/lib/photo-validator";
 import { sendEmail } from "@/lib/email/resend";
 import { memorySubmitted } from "@/lib/email/templates";
 
@@ -476,44 +477,12 @@ export async function confirmCharacterPhotosUploaded(
       env_set: !!process.env.MODAL_VALIDATE_PHOTOS_URL,
     });
 
-    if (harvest && process.env.MODAL_VALIDATE_PHOTOS_URL) {
-      const { data: signedUrls } = await admin.storage
-        .from("character-photos")
-        .createSignedUrls(storagePaths, 600);
-
-      const urls = (signedUrls ?? [])
-        .map((s) => s.signedUrl)
-        .filter(Boolean);
-
-      if (urls.length > 0) {
-        console.log("Photo validator: dispatching", {
-          harvest_id: harvest.id,
-          url_count: urls.length,
-        });
-        try {
-          const res = await fetch(process.env.MODAL_VALIDATE_PHOTOS_URL, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-webhook-secret": process.env.MODAL_WEBHOOK_SECRET ?? "",
-            },
-            body: JSON.stringify({
-              urls,
-              harvest_id: harvest.id,
-              webhook_url:
-                process.env.PHOTO_VALIDATION_COMPLETE_WEBHOOK_URL ?? "",
-            }),
-          });
-          console.log("Photo validator: dispatch response", {
-            harvest_id: harvest.id,
-            status: res.status,
-          });
-        } catch (e) {
-          console.error("Photo validator dispatch failed:", e);
-        }
-      } else {
-        console.log("Photo validator: no signed urls generated, skipping");
-      }
+    if (harvest) {
+      await dispatchPhotoValidator({
+        bucket: "character-photos",
+        storagePaths,
+        harvestId: harvest.id,
+      });
     }
   } catch (e) {
     console.error("Photo validator dispatch error:", e);

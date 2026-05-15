@@ -256,6 +256,21 @@ export default async function HarvestDetailPage({
     family = (famRaw as unknown as FamilyDetail) ?? null;
   }
 
+  // ── Fetch latest photo validation result ──────────────────────────────
+  const { data: validationRow } = await admin
+    .from("audit_log")
+    .select("metadata, created_at")
+    .eq("harvest_id", harvestId)
+    .eq("event_type", "photo_validation_run")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const validation = validationRow as {
+    metadata: { set?: { set_pass?: boolean; effective_photo_count?: number; near_duplicate_clusters?: number } };
+    created_at: string;
+  } | null;
+
   const age = childAge(child.date_of_birth);
   const isPhysical = family?.subscription_type === "physical_digital";
 
@@ -846,6 +861,52 @@ export default async function HarvestDetailPage({
                     : "Not yet"}
                 </span>
               </div>
+            </div>
+          </div>
+          <div className="mt-4 rounded-lg border border-gray-200 bg-white">
+            <div className="space-y-3 px-6 py-5 text-sm">
+              <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                Photo validation
+              </p>
+              {validation ? (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Set pass</span>
+                    <span
+                      className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                        validation.metadata?.set?.set_pass
+                          ? "bg-green-100 text-green-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {validation.metadata?.set?.set_pass ? "Pass" : "Fail"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Effective photos</span>
+                    <span className="text-gray-700">
+                      {validation.metadata?.set?.effective_photo_count ?? "\u2014"}{" "}
+                      / 8 required
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">
+                      Near-duplicate clusters
+                    </span>
+                    <span className="text-gray-700">
+                      {validation.metadata?.set?.near_duplicate_clusters ?? 0}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Validated</span>
+                    <span className="text-gray-700">
+                      {formatDate(validation.created_at)}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-gray-400">Not yet validated</p>
+              )}
             </div>
           </div>
         </section>
