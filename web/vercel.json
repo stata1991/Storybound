@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/memory-drop-notifications",
+      "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/health-upload",
+      "schedule": "0 10 * * *"
+    }
+  ]
+}
