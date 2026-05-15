@@ -267,7 +267,7 @@ export default async function HarvestDetailPage({
     .maybeSingle();
 
   const validation = validationRow as {
-    metadata: { set?: { set_pass?: boolean; effective_photo_count?: number; near_duplicate_clusters?: number } };
+    metadata: { set?: { set_pass?: boolean; effective_photo_count?: number; near_duplicate_clusters?: number[][] } };
     created_at: string;
   } | null;
 
@@ -894,7 +894,7 @@ export default async function HarvestDetailPage({
                       Near-duplicate clusters
                     </span>
                     <span className="text-gray-700">
-                      {validation.metadata?.set?.near_duplicate_clusters ?? 0}
+                      {validation.metadata?.set?.near_duplicate_clusters?.length ?? 0}
                     </span>
                   </div>
                   <div className="flex justify-between">
