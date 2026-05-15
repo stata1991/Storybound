@@ -9,6 +9,11 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  // global-error replaces <html> and cannot import server actions
+  // reliably. We log to console only; runtime errors that reach root
+  // are rare and the audit_log entry from the layer above usually
+  // already captured them. If global-error starts firing regularly,
+  // consider a raw fetch() to a tiny /api/report-error endpoint.
   useEffect(() => {
     console.error("[global error boundary]", error);
   }, [error]);
@@ -94,6 +99,19 @@ export default function GlobalError({
           >
             Email us for help
           </a>
+
+          {error.digest && (
+            <p
+              style={{
+                marginTop: 24,
+                fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                fontSize: 12,
+                color: "rgba(27, 42, 74, 0.25)",
+              }}
+            >
+              Ref: {error.digest}
+            </p>
+          )}
         </div>
       </body>
     </html>

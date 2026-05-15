@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect } from "react";
+import { usePathname } from "next/navigation";
 import Link from "next/link";
+import { reportClientError } from "@/lib/report-client-error";
 
 export default function OnboardingError({
   error,
@@ -10,9 +12,17 @@ export default function OnboardingError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const pathname = usePathname();
+
   useEffect(() => {
     console.error("[onboarding error boundary]", error);
-  }, [error]);
+    void reportClientError({
+      message: error.message,
+      digest: error.digest,
+      pathname,
+      boundary: "onboarding",
+    }).catch(() => {});
+  }, [error, pathname]);
 
   return (
     <div className="mx-auto max-w-lg px-6 py-16">
@@ -45,6 +55,12 @@ export default function OnboardingError({
         >
           Email us for help
         </a>
+
+        {error.digest && (
+          <p className="mt-6 font-mono text-xs text-navy/25">
+            Ref: {error.digest}
+          </p>
+        )}
       </div>
     </div>
   );
