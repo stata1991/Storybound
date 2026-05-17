@@ -608,13 +608,9 @@ def train_flux_lora(
 
     # Upload to Supabase
     import supabase as sb_module
-    from supabase.lib.client_options import ClientOptions
     supabase_url = os.environ["SUPABASE_URL"]
     supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-    sb = sb_module.create_client(
-        supabase_url, supabase_key,
-        options=ClientOptions(storage_client_timeout=300),
-    )
+    sb = sb_module.create_client(supabase_url, supabase_key)
 
     import time
     import httpx
