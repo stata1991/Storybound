@@ -1,5 +1,125 @@
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 
+/* ─── Gate constants ──────────────────────────────────────────────────────── */
+
+export const MIN_HARD_PASS_COUNT = 5;
+export const MIN_EFFECTIVE_PHOTO_COUNT = 5;
+
+/* ─── Hard-fail code → readable string ────────────────────────────────────── */
+
+const HARD_FAIL_LABELS: Record<string, string> = {
+  multiple_faces: "multiple people in photo",
+  blurry: "photo is blurry",
+  no_face: "no face detected",
+  embedding_failed: "couldn't extract face features",
+  small_face: "face too small in frame",
+};
+
+/* ─── Gate check ──────────────────────────────────────────────────────────── */
+
+type GateResult =
+  | { allowed: true; hardPassCount: number; effectivePhotoCount: number }
+  | { allowed: false; reason: string; errors: string[] };
+
+/**
+ * Check the most recent photo-validation run for a harvest and decide
+ * whether training is allowed. Returns { allowed: true } with counts on
+ * success, or { allowed: false, reason, errors } on failure.
+ */
+export async function checkPhotoValidationGate(
+  harvestId: string
+): Promise<GateResult> {
+  const admin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  const { data: row } = await admin
+    .from("audit_log")
+    .select("metadata")
+    .eq("event_type", "photo_validation_run")
+    .eq("harvest_id", harvestId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!row) {
+    return {
+      allowed: false,
+      reason:
+        "Photos haven't been validated yet — wait for validation to complete and try again.",
+      errors: [],
+    };
+  }
+
+  // Defensively parse metadata
+  const meta = row.metadata as Record<string, unknown> | null;
+  const set = meta?.set as Record<string, unknown> | undefined;
+  const perPhotoVerdicts = meta?.per_photo_verdicts as
+    | Array<Record<string, unknown>>
+    | undefined;
+
+  if (!set || !Array.isArray(perPhotoVerdicts)) {
+    return {
+      allowed: false,
+      reason: "Validation result is malformed.",
+      errors: [],
+    };
+  }
+
+  const setPass = set.set_pass as boolean | undefined;
+  const hardPassCount = (set.hard_pass_count as number) ?? 0;
+  const effectivePhotoCount = (set.effective_photo_count as number) ?? 0;
+
+  // Build per-photo error list (used on any failure path)
+  function buildErrors(): string[] {
+    const out: string[] = [];
+    for (let i = 0; i < perPhotoVerdicts!.length; i++) {
+      const v = perPhotoVerdicts![i];
+      const hardFails = Array.isArray(v.hard_fails) ? (v.hard_fails as string[]) : [];
+      if (v.verdict === "fail" || hardFails.length > 0) {
+        const reasons = hardFails.map(
+          (code) => HARD_FAIL_LABELS[code] ?? code
+        );
+        out.push(
+          `Photo ${i + 1}: ${reasons.length > 0 ? reasons.join(" and ") : "failed quality check"}`
+        );
+      }
+    }
+    return out;
+  }
+
+  // Gate checks in priority order
+  if (setPass === false) {
+    return {
+      allowed: false,
+      reason: "Photo set failed quality check.",
+      errors: buildErrors(),
+    };
+  }
+
+  if (hardPassCount < MIN_HARD_PASS_COUNT) {
+    return {
+      allowed: false,
+      reason: `Only ${hardPassCount} of ${MIN_HARD_PASS_COUNT} required photos passed quality check.`,
+      errors: buildErrors(),
+    };
+  }
+
+  if (effectivePhotoCount < MIN_EFFECTIVE_PHOTO_COUNT) {
+    return {
+      allowed: false,
+      reason: `Only ${effectivePhotoCount} of ${MIN_EFFECTIVE_PHOTO_COUNT} required unique photos provided.`,
+      errors: buildErrors(),
+    };
+  }
+
+  return { allowed: true, hardPassCount, effectivePhotoCount };
+}
+
+/* ─── Dispatch helper ─────────────────────────────────────────────────────── */
+
 interface DispatchPhotoValidatorParams {
   bucket: string;
   storagePaths: string[];

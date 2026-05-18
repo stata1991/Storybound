@@ -5,6 +5,7 @@ import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { logEvent } from "@/lib/audit";
 
 import { sanitizeForPrompt, sanitizeArrayForPrompt } from "@/lib/utils/sanitize";
+import { checkPhotoValidationGate } from "@/lib/photo-validator";
 
 /* ─── Pipeline toggle ─────────────────────────────────────────────────────── */
 
@@ -535,6 +536,15 @@ export async function startFaceTraining(
   }
 
   console.log(`Total photos for training: ${photosBase64.length} (character + harvest combined)`);
+
+  // ── Photo-validation gate ──────────────────────────────────────────────
+  const gate = await checkPhotoValidationGate(harvestId);
+  if (!gate.allowed) {
+    const msg = gate.errors.length > 0
+      ? `${gate.reason}\n\nIssues:\n${gate.errors.map((e) => "• " + e).join("\n")}`
+      : gate.reason;
+    return { error: msg };
+  }
 
   // Build callback URL — Modal will POST here when training completes
   const callbackUrl = process.env.NEXT_PUBLIC_APP_URL
