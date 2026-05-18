@@ -422,9 +422,31 @@ export async function submitHarvestMemory(
     { auth: { autoRefreshToken: false, persistSession: false } }
   );
 
-  const { data: charFiles } = await adminForValidator.storage
-    .from("character-photos")
-    .list(childId, { limit: 100 });
+  let charFiles: { name: string }[] | null = null;
+  let charListError: string | null = null;
+
+  try {
+    const result = await adminForValidator.storage
+      .from("character-photos")
+      .list(childId, { limit: 100 });
+    charFiles = result.data;
+    if (result.error) {
+      charListError = result.error.message;
+    }
+  } catch (e) {
+    charListError = e instanceof Error ? e.message : "Unknown storage error";
+  }
+
+  if (charListError) {
+    logEvent({
+      event_type: "memory_drop.validator_dispatch_degraded",
+      status: "warn",
+      harvest_id: harvest.id,
+      child_id: childId,
+      message: "Character photos unavailable for validation \u2014 proceeding with harvest photos only",
+      metadata: { error: charListError, mode: "harvest_only" },
+    });
+  }
 
   const charPaths = (charFiles ?? [])
     .filter((f) => f.name !== ".emptyFolderPlaceholder")
