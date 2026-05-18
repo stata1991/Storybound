@@ -6,11 +6,13 @@ import {
   useImperativeHandle,
   forwardRef,
   useCallback,
+  useEffect,
 } from "react";
 import {
   addHarvestPhotos,
   confirmAddedHarvestPhotos,
 } from "@/app/dashboard/actions";
+import { useValidationPoll } from "@/hooks/useValidationPoll";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -214,7 +216,11 @@ const MemoryPhotoUpload = forwardRef<
   const [error, setError] = useState<string | null>(null);
   const [successCount, setSuccessCount] = useState<number | null>(null);
   const [hasFailedUploads, setHasFailedUploads] = useState(false);
+  const [pollingHarvestId, setPollingHarvestId] = useState<string | null>(null);
+  const onCompleteCountRef = useRef<number | null>(null);
   const submittingRef = useRef(false);
+
+  const validation = useValidationPoll(pollingHarvestId);
 
   const uploadedCount = photoSlots.filter((s) => s.file !== null).length;
 
@@ -223,6 +229,10 @@ const MemoryPhotoUpload = forwardRef<
     count: number;
   }> => {
     if (submittingRef.current) return { success: false, count: 0 };
+
+    // Reset polling state from any previous attempt
+    setPollingHarvestId(null);
+    onCompleteCountRef.current = null;
 
     // Determine which slots need uploading (files without an uploadedPath)
     const pendingSlots = photoSlots.filter(
@@ -397,14 +407,28 @@ const MemoryPhotoUpload = forwardRef<
 
       if ("error" in confirmResult) {
         setError(confirmResult.error);
+        submittingRef.current = false;
+        setUploading(false);
+        setProgress(null);
         return { success: false, count: 0 };
       }
 
-      // Success — reset slots
+      // Success — start validation polling instead of advancing immediately
       setSuccessCount(confirmResult.photoCount);
       setPhotoSlots([createEmptySlot()]);
       setProgress(null);
-      onComplete(confirmResult.photoCount);
+
+      if (confirmResult.harvestId) {
+        onCompleteCountRef.current = confirmResult.photoCount;
+        setPollingHarvestId(confirmResult.harvestId);
+        // Keep uploading=true — transitions to "Checking photo quality…" via hook
+        submittingRef.current = false;
+      } else {
+        // No harvest to validate — advance immediately
+        submittingRef.current = false;
+        setUploading(false);
+        onComplete(confirmResult.photoCount);
+      }
       return { success: true, count: confirmResult.photoCount };
     } catch (err) {
       setError(
@@ -412,11 +436,10 @@ const MemoryPhotoUpload = forwardRef<
           ? err.message
           : "Something went wrong. Please try again."
       );
-      return { success: false, count: 0 };
-    } finally {
       submittingRef.current = false;
       setUploading(false);
       setProgress(null);
+      return { success: false, count: 0 };
     }
   }, [photoSlots, childId, harvestId, existingCount, onComplete]);
 
@@ -430,6 +453,35 @@ const MemoryPhotoUpload = forwardRef<
     }),
     [doUpload, photoSlots]
   );
+
+  // React to validation status changes
+  useEffect(() => {
+    if (validation.status === "passed") {
+      setUploading(false);
+      setError(null);
+      const count = onCompleteCountRef.current ?? 0;
+      const t = setTimeout(() => {
+        onComplete(count);
+      }, 1200);
+      return () => clearTimeout(t);
+    }
+
+    if (validation.status === "failed") {
+      setUploading(false);
+      setError(
+        validation.errors && validation.errors.length > 0
+          ? "Some photos didn\u2019t quite work. Please swap them and try again."
+          : validation.reason ?? "Photo check didn\u2019t pass."
+      );
+      setPollingHarvestId(null);
+    }
+
+    if (validation.status === "timeout") {
+      setUploading(false);
+      setError("Photo check is taking longer than expected \u2014 please try resubmitting.");
+      setPollingHarvestId(null);
+    }
+  }, [validation.status, validation.errors, validation.reason, onComplete]);
 
   /* ─── Photo slot handlers ─────────────────────────────────────────────── */
 
@@ -567,10 +619,37 @@ const MemoryPhotoUpload = forwardRef<
         <button
           type="button"
           onClick={doUpload}
-          disabled={uploading}
+          disabled={uploading || validation.status === "polling" || validation.status === "passed"}
           className="w-full rounded-full bg-gold py-3 font-sans text-sm font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {uploading ? (
+          {validation.status === "polling" ? (
+            <span className="inline-flex items-center gap-2">
+              <svg
+                className="h-4 w-4 animate-spin"
+                viewBox="0 0 24 24"
+                fill="none"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+              Checking photo quality&hellip;
+            </span>
+          ) : validation.status === "passed" ? (
+            <span className="inline-flex items-center gap-2">
+              <span>&#10003;</span> Photos look great
+            </span>
+          ) : uploading ? (
             <span className="inline-flex items-center gap-2">
               <svg
                 className="h-4 w-4 animate-spin"

@@ -609,7 +609,7 @@ export async function confirmAddedHarvestPhotos(
   childId: string,
   harvestId: string,
   photos: { path: string; caption: string }[]
-): Promise<{ error: string } | { success: true; photoCount: number }> {
+): Promise<{ error: string } | { success: true; photoCount: number; harvestId?: string }> {
   // ── Auth ─────────────────────────────────────────────────────────────────
   const supabase = await createClient();
   const {
@@ -739,6 +739,6 @@ export async function confirmAddedHarvestPhotos(
 
   await dispatchPhotoValidator({ sources: validatorSources, harvestId });
 
-  return { success: true, photoCount: allPaths.length };
+  return { success: true, photoCount: allPaths.length, harvestId };
 }
 
