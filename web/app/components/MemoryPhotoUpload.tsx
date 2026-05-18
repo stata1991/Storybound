@@ -7,6 +7,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useMemo,
 } from "react";
 import {
   addHarvestPhotos,
@@ -81,6 +82,7 @@ function PhotoSlotCard({
   onCaptionChange,
   onError,
   disabled,
+  validationFailed,
 }: {
   slot: PhotoSlot;
   index: number;
@@ -89,6 +91,7 @@ function PhotoSlotCard({
   onCaptionChange: (index: number, caption: string) => void;
   onError: (index: number, error: string | null) => void;
   disabled?: boolean;
+  validationFailed?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -144,7 +147,7 @@ function PhotoSlotCard({
   }
 
   return (
-    <div className={`rounded-xl border border-navy/10 bg-cream-warm/30 p-4 ${slot.uploadedPath ? "opacity-60" : ""}`}>
+    <div className={`rounded-xl border border-navy/10 bg-cream-warm/30 p-4 ${slot.uploadedPath ? "opacity-60" : ""}${validationFailed ? " ring-2 ring-red-500" : ""}`}>
       <div className="flex items-start gap-4">
         <div className="relative flex-shrink-0">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -223,6 +226,24 @@ const MemoryPhotoUpload = forwardRef<
   const validation = useValidationPoll(pollingHarvestId);
 
   const uploadedCount = photoSlots.filter((s) => s.file !== null).length;
+
+  const validationFailedIndices = useMemo(() => {
+    if (validation.status !== "failed" || !validation.failedPaths) {
+      return new Set<number>();
+    }
+    const failedFilenames = new Set(
+      validation.failedPaths.filter((p): p is string => Boolean(p))
+    );
+    const indices = new Set<number>();
+    photoSlots.forEach((slot, idx) => {
+      if (!slot.uploadedPath) return;
+      const filename = slot.uploadedPath.split("/").pop();
+      if (filename && failedFilenames.has(filename)) {
+        indices.add(idx);
+      }
+    });
+    return indices;
+  }, [validation.status, validation.failedPaths, photoSlots]);
 
   const doUpload = useCallback(async (): Promise<{
     success: boolean;
@@ -575,6 +596,7 @@ const MemoryPhotoUpload = forwardRef<
           onCaptionChange={handleCaptionChange}
           onError={handleSlotError}
           disabled={uploading}
+          validationFailed={validationFailedIndices.has(i)}
         />
       ))}
 
