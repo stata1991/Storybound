@@ -479,8 +479,7 @@ export async function confirmCharacterPhotosUploaded(
 
     if (harvest) {
       await dispatchPhotoValidator({
-        bucket: "character-photos",
-        storagePaths,
+        sources: [{ bucket: "character-photos", paths: storagePaths }],
         harvestId: harvest.id,
       });
     }

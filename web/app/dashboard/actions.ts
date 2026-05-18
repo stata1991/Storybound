@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { logEvent } from "@/lib/audit";
-import { dispatchPhotoValidator } from "@/lib/photo-validator";
+import { dispatchPhotoValidator, type PhotoSource } from "@/lib/photo-validator";
 import { sendEmail } from "@/lib/email/resend";
 import { digitalBookReady } from "@/lib/email/templates";
 import Stripe from "stripe";
@@ -595,7 +595,7 @@ export async function confirmAddedHarvestPhotos(
   // ── Verify child ownership (RLS-scoped) ────────────────────────────────
   const { data: child } = await supabase
     .from("children")
-    .select("id, family_id")
+    .select("id, family_id, character_photos_deleted_at")
     .eq("id", childId)
     .single();
 
@@ -680,11 +680,25 @@ export async function confirmAddedHarvestPhotos(
   });
 
   // Re-validate full photo set (existing + new) for diversity/duplicates
-  await dispatchPhotoValidator({
-    bucket: "harvest-photos",
-    storagePaths: allPaths,
-    harvestId,
-  });
+  const validatorSources: PhotoSource[] = [];
+
+  if (!child.character_photos_deleted_at) {
+    const { data: charFiles } = await admin.storage
+      .from("character-photos")
+      .list(childId, { limit: 100 });
+
+    const charPaths = (charFiles ?? [])
+      .filter((f) => f.name !== ".emptyFolderPlaceholder")
+      .map((f) => `${childId}/${f.name}`);
+
+    if (charPaths.length > 0) {
+      validatorSources.push({ bucket: "character-photos", paths: charPaths });
+    }
+  }
+
+  validatorSources.push({ bucket: "harvest-photos", paths: allPaths });
+
+  await dispatchPhotoValidator({ sources: validatorSources, harvestId });
 
   return { success: true, photoCount: allPaths.length };
 }

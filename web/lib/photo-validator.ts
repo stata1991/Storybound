@@ -128,27 +128,28 @@ export async function checkPhotoValidationGate(
 
 /* ─── Dispatch helper ─────────────────────────────────────────────────────── */
 
-interface DispatchPhotoValidatorParams {
+export interface PhotoSource {
   bucket: string;
-  storagePaths: string[];
-  harvestId: string;
+  paths: string[];
 }
 
 /**
  * Fire-and-forget dispatch to the Modal photo-validator pipeline.
  *
- * Generates short-lived signed URLs for the given storage paths, POSTs
- * them to MODAL_VALIDATE_PHOTOS_URL, and swallows any errors so the
- * calling server action always succeeds regardless of validator outcome.
+ * Generates short-lived signed URLs for each source (bucket + paths),
+ * merges them into a single array, and POSTs to MODAL_VALIDATE_PHOTOS_URL.
+ * Swallows errors so the calling server action always succeeds.
  *
  * The validator calls back to PHOTO_VALIDATION_COMPLETE_WEBHOOK_URL
- * when it finishes; results land in audit_log (log-only mode).
+ * when it finishes; results land in audit_log.
  */
 export async function dispatchPhotoValidator({
-  bucket,
-  storagePaths,
+  sources,
   harvestId,
-}: DispatchPhotoValidatorParams): Promise<void> {
+}: {
+  sources: PhotoSource[];
+  harvestId: string;
+}): Promise<void> {
   if (!process.env.MODAL_VALIDATE_PHOTOS_URL) return;
 
   try {
@@ -158,13 +159,24 @@ export async function dispatchPhotoValidator({
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    const { data: signedUrls } = await admin.storage
-      .from(bucket)
-      .createSignedUrls(storagePaths, 600);
+    const urls: string[] = [];
 
-    const urls = (signedUrls ?? [])
-      .map((s) => s.signedUrl)
-      .filter(Boolean);
+    for (const source of sources) {
+      if (source.paths.length === 0) continue;
+      try {
+        const { data: signedUrls } = await admin.storage
+          .from(source.bucket)
+          .createSignedUrls(source.paths, 600);
+
+        const sourceUrls = (signedUrls ?? [])
+          .map((s) => s.signedUrl)
+          .filter(Boolean);
+
+        urls.push(...sourceUrls);
+      } catch (e) {
+        console.error(`Photo validator: failed to sign URLs for bucket "${source.bucket}":`, e);
+      }
+    }
 
     if (urls.length === 0) {
       console.log("Photo validator: no signed urls generated, skipping");

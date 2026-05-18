@@ -416,10 +416,26 @@ export async function submitHarvestMemory(
     metadata: { photo_count: photoPaths.length },
   });
 
-  // Dispatch photo validator (fire-and-forget — never blocks redirect)
+  // Dispatch photo validator on combined set (fire-and-forget — never blocks redirect)
+  const adminForValidator = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  const { data: charFiles } = await adminForValidator.storage
+    .from("character-photos")
+    .list(childId, { limit: 100 });
+
+  const charPaths = (charFiles ?? [])
+    .filter((f) => f.name !== ".emptyFolderPlaceholder")
+    .map((f) => `${childId}/${f.name}`);
+
   await dispatchPhotoValidator({
-    bucket: "harvest-photos",
-    storagePaths: photoPaths,
+    sources: [
+      { bucket: "character-photos", paths: charPaths },
+      { bucket: "harvest-photos", paths: photoPaths },
+    ],
     harvestId: harvest.id,
   });
 
