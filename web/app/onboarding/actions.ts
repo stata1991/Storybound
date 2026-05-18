@@ -389,7 +389,7 @@ export async function createCharacterPhotoUploadUrls(
 export async function confirmCharacterPhotosUploaded(
   childId: string,
   storagePaths: string[]
-): Promise<{ error: string } | { success: true; count: number }> {
+): Promise<{ error: string } | { success: true; count: number; harvestId?: string }> {
   // ── Auth ─────────────────────────────────────────────────────────────────
   const supabase = await createClient();
   const {
@@ -454,6 +454,7 @@ export async function confirmCharacterPhotosUploaded(
   });
 
   // ── Dispatch photo validator ──────────────────────────────────────────────
+  let resolvedHarvestId: string | undefined;
   try {
     const admin = createAdminClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -468,6 +469,8 @@ export async function confirmCharacterPhotosUploaded(
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+
+    resolvedHarvestId = harvest?.id;
 
     console.log("Photo validator: harvest lookup result", {
       childId,
@@ -487,7 +490,7 @@ export async function confirmCharacterPhotosUploaded(
     console.error("Photo validator dispatch error:", e);
   }
 
-  return { success: true, count: storagePaths.length };
+  return { success: true, count: storagePaths.length, harvestId: resolvedHarvestId };
 }
 
 export async function getChildForCharacterPhotos(
