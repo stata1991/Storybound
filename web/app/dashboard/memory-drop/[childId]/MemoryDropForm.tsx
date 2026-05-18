@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useValidationPoll } from "@/hooks/useValidationPoll";
 import Link from "next/link";
 import {
   createHarvestPhotoUploadUrls,
@@ -219,7 +220,10 @@ export default function MemoryDropForm({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState("");
+  const [pollingHarvestId, setPollingHarvestId] = useState<string | null>(null);
   const submittingRef = useRef(false);
+
+  const validation = useValidationPoll(pollingHarvestId);
 
   const seasonLabel = SEASON_LABELS[harvest.season] || harvest.season;
   const daysLeft = daysUntil(harvest.window_closes_at);
@@ -329,6 +333,9 @@ export default function MemoryDropForm({
 
       if ("error" in urlResult) {
         setError(urlResult.error);
+        setLoading(false);
+        setProgress("");
+        submittingRef.current = false;
         return;
       }
 
@@ -379,6 +386,9 @@ export default function MemoryDropForm({
         setError(
           `${failedNames.length} photo(s) failed: ${failedNames.join(", ")}. Tap retry to re-upload all photos.`
         );
+        setLoading(false);
+        setProgress("");
+        submittingRef.current = false;
         return;
       }
 
@@ -396,23 +406,57 @@ export default function MemoryDropForm({
 
       if ("error" in submitResult) {
         setError(submitResult.error);
+        setLoading(false);
+        setProgress("");
+        submittingRef.current = false;
         return;
       }
 
-      // Success — navigate to dashboard
-      router.push("/dashboard?submitted=true");
+      // Start polling for validation result. Don't navigate yet —
+      // the useEffect below handles navigation when polling completes.
+      setPollingHarvestId(submitResult.harvestId);
+      setProgress("");
+      submittingRef.current = false;
+      // Keep loading=true through polling phase
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
           : "Something went wrong. Please try again."
       );
-    } finally {
       setLoading(false);
       setProgress("");
       submittingRef.current = false;
     }
   }
+
+  // React to validation status changes
+  useEffect(() => {
+    if (validation.status === "passed") {
+      setLoading(false);
+      setError(null);
+      const t = setTimeout(() => {
+        router.push("/dashboard?submitted=true");
+      }, 1200);
+      return () => clearTimeout(t);
+    }
+
+    if (validation.status === "failed") {
+      setLoading(false);
+      setError(
+        "Memory was saved, but some photos didn\u2019t pass quality check. You can add more photos from your dashboard."
+      );
+      setPollingHarvestId(null);
+    }
+
+    if (validation.status === "timeout") {
+      setLoading(false);
+      setError(
+        "Memory was saved. Photo quality check is taking longer than expected \u2014 you can review and add more photos from your dashboard."
+      );
+      setPollingHarvestId(null);
+    }
+  }, [validation.status, router]);
 
   /* ─── Render ─────────────────────────────────────────────────────────────── */
 
@@ -454,6 +498,15 @@ export default function MemoryDropForm({
           {error && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
               <p className="font-sans text-sm text-red-700">{error}</p>
+              {(validation.status === "failed" || validation.status === "timeout") && (
+                <button
+                  type="button"
+                  onClick={() => router.push("/dashboard?submitted=true")}
+                  className="mt-3 inline-block font-sans text-sm font-medium text-gold underline hover:text-gold-light"
+                >
+                  Continue to dashboard &rarr;
+                </button>
+              )}
             </div>
           )}
 
@@ -651,10 +704,37 @@ export default function MemoryDropForm({
           {/* Submit */}
           <button
             type="submit"
-            disabled={!canSubmit}
+            disabled={!canSubmit || validation.status === "polling" || validation.status === "passed"}
             className="w-full rounded-full bg-gold py-3.5 text-center font-sans text-base font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? (
+            {validation.status === "polling" ? (
+              <span className="inline-flex items-center gap-2">
+                <svg
+                  className="h-4 w-4 animate-spin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+                Checking photo quality&hellip;
+              </span>
+            ) : validation.status === "passed" ? (
+              <span className="inline-flex items-center gap-2">
+                <span>&#10003;</span> Photos look great
+              </span>
+            ) : loading ? (
               <span className="inline-flex items-center gap-2">
                 <svg
                   className="h-4 w-4 animate-spin"
