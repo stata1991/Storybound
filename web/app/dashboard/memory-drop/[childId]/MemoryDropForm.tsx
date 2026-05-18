@@ -207,6 +207,8 @@ export default function MemoryDropForm({
   child: ChildData;
   harvest: HarvestData;
 }) {
+  const displayName =
+    child.name.charAt(0).toUpperCase() + child.name.slice(1);
   const [photoSlots, setPhotoSlots] = useState<PhotoSlot[]>([createEmptySlot()]);
   const [milestone, setMilestone] = useState("");
   const [interests, setInterests] = useState("");
@@ -452,6 +454,41 @@ export default function MemoryDropForm({
 
           {/* Field 1 — Photos */}
           <div className="rounded-2xl bg-white p-6 shadow-warm md:p-8">
+            <p className="mb-1 font-sans text-base font-semibold text-navy/80">
+              Help us illustrate {displayName}&apos;s story &#10024;
+            </p>
+            <p className="mb-4 font-sans text-sm leading-relaxed text-navy/50">
+              Clear photos of {displayName} help us make them the hero of every page.
+            </p>
+
+            <div className="mb-5 grid grid-cols-2 sm:grid-cols-5 gap-2">
+              <div className="rounded-xl border-2 border-green-400/50 bg-green-50/50 px-2 py-2.5 text-center">
+                <span className="block text-xl leading-none">😊</span>
+                <p className="mt-1.5 font-sans text-[11px] font-semibold text-green-700">Just their face</p>
+                <p className="mt-0.5 font-sans text-[10px] leading-tight text-green-600/70">Face fills most of the frame</p>
+              </div>
+              <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
+                <span className="block text-xl leading-none">🧒</span>
+                <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Just your child</p>
+                <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">No siblings, friends, or others</p>
+              </div>
+              <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
+                <span className="block text-xl leading-none">👓</span>
+                <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">No glasses</p>
+                <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">Sunglasses included</p>
+              </div>
+              <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
+                <span className="block text-xl leading-none">🧢</span>
+                <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Head visible</p>
+                <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">No hats, hoods, or masks</p>
+              </div>
+              <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
+                <span className="block text-xl leading-none">☀️</span>
+                <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Sharp and bright</p>
+                <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">Good lighting, no blur</p>
+              </div>
+            </div>
+
             <label className="mb-4 block font-sans text-sm font-medium text-navy">
               Photos
               <span className="ml-1 font-normal text-navy/40">

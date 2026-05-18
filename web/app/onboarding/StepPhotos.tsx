@@ -188,26 +188,31 @@ export default function StepPhotos({
         {displayName} will shine in their story.
       </p>
 
-      <div className="mb-5 grid grid-cols-4 gap-2">
+      <div className="mb-5 grid grid-cols-2 sm:grid-cols-5 gap-2">
         <div className="rounded-xl border-2 border-green-400/50 bg-green-50/50 px-2 py-2.5 text-center">
-          <span className="block text-xl leading-none">&#128522;</span>
+          <span className="block text-xl leading-none">😊</span>
           <p className="mt-1.5 font-sans text-[11px] font-semibold text-green-700">Just their face</p>
           <p className="mt-0.5 font-sans text-[10px] leading-tight text-green-600/70">Face fills most of the frame</p>
         </div>
         <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
-          <span className="block text-xl leading-none">&#128104;&#8205;&#128105;&#8205;&#128103;</span>
-          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">One at a time</p>
-          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">Solo photos work best</p>
+          <span className="block text-xl leading-none">🧒</span>
+          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Just your child</p>
+          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">No siblings, friends, or others</p>
         </div>
         <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
-          <span className="block text-xl leading-none">&#129506;</span>
-          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Nothing covering their face</p>
-          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">No hats, hoods, or sunglasses</p>
+          <span className="block text-xl leading-none">👓</span>
+          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">No glasses</p>
+          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">Sunglasses included</p>
         </div>
         <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
-          <span className="block text-xl leading-none">&#127774;</span>
-          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Bright and clear</p>
-          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">Good lighting helps us get it right</p>
+          <span className="block text-xl leading-none">🧢</span>
+          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Head visible</p>
+          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">No hats, hoods, or masks</p>
+        </div>
+        <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
+          <span className="block text-xl leading-none">☀️</span>
+          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Sharp and bright</p>
+          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">Good lighting, no blur</p>
         </div>
       </div>
 
