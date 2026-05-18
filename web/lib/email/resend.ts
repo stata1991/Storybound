@@ -6,6 +6,7 @@ interface SendEmailParams {
   to: string;
   subject: string;
   html: string;
+  attachments?: Array<{ filename: string; content: Buffer | string }>;
 }
 
 interface SendEmailResult {
@@ -26,6 +27,7 @@ export async function sendEmail(
     to: params.to,
     subject: params.subject,
     html: params.html,
+    attachments: params.attachments,
   });
 
   if (error || !data) {

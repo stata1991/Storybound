@@ -323,7 +323,46 @@ export async function chooseDigitalOnly(
       season: harvest.season,
       harvestId,
     });
-    sendEmail({ to: parent.email, subject, html }).catch((err) => console.error('[email] digital book ready:', err));
+
+    // Fetch the PDF for attachment — failure must not block email
+    let pdfAttachment: { filename: string; content: Buffer } | undefined;
+    try {
+      const { data: episode } = await admin
+        .from("episodes")
+        .select("print_file_path")
+        .eq("harvest_id", harvestId)
+        .single();
+
+      if (episode?.print_file_path) {
+        const { data: pdfBlob, error: dlErr } = await admin.storage
+          .from("books")
+          .download(episode.print_file_path);
+
+        if (pdfBlob && !dlErr) {
+          const arrayBuf = await pdfBlob.arrayBuffer();
+          const nameLabel = (
+            child.name.charAt(0).toUpperCase() + child.name.slice(1)
+          ).replace(/\s+/g, "_");
+          const seasonLabel = harvest.season.toLowerCase();
+          pdfAttachment = {
+            filename: `${nameLabel}_${seasonLabel}_storybook.pdf`,
+            content: Buffer.from(arrayBuf),
+          };
+        } else if (dlErr) {
+          console.error("[email] PDF download failed:", dlErr);
+        }
+      }
+    } catch (e) {
+      console.error("[email] PDF attachment error:", e);
+      // Continue without attachment
+    }
+
+    sendEmail({
+      to: parent.email,
+      subject,
+      html,
+      attachments: pdfAttachment ? [pdfAttachment] : undefined,
+    }).catch((err) => console.error("[email] digital book ready:", err));
   }
 
   return { success: true };
