@@ -33,10 +33,14 @@ export function useValidationPoll(
       return;
     }
 
+    let isActive = true;
+
     setResult({ status: "polling" });
     startRef.current = Date.now();
 
     async function poll() {
+      if (!isActive) return;
+
       // Timeout check
       if (Date.now() - startRef.current >= POLL_TIMEOUT) {
         stop();
@@ -48,9 +52,12 @@ export function useValidationPoll(
         const res = await fetch(
           `/api/photos/validation-status?harvestId=${encodeURIComponent(harvestId!)}`
         );
+        if (!isActive) return;
+
         if (!res.ok) return; // Non-blocking — retry next interval
 
         const data = await res.json();
+        if (!isActive) return;
 
         if (data.status === "passed") {
           stop();
@@ -78,6 +85,7 @@ export function useValidationPoll(
     intervalRef.current = setInterval(poll, POLL_INTERVAL);
 
     return () => {
+      isActive = false;
       stop();
     };
   }, [harvestId, stop]);
