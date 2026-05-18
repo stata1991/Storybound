@@ -68,9 +68,13 @@ export async function checkPhotoValidationGate(
     };
   }
 
-  const setPass = set.set_pass as boolean | undefined;
   const hardPassCount = (set.hard_pass_count as number) ?? 0;
   const effectivePhotoCount = (set.effective_photo_count as number) ?? 0;
+  const identityConsistency = set.identity_consistency as
+    Record<string, unknown> | undefined;
+  const outlierIndices = Array.isArray(identityConsistency?.outlier_indices)
+    ? (identityConsistency!.outlier_indices as number[])
+    : [];
 
   // Build per-photo error list (used on any failure path)
   function buildErrors(): string[] {
@@ -87,18 +91,13 @@ export async function checkPhotoValidationGate(
         );
       }
     }
+    for (const i of outlierIndices) {
+      out.push(`Photo ${i + 1}: appears to show a different person`);
+    }
     return out;
   }
 
-  // Gate checks in priority order
-  if (setPass === false) {
-    return {
-      allowed: false,
-      reason: "Photo set failed quality check.",
-      errors: buildErrors(),
-    };
-  }
-
+  // Gate checks in priority order (most-actionable first)
   if (hardPassCount < MIN_HARD_PASS_COUNT) {
     return {
       allowed: false,
@@ -111,6 +110,15 @@ export async function checkPhotoValidationGate(
     return {
       allowed: false,
       reason: `Only ${effectivePhotoCount} of ${MIN_EFFECTIVE_PHOTO_COUNT} required unique photos provided.`,
+      errors: buildErrors(),
+    };
+  }
+
+  if (outlierIndices.length > 0) {
+    return {
+      allowed: false,
+      reason:
+        "Some photos appear to show a different person — please make sure all photos are of the same child.",
       errors: buildErrors(),
     };
   }
