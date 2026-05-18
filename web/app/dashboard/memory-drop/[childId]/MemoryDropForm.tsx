@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   createHarvestPhotoUploadUrls,
@@ -207,6 +208,7 @@ export default function MemoryDropForm({
   child: ChildData;
   harvest: HarvestData;
 }) {
+  const router = useRouter();
   const displayName =
     child.name.charAt(0).toUpperCase() + child.name.slice(1);
   const [photoSlots, setPhotoSlots] = useState<PhotoSlot[]>([createEmptySlot()]);
@@ -392,10 +394,13 @@ export default function MemoryDropForm({
         photos: succeeded,
       });
 
-      // submitHarvestMemory redirects on success — if we reach here, it's an error
-      if (submitResult?.error) {
+      if ("error" in submitResult) {
         setError(submitResult.error);
+        return;
       }
+
+      // Success — navigate to dashboard
+      router.push("/dashboard?submitted=true");
     } catch (err) {
       setError(
         err instanceof Error

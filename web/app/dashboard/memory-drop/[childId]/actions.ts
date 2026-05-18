@@ -2,7 +2,6 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
-import { redirect } from "next/navigation";
 import { logEvent } from "@/lib/audit";
 import { dispatchPhotoValidator } from "@/lib/photo-validator";
 
@@ -260,7 +259,7 @@ interface HarvestPhoto {
 export async function submitHarvestMemory(
   childId: string,
   data: { textFields: HarvestTextFields; photos: HarvestPhoto[] }
-): Promise<{ error: string } | undefined> {
+): Promise<{ error: string } | { success: true; harvestId: string }> {
   // ── Auth ─────────────────────────────────────────────────────────────────
   const supabase = await createClient();
   const {
@@ -439,7 +438,7 @@ export async function submitHarvestMemory(
     harvestId: harvest.id,
   });
 
-  redirect("/dashboard?submitted=true");
+  return { success: true, harvestId: harvest.id };
 }
 
 /* ─── Photo signed URLs ───────────────────────────────────────────────────── */
