@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useValidationPoll } from "@/hooks/useValidationPoll";
 import {
   createCharacterPhotoUploadUrls,
   confirmCharacterPhotosUploaded,
@@ -49,6 +50,11 @@ export default function StepPhotos({
   const [progress, setProgress] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const submittingRef = useRef(false);
+  const [harvestId, setHarvestId] = useState<string | null>(null);
+  const [validationFailedIndices, setValidationFailedIndices] =
+    useState<Set<number>>(new Set());
+
+  const validation = useValidationPoll(harvestId);
 
   const canSubmit = photos.length >= MIN_PHOTOS && !loading;
 
@@ -72,6 +78,14 @@ export default function StepPhotos({
       URL.revokeObjectURL(prev[index].preview);
       return prev.filter((_, i) => i !== index);
     });
+    setValidationFailedIndices((prev) => {
+      const next = new Set<number>();
+      prev.forEach((failedIdx) => {
+        if (failedIdx < index) next.add(failedIdx);
+        else if (failedIdx > index) next.add(failedIdx - 1);
+      });
+      return next;
+    });
   }
 
   async function handleSubmit() {
@@ -80,6 +94,8 @@ export default function StepPhotos({
     setLoading(true);
     setError(null);
     setProgress("");
+    setHarvestId(null);
+    setValidationFailedIndices(new Set());
 
     try {
       // Step A — get signed upload URLs (also cleans the folder)
@@ -157,23 +173,77 @@ export default function StepPhotos({
 
       if ("error" in confirmResult) {
         setError(confirmResult.error);
+        setLoading(false);
+        setProgress("");
+        submittingRef.current = false;
         return;
       }
 
-      // Step E — success, advance to next step
-      onComplete?.();
+      // Step E — start validation polling (or advance if no harvest)
+      if (confirmResult.harvestId) {
+        setHarvestId(confirmResult.harvestId);
+        setProgress("");
+        // Keep loading=true — transitions to "Checking photo quality…" via hook
+        submittingRef.current = false;
+      } else {
+        // Defensive fallback — no harvest, no gate. Advance.
+        setLoading(false);
+        setProgress("");
+        submittingRef.current = false;
+        onComplete?.();
+      }
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
           : "Something went wrong. Please try again."
       );
-    } finally {
       setLoading(false);
       setProgress("");
       submittingRef.current = false;
     }
   }
+
+  useEffect(() => {
+    if (validation.status === "passed") {
+      setLoading(false);
+      setError(null);
+      const t = setTimeout(() => {
+        onComplete?.();
+      }, 1200);
+      return () => clearTimeout(t);
+    }
+
+    if (validation.status === "failed") {
+      setLoading(false);
+      const failed = new Set<number>();
+      if (validation.errors) {
+        for (const errStr of validation.errors) {
+          const match = errStr.match(/^Photo (\d+):/);
+          if (match) {
+            const idx = parseInt(match[1], 10) - 1;
+            if (idx >= 0 && idx < photos.length) {
+              failed.add(idx);
+            }
+          }
+        }
+      }
+      setValidationFailedIndices(failed);
+      setError(
+        validation.errors && validation.errors.length > 0
+          ? "Some photos didn\u2019t quite work. Let\u2019s swap them and try again."
+          : validation.reason ?? "Photo check didn\u2019t pass."
+      );
+      setHarvestId(null);
+    }
+
+    if (validation.status === "timeout") {
+      setLoading(false);
+      setError("Photo check is taking longer than expected \u2014 please try resubmitting.");
+      setHarvestId(null);
+    }
+  }, [validation.status, validation.errors, validation.reason,
+      onComplete, photos.length]);
 
   const displayName =
     childName.charAt(0).toUpperCase() + childName.slice(1);
@@ -227,7 +297,9 @@ export default function StepPhotos({
         {photos.map((photo, i) => (
           <div
             key={i}
-            className="group relative aspect-square overflow-hidden rounded-xl border border-navy/10 bg-cream"
+            className={`group relative aspect-square overflow-hidden rounded-xl border border-navy/10 bg-cream${
+              validationFailedIndices.has(i) ? " ring-2 ring-red-500" : ""
+            }`}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -313,10 +385,37 @@ export default function StepPhotos({
         <button
           type="button"
           onClick={handleSubmit}
-          disabled={!canSubmit}
+          disabled={!canSubmit || validation.status === "polling" || validation.status === "passed"}
           className="rounded-full bg-gold px-8 py-3.5 font-sans text-base font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? (
+          {validation.status === "polling" ? (
+            <span className="inline-flex items-center gap-2">
+              <svg
+                className="h-4 w-4 animate-spin"
+                viewBox="0 0 24 24"
+                fill="none"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+              Checking photo quality&hellip;
+            </span>
+          ) : validation.status === "passed" ? (
+            <span className="inline-flex items-center gap-2">
+              <span>&#10003;</span> Photos look great
+            </span>
+          ) : loading ? (
             <span className="inline-flex items-center gap-2">
               <svg
                 className="h-4 w-4 animate-spin"
@@ -340,7 +439,7 @@ export default function StepPhotos({
               {progress || "Uploading\u2026"}
             </span>
           ) : error ? (
-            "Re-upload all \u2192"
+            "Try again \u2192"
           ) : (
             "Begin our story \u2192"
           )}
