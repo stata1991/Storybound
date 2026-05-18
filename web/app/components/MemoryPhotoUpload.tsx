@@ -414,8 +414,6 @@ const MemoryPhotoUpload = forwardRef<
       }
 
       // Success — start validation polling instead of advancing immediately
-      setSuccessCount(confirmResult.photoCount);
-      setPhotoSlots([createEmptySlot()]);
       setProgress(null);
 
       if (confirmResult.harvestId) {
@@ -457,9 +455,11 @@ const MemoryPhotoUpload = forwardRef<
   // React to validation status changes
   useEffect(() => {
     if (validation.status === "passed") {
+      const count = onCompleteCountRef.current ?? 0;
       setUploading(false);
       setError(null);
-      const count = onCompleteCountRef.current ?? 0;
+      setSuccessCount(count);
+      setPhotoSlots([createEmptySlot()]);
       const t = setTimeout(() => {
         onComplete(count);
       }, 1200);
@@ -468,6 +468,7 @@ const MemoryPhotoUpload = forwardRef<
 
     if (validation.status === "failed") {
       setUploading(false);
+      setSuccessCount(null);
       setError(
         validation.errors && validation.errors.length > 0
           ? "Some photos didn\u2019t quite work. Please swap them and try again."
@@ -478,6 +479,7 @@ const MemoryPhotoUpload = forwardRef<
 
     if (validation.status === "timeout") {
       setUploading(false);
+      setSuccessCount(null);
       setError("Photo check is taking longer than expected \u2014 please try resubmitting.");
       setPollingHarvestId(null);
     }
