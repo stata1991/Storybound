@@ -19,7 +19,7 @@ const HARD_FAIL_LABELS: Record<string, string> = {
 
 type GateResult =
   | { allowed: true; hardPassCount: number; effectivePhotoCount: number }
-  | { allowed: false; reason: string; errors: string[] };
+  | { allowed: false; reason: string; errors: string[]; failedPaths: string[] };
 
 /**
  * Check the most recent photo-validation run for a harvest and decide
@@ -50,6 +50,7 @@ export async function checkPhotoValidationGate(
       reason:
         "Photos haven't been validated yet — wait for validation to complete and try again.",
       errors: [],
+      failedPaths: [],
     };
   }
 
@@ -65,6 +66,7 @@ export async function checkPhotoValidationGate(
       allowed: false,
       reason: "Validation result is malformed.",
       errors: [],
+      failedPaths: [],
     };
   }
 
@@ -76,9 +78,10 @@ export async function checkPhotoValidationGate(
     ? (identityConsistency!.outlier_indices as number[])
     : [];
 
-  // Build per-photo error list (used on any failure path)
-  function buildErrors(): string[] {
-    const out: string[] = [];
+  // Build per-photo error list + corresponding paths (used on any failure path)
+  function buildErrors(): { errors: string[]; failedPaths: string[] } {
+    const errors: string[] = [];
+    const failedPaths: string[] = [];
     for (let i = 0; i < perPhotoVerdicts!.length; i++) {
       const v = perPhotoVerdicts![i];
       const hardFails = Array.isArray(v.hard_fails) ? (v.hard_fails as string[]) : [];
@@ -86,40 +89,49 @@ export async function checkPhotoValidationGate(
         const reasons = hardFails.map(
           (code) => HARD_FAIL_LABELS[code] ?? code
         );
-        out.push(
+        errors.push(
           `Photo ${i + 1}: ${reasons.length > 0 ? reasons.join(" and ") : "failed quality check"}`
         );
+        failedPaths.push(typeof v.photo_path === "string" ? v.photo_path : "");
       }
     }
     for (const i of outlierIndices) {
-      out.push(`Photo ${i + 1}: appears to show a different person`);
+      errors.push(`Photo ${i + 1}: appears to show a different person`);
+      const v = perPhotoVerdicts![i];
+      failedPaths.push(typeof v?.photo_path === "string" ? v.photo_path : "");
     }
-    return out;
+    return { errors, failedPaths };
   }
 
   // Gate checks in priority order (most-actionable first)
   if (hardPassCount < MIN_HARD_PASS_COUNT) {
+    const { errors, failedPaths } = buildErrors();
     return {
       allowed: false,
       reason: `Only ${hardPassCount} of ${MIN_HARD_PASS_COUNT} required photos passed quality check.`,
-      errors: buildErrors(),
+      errors,
+      failedPaths,
     };
   }
 
   if (effectivePhotoCount < MIN_EFFECTIVE_PHOTO_COUNT) {
+    const { errors, failedPaths } = buildErrors();
     return {
       allowed: false,
       reason: `Only ${effectivePhotoCount} of ${MIN_EFFECTIVE_PHOTO_COUNT} required unique photos provided.`,
-      errors: buildErrors(),
+      errors,
+      failedPaths,
     };
   }
 
   if (outlierIndices.length > 0) {
+    const { errors, failedPaths } = buildErrors();
     return {
       allowed: false,
       reason:
         "Some photos appear to show a different person — please make sure all photos are of the same child.",
-      errors: buildErrors(),
+      errors,
+      failedPaths,
     };
   }
 

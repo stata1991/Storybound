@@ -49,5 +49,6 @@ export async function GET(req: NextRequest) {
     status: "failed",
     reason: gate.reason,
     errors: gate.errors,
+    failedPaths: gate.failedPaths,
   });
 }

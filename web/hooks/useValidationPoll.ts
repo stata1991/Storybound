@@ -11,6 +11,7 @@ export interface ValidationPollResult {
   effectivePhotoCount?: number;
   reason?: string;
   errors?: string[];
+  failedPaths?: string[];
 }
 
 export function useValidationPoll(
@@ -72,6 +73,7 @@ export function useValidationPoll(
             status: "failed",
             reason: data.reason,
             errors: data.errors,
+            failedPaths: data.failedPaths,
           });
         }
         // "pending" → continue polling
