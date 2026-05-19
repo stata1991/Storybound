@@ -11,8 +11,10 @@ import GenerateStoryButton, {
   GenerateBookButton,
   RunIllustrationsButton,
   ResetToBookReadyButton,
+  ForceResetStuckButton,
   PrintFlowButtons,
 } from "./GenerateStoryButton";
+import { isHarvestStuck, formatElapsedSince } from "@/lib/harvest-staleness";
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
 
@@ -38,6 +40,7 @@ interface HarvestDetail {
   face_ref_generated: boolean;
   face_ref_path: string | null;
   photos_deleted_at: string | null;
+  updated_at: string;
 }
 
 interface ChildDetail {
@@ -208,7 +211,7 @@ export default async function HarvestDetailPage({
   const { data: harvestRaw } = await admin
     .from("harvests")
     .select(
-      "id, child_id, season, quarter, year, status, window_opens_at, window_closes_at, submitted_at, memory_1, memory_2, photo_count, photo_paths, photo_captions, current_interests, milestone_description, character_archetype, notable_notes, face_ref_generated, face_ref_path, photos_deleted_at"
+      "id, child_id, season, quarter, year, status, window_opens_at, window_closes_at, submitted_at, memory_1, memory_2, photo_count, photo_paths, photo_captions, current_interests, milestone_description, character_archetype, notable_notes, face_ref_generated, face_ref_path, photos_deleted_at, updated_at"
     )
     .eq("id", harvestId)
     .single();
@@ -216,6 +219,8 @@ export default async function HarvestDetailPage({
   if (!harvestRaw) redirect("/admin");
 
   const harvest = harvestRaw as unknown as HarvestDetail;
+  const stuckState = isHarvestStuck(harvest);
+  const elapsedSinceUpdate = formatElapsedSince(harvest.updated_at);
 
   // ── Fetch child + episode + family in parallel ─────────────────────────
 
@@ -633,16 +638,95 @@ export default async function HarvestDetailPage({
               </div>
             )}
             {storyComplete && !illustrationsComplete && (harvest.status === "training" || (harvest.status === "processing" && !!harvest.face_ref_path)) && (
-              <div>
-                <p className="text-sm font-medium text-blue-600">
-                  {harvest.status === "training"
-                    ? "LoRA face training in progress..."
-                    : "Illustrations generating in background..."}
-                </p>
-                <p className="mt-1 text-xs text-gray-500">
-                  This page will update automatically when complete.
-                </p>
-              </div>
+              stuckState === "illustrations_stuck" ? (
+                <div>
+                  <div className="mb-3 rounded bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                    <p className="font-medium">
+                      This may be stuck.
+                    </p>
+                    <p className="mt-1">
+                      Last updated {elapsedSinceUpdate} ago &mdash; illustration
+                      generation typically completes within 10 minutes. The
+                      pipeline may have failed silently. You can retry below.
+                    </p>
+                  </div>
+                  <RunIllustrationsButton harvestId={harvestId} />
+                </div>
+              ) : stuckState === "training_stuck" ? (
+                photosDeletedNoIllustrations ? (
+                  <div>
+                    <div className="mb-3 rounded bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                      <p className="font-medium">
+                        Training appears stuck and photos are deleted.
+                      </p>
+                      <p className="mt-1">
+                        Last updated {elapsedSinceUpdate} ago. No LoRA was
+                        trained and character photos have been deleted &mdash;
+                        this is the skip-LoRA recovery scenario.
+                      </p>
+                      {fluxPipelineActive && (
+                        <p className="mt-1 font-medium">
+                          Skip-LoRA recovery is not available on the FLUX
+                          pipeline. Follow the manual procedure below.
+                        </p>
+                      )}
+                    </div>
+                    {fluxPipelineActive ? (
+                      <div className="rounded border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+                        <p className="font-medium">Manual recovery (SDXL fallback)</p>
+                        <ol className="mt-2 list-decimal space-y-1 pl-5">
+                          <li>
+                            In Vercel → Settings → Environment Variables, set{" "}
+                            <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">
+                              USE_FLUX_PIPELINE
+                            </code>{" "}
+                            to{" "}
+                            <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">
+                              false
+                            </code>
+                          </li>
+                          <li>Redeploy (the change only takes effect after a new deployment)</li>
+                          <li>Return to this page and click &ldquo;Run without face conditioning&rdquo;</li>
+                          <li>
+                            After illustrations complete, restore{" "}
+                            <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">
+                              USE_FLUX_PIPELINE=true
+                            </code>{" "}
+                            and redeploy
+                          </li>
+                        </ol>
+                      </div>
+                    ) : (
+                      <RunIllustrationsButton harvestId={harvestId} skipLora />
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-3 rounded bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                      <p className="font-medium">
+                        Training appears stuck.
+                      </p>
+                      <p className="mt-1">
+                        Last updated {elapsedSinceUpdate} ago &mdash; training
+                        typically completes within 30&ndash;60 minutes. To retry,
+                        reset the harvest state and re-run training.
+                      </p>
+                    </div>
+                    <ForceResetStuckButton harvestId={harvestId} />
+                  </div>
+                )
+              ) : (
+                <div>
+                  <p className="text-sm font-medium text-blue-600">
+                    {harvest.status === "training"
+                      ? "LoRA face training in progress..."
+                      : "Illustrations generating in background..."}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    This page will update automatically when complete.
+                  </p>
+                </div>
+              )
             )}
             {storyComplete && !illustrationsComplete && !photosDeletedNoIllustrations && harvest.status !== "training" && !(harvest.status === "processing" && !!harvest.face_ref_path) && (
               <RunIllustrationsButton harvestId={harvestId} />

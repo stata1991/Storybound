@@ -1586,6 +1586,70 @@ export async function resetToBookReady(
   return { success: true };
 }
 
+/* ─── Force-reset stuck harvest ─────────────────────────────────────────── */
+
+export async function forceResetStuckHarvest(
+  harvestId: string
+): Promise<{ success: true } | { error: string }> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const admin = getAdmin();
+
+  const { data: harvestRaw } = await admin
+    .from("harvests")
+    .select("status, face_ref_path, updated_at")
+    .eq("id", harvestId)
+    .single();
+
+  if (!harvestRaw) return { error: "Harvest not found." };
+
+  const harvest = harvestRaw as unknown as {
+    status: string;
+    face_ref_path: string | null;
+    updated_at: string;
+  };
+
+  // Re-validate stuckness server-side — don't trust client determination
+  const { isHarvestStuck } = await import("@/lib/harvest-staleness");
+  const stuck = isHarvestStuck(harvest);
+
+  if (stuck !== "training_stuck") {
+    return {
+      error: `Harvest is not in a training-stuck state (status: ${harvest.status}, stuckState: ${stuck ?? "none"}).`,
+    };
+  }
+
+  const elapsedMs = Date.now() - new Date(harvest.updated_at).getTime();
+
+  const { error: updateError } = await admin
+    .from("harvests")
+    .update({
+      status: "submitted",
+      face_ref_generated: false,
+      face_ref_path: null,
+    })
+    .eq("id", harvestId);
+
+  if (updateError) {
+    return { error: "Failed to reset harvest." };
+  }
+
+  logEvent({
+    event_type: "harvest.force_reset_stuck",
+    status: "success",
+    harvest_id: harvestId,
+    message: `Force-reset stuck harvest from training state (stuck for ${Math.round(elapsedMs / 60_000)}m)`,
+    metadata: {
+      prior_status: harvest.status,
+      elapsed_ms: elapsedMs,
+      admin_email: (auth as { userId: string }).userId,
+    },
+  });
+
+  return { success: true };
+}
+
 /* ─── Story generation ───────────────────────────────────────────────────── */
 
 // NOTE: This action takes 30-60 seconds (two Claude API calls).

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   generateStory,
   updateHarvestStatus,
+  forceResetStuckHarvest,
   getPrintDetails,
   markSentToPrint,
   markShipped,
@@ -484,6 +485,63 @@ export function ResetToBookReadyButton({
           </>
         ) : (
           "Reset to book ready"
+        )}
+      </button>
+    </div>
+  );
+}
+
+/* ─── Force-reset stuck harvest ──────────────────────────────────────────── */
+
+export function ForceResetStuckButton({
+  harvestId,
+}: {
+  harvestId: string;
+}) {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleClick() {
+    const confirmed = window.confirm(
+      "This will reset the harvest to 'submitted' state, clearing face_ref_generated and face_ref_path. " +
+        "You will need to re-run training from scratch. Continue?"
+    );
+    if (!confirmed) return;
+
+    setLoading(true);
+    setError(null);
+
+    const result = await forceResetStuckHarvest(harvestId);
+
+    setLoading(false);
+
+    if ("error" in result) {
+      setError(result.error);
+      return;
+    }
+
+    router.refresh();
+  }
+
+  return (
+    <div>
+      {error && (
+        <div className="mb-3 rounded bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+      <button
+        onClick={handleClick}
+        disabled={loading}
+        className="inline-flex items-center gap-2 rounded-md bg-orange-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-orange-600 disabled:opacity-60"
+      >
+        {loading ? (
+          <>
+            <Spinner /> Resetting...
+          </>
+        ) : (
+          "Reset and retry training"
         )}
       </button>
     </div>
