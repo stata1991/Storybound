@@ -1314,11 +1314,10 @@ def generate_flux_illustrations(body: dict) -> dict:
 
 @app.function(
     image=flux_image,
-    gpu="L40S",
-    timeout=3600,
+    timeout=120,
     volumes={"/lora-weights": lora_volume},
     secrets=[modal.Secret.from_name("storybound-secrets")],
-    memory=65536,
+    memory=2048,
 )
 @modal.fastapi_endpoint(method="POST")
 def train_face_model_http(request: dict) -> dict:
@@ -1345,11 +1344,10 @@ def train_face_model_http(request: dict) -> dict:
 
 @app.function(
     image=flux_image,
-    gpu="L40S",
-    timeout=600,
+    timeout=120,
     volumes={"/lora-weights": lora_volume},
     secrets=[modal.Secret.from_name("storybound-secrets")],
-    memory=32768,
+    memory=2048,
 )
 @modal.fastapi_endpoint(method="POST")
 def generate_illustrations_http(request: dict) -> dict:
