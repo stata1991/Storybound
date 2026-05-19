@@ -1015,6 +1015,26 @@ def generate_flux_illustrations(body: dict) -> dict:
     print(f"[TIMING] phase=orchestrator_start elapsed=0.0s cumulative=0.0s")
 
     if not face_model_id:
+        print("FATAL: No face_model_id provided")
+        # Fire error webhook so harvest transitions to "failed" instead of zombie-ing
+        callback_url = body.get("callback_url")
+        if callback_url and harvest_id:
+            try:
+                requests.post(
+                    callback_url,
+                    json={"harvest_id": harvest_id, "status": "error",
+                          "message": "No face_model_id provided",
+                          "failed_labels": []},
+                    headers={
+                        "x-webhook-secret": body.get("webhook_secret", ""),
+                        "Content-Type": "application/json",
+                    },
+                    timeout=30,
+                    allow_redirects=True,
+                )
+                print(f"Webhook fired to {callback_url}")
+            except Exception as e:
+                print(f"Webhook failed: {e}")
         return {"status": "error", "message": "No face_model_id provided"}
 
     # ── Build prompt components (verbatim from original) ──
