@@ -54,7 +54,7 @@ export default function StepPhotos({
   const [validationFailedIndices, setValidationFailedIndices] =
     useState<Set<number>>(new Set());
 
-  const validation = useValidationPoll(harvestId);
+  const validation = useValidationPoll(harvestId, "character_only");
 
   const canSubmit = photos.length >= MIN_PHOTOS && !loading;
 

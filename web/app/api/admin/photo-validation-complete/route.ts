@@ -21,12 +21,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const context = body.context ?? "combined";
+
   await logEvent({
     event_type: "photo_validation_run",
     status: body.set?.set_pass ? "info" : "warn",
     harvest_id,
-    message: `Photo validation: ${body.set?.hard_pass_count ?? 0} hard-pass photos, set_pass=${body.set?.set_pass ?? false}`,
+    message: `Photo validation [${context}]: ${body.set?.hard_pass_count ?? 0} hard-pass photos, set_pass=${body.set?.set_pass ?? false}`,
     metadata: {
+      context,
       set: body.set,
       per_photo_verdicts: (body.per_photo ?? []).map(
         (p: { verdict: string; hard_fails: string[]; warnings: string[]; metrics?: Record<string, unknown>; url?: string }) => {

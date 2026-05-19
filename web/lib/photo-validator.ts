@@ -1,5 +1,9 @@
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 
+/* ─── Context label ──────────────────────────────────────────────────────── */
+
+export type ValidationContext = "character_only" | "combined";
+
 /* ─── Gate constants ──────────────────────────────────────────────────────── */
 
 export const MIN_HARD_PASS_COUNT = 5;
@@ -27,7 +31,8 @@ type GateResult =
  * success, or { allowed: false, reason, errors } on failure.
  */
 export async function checkPhotoValidationGate(
-  harvestId: string
+  harvestId: string,
+  context: ValidationContext
 ): Promise<GateResult> {
   const admin = createAdminClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -40,6 +45,7 @@ export async function checkPhotoValidationGate(
     .select("metadata")
     .eq("event_type", "photo_validation_run")
     .eq("harvest_id", harvestId)
+    .filter("metadata->>context", "eq", context)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -158,9 +164,11 @@ export interface PhotoSource {
 export async function dispatchPhotoValidator({
   sources,
   harvestId,
+  context,
 }: {
   sources: PhotoSource[];
   harvestId: string;
+  context: ValidationContext;
 }): Promise<void> {
   if (!process.env.MODAL_VALIDATE_PHOTOS_URL) return;
 
@@ -212,6 +220,7 @@ export async function dispatchPhotoValidator({
           harvest_id: harvestId,
           webhook_url:
             process.env.PHOTO_VALIDATION_COMPLETE_WEBHOOK_URL ?? "",
+          context,
         }),
       });
       console.log("Photo validator: dispatch response", {

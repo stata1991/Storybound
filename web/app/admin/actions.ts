@@ -538,7 +538,7 @@ export async function startFaceTraining(
   console.log(`Total photos for training: ${photosBase64.length} (character + harvest combined)`);
 
   // ── Photo-validation gate ──────────────────────────────────────────────
-  const gate = await checkPhotoValidationGate(harvestId);
+  const gate = await checkPhotoValidationGate(harvestId, "combined");
   if (!gate.allowed) {
     const msg = gate.errors.length > 0
       ? `${gate.reason}\n\nIssues:\n${gate.errors.map((e) => "• " + e).join("\n")}`

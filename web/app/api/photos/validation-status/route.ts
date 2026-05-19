@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { checkPhotoValidationGate } from "@/lib/photo-validator";
+import { checkPhotoValidationGate, type ValidationContext } from "@/lib/photo-validator";
 
 export async function GET(req: NextRequest) {
   const harvestId = req.nextUrl.searchParams.get("harvestId");
   if (!harvestId) {
     return NextResponse.json({ error: "Missing harvestId" }, { status: 400 });
+  }
+
+  const context = req.nextUrl.searchParams.get("context") as ValidationContext | null;
+  if (context !== "character_only" && context !== "combined") {
+    return NextResponse.json({ error: "Invalid or missing context" }, { status: 400 });
   }
 
   // Auth — RLS-scoped client ensures only family-owned harvests are visible
@@ -30,7 +35,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Gate check uses service-role internally
-  const gate = await checkPhotoValidationGate(harvestId);
+  const gate = await checkPhotoValidationGate(harvestId, context);
 
   if (gate.allowed) {
     return NextResponse.json({

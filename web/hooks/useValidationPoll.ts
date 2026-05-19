@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import type { ValidationContext } from "@/lib/photo-validator";
 
 const POLL_INTERVAL = 3_000;
 const POLL_TIMEOUT = 60_000;
@@ -15,7 +16,8 @@ export interface ValidationPollResult {
 }
 
 export function useValidationPoll(
-  harvestId: string | null | undefined
+  harvestId: string | null | undefined,
+  context: ValidationContext | null | undefined
 ): ValidationPollResult {
   const [result, setResult] = useState<ValidationPollResult>({ status: "idle" });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -29,7 +31,7 @@ export function useValidationPoll(
   }, []);
 
   useEffect(() => {
-    if (!harvestId) {
+    if (!harvestId || !context) {
       setResult({ status: "idle" });
       return;
     }
@@ -51,7 +53,7 @@ export function useValidationPoll(
 
       try {
         const res = await fetch(
-          `/api/photos/validation-status?harvestId=${encodeURIComponent(harvestId!)}`
+          `/api/photos/validation-status?harvestId=${encodeURIComponent(harvestId!)}&context=${context}`
         );
         if (!isActive) return;
 
@@ -90,7 +92,7 @@ export function useValidationPoll(
       isActive = false;
       stop();
     };
-  }, [harvestId, stop]);
+  }, [harvestId, context, stop]);
 
   return result;
 }

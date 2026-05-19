@@ -223,7 +223,7 @@ const MemoryPhotoUpload = forwardRef<
   const onCompleteCountRef = useRef<number | null>(null);
   const submittingRef = useRef(false);
 
-  const validation = useValidationPoll(pollingHarvestId);
+  const validation = useValidationPoll(pollingHarvestId, "combined");
 
   const uploadedCount = photoSlots.filter((s) => s.file !== null).length;
 

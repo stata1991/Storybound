@@ -458,6 +458,7 @@ export async function submitHarvestMemory(
       { bucket: "harvest-photos", paths: photoPaths },
     ],
     harvestId: harvest.id,
+    context: "combined",
   });
 
   return { success: true, harvestId: harvest.id };

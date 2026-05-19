@@ -365,6 +365,7 @@ def run_validation(
     harvest_id: str,
     webhook_url: str,
     webhook_secret: str,
+    context: str = "combined",
 ):
     """
     Run validation and POST results to webhook.
@@ -374,6 +375,7 @@ def run_validation(
 
     result = validate_photos.local(urls)
     result["harvest_id"] = harvest_id
+    result["context"] = context
 
     try:
         resp = httpx.post(
@@ -416,12 +418,14 @@ async def validate_photos_http(req: Request):
     urls = body.get("urls", [])
     harvest_id = body.get("harvest_id", "")
     webhook_url = body.get("webhook_url", "")
+    context = body.get("context", "combined")
 
     run_validation.spawn(
         urls=urls,
         harvest_id=harvest_id,
         webhook_url=webhook_url,
         webhook_secret=expected,
+        context=context,
     )
 
     return JSONResponse({"status": "queued"}, status_code=202)

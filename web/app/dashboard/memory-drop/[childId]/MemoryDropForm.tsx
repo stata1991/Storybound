@@ -226,7 +226,7 @@ export default function MemoryDropForm({
   const [pollingHarvestId, setPollingHarvestId] = useState<string | null>(null);
   const submittingRef = useRef(false);
 
-  const validation = useValidationPoll(pollingHarvestId);
+  const validation = useValidationPoll(pollingHarvestId, "combined");
 
   const seasonLabel = SEASON_LABELS[harvest.season] || harvest.season;
   const daysLeft = daysUntil(harvest.window_closes_at);

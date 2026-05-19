@@ -737,7 +737,7 @@ export async function confirmAddedHarvestPhotos(
 
   validatorSources.push({ bucket: "harvest-photos", paths: allPaths });
 
-  await dispatchPhotoValidator({ sources: validatorSources, harvestId });
+  await dispatchPhotoValidator({ sources: validatorSources, harvestId, context: "combined" });
 
   return { success: true, photoCount: allPaths.length, harvestId };
 }
