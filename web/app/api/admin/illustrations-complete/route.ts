@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
   if (!harvestError && harvest?.face_ref_path) {
     try {
       const deleteUrl = process.env.MODAL_FLUX_DELETE_URL!;
-      await fetch(deleteUrl, {
+      const deleteRes = await fetch(deleteUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -90,7 +90,23 @@ export async function POST(req: NextRequest) {
           harvest_id: harvest_id,
         }),
       });
-      console.log(`Face model deleted for harvest ${harvest_id}`);
+      if (deleteRes.ok) {
+        console.log(`Face model deleted for harvest ${harvest_id}`);
+        const { error: timestampError } = await supabase
+          .from("harvests")
+          .update({ photos_deleted_at: new Date().toISOString() })
+          .eq("id", harvest_id);
+        if (timestampError) {
+          console.error(
+            "[illustrations-complete] Failed to write photos_deleted_at:",
+            timestampError
+          );
+        }
+      } else {
+        console.error(
+          `Face model deletion returned ${deleteRes.status} for harvest ${harvest_id}`
+        );
+      }
     } catch (e) {
       console.error("Failed to delete face model:", e);
       // Don't fail the webhook — deletion failure is non-critical
