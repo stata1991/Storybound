@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useValidationPoll } from "@/hooks/useValidationPoll";
 import Link from "next/link";
@@ -75,10 +75,11 @@ interface PhotoSlot {
   caption: string;
   previewUrl: string | null;
   error: string | null;
+  uploadedPath: string | null;
 }
 
 function createEmptySlot(): PhotoSlot {
-  return { file: null, caption: "", previewUrl: null, error: null };
+  return { file: null, caption: "", previewUrl: null, error: null, uploadedPath: null };
 }
 
 /* ─── Photo Slot Component ─────────────────────────────────────────────────── */
@@ -91,6 +92,7 @@ function PhotoSlotCard({
   onRemove,
   onCaptionChange,
   onError,
+  validationFailed,
 }: {
   slot: PhotoSlot;
   index: number;
@@ -99,6 +101,7 @@ function PhotoSlotCard({
   onRemove: (index: number) => void;
   onCaptionChange: (index: number, caption: string) => void;
   onError: (index: number, error: string | null) => void;
+  validationFailed?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -151,7 +154,7 @@ function PhotoSlotCard({
   }
 
   return (
-    <div className="rounded-xl border border-navy/10 bg-cream-warm/30 p-4">
+    <div className={`rounded-xl border border-navy/10 bg-cream-warm/30 p-4${validationFailed ? " ring-2 ring-red-500" : ""}`}>
       <div className="flex items-start gap-4">
         <div className="relative flex-shrink-0">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -230,6 +233,24 @@ export default function MemoryDropForm({
   const closeDate = formatDate(harvest.window_closes_at);
   const uploadedCount = photoSlots.filter((s) => s.file !== null).length;
 
+  const validationFailedIndices = useMemo(() => {
+    if (validation.status !== "failed" || !validation.failedPaths) {
+      return new Set<number>();
+    }
+    const failedFilenames = new Set(
+      validation.failedPaths.filter((p): p is string => Boolean(p))
+    );
+    const indices = new Set<number>();
+    photoSlots.forEach((slot, idx) => {
+      if (!slot.uploadedPath) return;
+      const filename = slot.uploadedPath.split("/").pop();
+      if (filename && failedFilenames.has(filename)) {
+        indices.add(idx);
+      }
+    });
+    return indices;
+  }, [validation.status, validation.failedPaths, photoSlots]);
+
   const canSubmit = uploadedCount >= MIN_PHOTOS && !loading;
 
   /* ─── Photo handling ─────────────────────────────────────────────────────── */
@@ -250,6 +271,7 @@ export default function MemoryDropForm({
         caption: prev[index].caption,
         previewUrl: URL.createObjectURL(file),
         error: null,
+        uploadedPath: null,
       };
       return updated;
     });
@@ -391,6 +413,19 @@ export default function MemoryDropForm({
         submittingRef.current = false;
         return;
       }
+
+      // Write uploaded paths back into slot state for validation highlighting
+      const filledIndices: number[] = [];
+      for (let i = 0; i < photoSlots.length; i++) {
+        if (photoSlots[i].file !== null) filledIndices.push(i);
+      }
+      setPhotoSlots((prev) => {
+        const updated = [...prev];
+        for (let i = 0; i < succeeded.length; i++) {
+          updated[filledIndices[i]] = { ...updated[filledIndices[i]], uploadedPath: succeeded[i].path };
+        }
+        return updated;
+      });
 
       // Step D — submit text fields + verified photo paths atomically
       setProgress("Saving your memory\u2026");
@@ -569,6 +604,7 @@ export default function MemoryDropForm({
                   onRemove={handleRemove}
                   onCaptionChange={handleCaptionChange}
                   onError={handleSlotError}
+                  validationFailed={validationFailedIndices.has(i)}
                 />
               ))}
             </div>
