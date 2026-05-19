@@ -497,7 +497,18 @@ export async function startFaceTraining(
     return { error: "Character photos already deleted. Use skip-LoRA path instead." };
   }
 
-  // Download character photos
+  // ── Photo-validation gate (run before downloads to avoid wasted bandwidth on failure) ──
+  const gate = await checkPhotoValidationGate(harvestId, "combined");
+  if (!gate.allowed) {
+    const msg = gate.errors.length > 0
+      ? `${gate.reason}\n\nIssues:\n${gate.errors.map((e) => "• " + e).join("\n")}`
+      : gate.reason;
+    return { error: msg };
+  }
+
+  const excludedFilenames = new Set(gate.failedPaths.filter(Boolean));
+
+  // Download character photos (skip validator-failed)
   const { data: photoFiles, error: listErr } = await supa.storage
     .from("character-photos")
     .list(childId, { limit: 100 });
@@ -508,7 +519,9 @@ export async function startFaceTraining(
   if (validFiles.length === 0) return { error: "No character photos found for this child." };
 
   const photosBase64: string[] = [];
+  let includedCharacterCount = 0;
   for (const file of validFiles) {
+    if (excludedFilenames.has(file.name)) continue;
     const filePath = `${childId}/${file.name}`;
     const { data: blob, error: dlErr } = await supa.storage
       .from("character-photos")
@@ -516,11 +529,15 @@ export async function startFaceTraining(
     if (dlErr || !blob) return { error: `Failed to download photo: ${dlErr?.message ?? filePath}` };
     const arrayBuf = await blob.arrayBuffer();
     photosBase64.push(Buffer.from(arrayBuf).toString("base64"));
+    includedCharacterCount++;
   }
 
-  // Also fetch harvest photos for stronger LoRA training
+  // Also fetch harvest photos for stronger LoRA training (skip validator-failed)
+  let includedHarvestCount = 0;
   if (harvest.photo_paths && harvest.photo_paths.length > 0) {
     for (const photoPath of harvest.photo_paths) {
+      const filename = photoPath.split("/").pop() ?? "";
+      if (excludedFilenames.has(filename)) continue;
       try {
         const { data } = await supa.storage
           .from("harvest-photos")
@@ -528,6 +545,7 @@ export async function startFaceTraining(
         if (data) {
           const arrayBuffer = await data.arrayBuffer();
           photosBase64.push(Buffer.from(arrayBuffer).toString("base64"));
+          includedHarvestCount++;
         }
       } catch (e) {
         console.error(`Failed to fetch harvest photo: ${e}`);
@@ -537,13 +555,19 @@ export async function startFaceTraining(
 
   console.log(`Total photos for training: ${photosBase64.length} (character + harvest combined)`);
 
-  // ── Photo-validation gate ──────────────────────────────────────────────
-  const gate = await checkPhotoValidationGate(harvestId, "combined");
-  if (!gate.allowed) {
-    const msg = gate.errors.length > 0
-      ? `${gate.reason}\n\nIssues:\n${gate.errors.map((e) => "• " + e).join("\n")}`
-      : gate.reason;
-    return { error: msg };
+  if (excludedFilenames.size > 0) {
+    logEvent({
+      event_type: "training.photos_filtered",
+      status: "info",
+      harvest_id: harvestId,
+      child_id: childId,
+      message: `Excluded ${excludedFilenames.size} validator-failed photo(s) from training set`,
+      metadata: {
+        excluded_filenames: Array.from(excludedFilenames),
+        included_character_count: includedCharacterCount,
+        included_harvest_count: includedHarvestCount,
+      },
+    });
   }
 
   // Build callback URL — Modal will POST here when training completes

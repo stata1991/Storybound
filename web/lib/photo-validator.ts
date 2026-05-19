@@ -22,7 +22,7 @@ const HARD_FAIL_LABELS: Record<string, string> = {
 /* ─── Gate check ──────────────────────────────────────────────────────────── */
 
 type GateResult =
-  | { allowed: true; hardPassCount: number; effectivePhotoCount: number }
+  | { allowed: true; hardPassCount: number; effectivePhotoCount: number; failedPaths: string[] }
   | { allowed: false; reason: string; errors: string[]; failedPaths: string[] };
 
 /**
@@ -141,7 +141,8 @@ export async function checkPhotoValidationGate(
     };
   }
 
-  return { allowed: true, hardPassCount, effectivePhotoCount };
+  const { failedPaths } = buildErrors();
+  return { allowed: true, hardPassCount, effectivePhotoCount, failedPaths };
 }
 
 /* ─── Dispatch helper ─────────────────────────────────────────────────────── */
