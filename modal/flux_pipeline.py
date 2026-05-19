@@ -784,7 +784,7 @@ def generate_single_image(payload: dict) -> dict:
             str(tmp_dir),
             weight_name="adapter_model_remapped.safetensors"
         )
-    pipe.fuse_lora(lora_scale=0.85)
+    pipe.fuse_lora(lora_scale=0.9)
     print(f'{label}: FLUX LoRA loaded and fused')
     print(f'[TIMING] label="{label}" phase=lora_load elapsed={_time.perf_counter()-_t_lora:.1f}s cumulative={_cum():.1f}s')
 
