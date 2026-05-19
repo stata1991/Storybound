@@ -1001,6 +1001,14 @@ export async function triggerIllustrationPipeline(
     faceRefPath: harvest.face_ref_path,
   });
 
+  // ── Guard: FLUX pipeline does not support skip-lora ────────────────────────
+  if (forceSkipLora && USE_FLUX) {
+    return {
+      error:
+        "Skip-LoRA is not supported on the FLUX pipeline. Set USE_FLUX_PIPELINE=false, redeploy, then retry.",
+    };
+  }
+
   // ── Build character description ──────────────────────────────────────────
 
   let characterDescription = "";
