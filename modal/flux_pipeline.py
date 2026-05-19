@@ -1120,14 +1120,14 @@ def generate_flux_illustrations(body: dict) -> dict:
     cover_clip = (
         f"{gender_clip_reinforcement}"
         f"{age_prefix}, sks child, "
-        f"realistic proportions, portrait, children's photo book"
+        f"realistic proportions, portrait, head and shoulders framing, children's photo book"
     )
     cover_t5 = (
         f"{cover_avoid_str}"
         f"{gender_t5_reinforcement}"
         f"{age_prefix}, sks child, "
         f"{skin_tone + ', ' if skin_tone else ''}"
-        f"portrait, magical storybook world, "
+        f"portrait, head and shoulders framing, magical storybook world, "
         f"looking at viewer, warm smile"
         f"{STYLE_SUFFIX}"
     )
@@ -1154,7 +1154,7 @@ def generate_flux_illustrations(body: dict) -> dict:
         scene_clip = (
             f"{gender_clip_reinforcement}"
             f"{age_prefix}, sks child, "
-            f"realistic proportions, foreground, facing camera, "
+            f"realistic proportions, head and shoulders framing, foreground, facing camera, "
             f"{scene_desc}, children's photo book"
         )
         scene_t5 = (
@@ -1162,7 +1162,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             f"{gender_t5_reinforcement}"
             f"{age_prefix}, sks child, "
             f"{skin_tone + ', ' if skin_tone else ''}"
-            f"foreground, facing camera, "
+            f"foreground, head and shoulders to waist-up framing, facing camera, "
             f"{scene_desc}"
             f"{STYLE_SUFFIX}"
         )
