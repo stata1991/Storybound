@@ -1081,16 +1081,18 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     # Style anchor — applied to EVERY scene and cover without exception
     STYLE_SUFFIX = (
-        ", children's picture book illustration, gouache painting style, "
-        "soft warm colors, consistent art style, flat lighting, "
-        "2D illustrated, painterly, "
-        "realistic head-to-body ratio, natural proportions"
+        ", cinematic children's book photography, warm golden hour lighting, "
+        "soft natural light, dreamy magical atmosphere, "
+        "shallow depth of field, soft bokeh background, "
+        "professional portrait photography, magical realism, "
+        "rich saturated colors, whimsical storybook scene, "
+        "realistic proportions"
     )
 
     NEGATIVE_PROMPT = (
         gender_negative +
-        "photorealistic, hyperrealistic, photograph, "
-        "realistic photography, photo, camera, DSLR, "
+        "illustration, illustrated, drawing, cartoon, anime, "
+        "painting, gouache, painterly, 2D illustrated, flat shading, "
         "3D render, CGI, Pixar, Disney 3D, animated film, "
         "digital painting, oil painting, watercolor, "
         "disproportionate head, oversized head, chibi, bobblehead, "
@@ -1120,7 +1122,7 @@ def generate_flux_illustrations(body: dict) -> dict:
     cover_clip = (
         f"{gender_clip_reinforcement}"
         f"{age_prefix}, sks child, "
-        f"realistic proportions, portrait, head and shoulders framing, children's photo book"
+        f"realistic proportions, portrait, head and shoulders framing, cinematic children's book photo, magical storybook scene"
     )
     cover_t5 = (
         f"{cover_avoid_str}"
@@ -1155,7 +1157,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             f"{gender_clip_reinforcement}"
             f"{age_prefix}, sks child, "
             f"realistic proportions, head and shoulders framing, foreground, facing camera, "
-            f"{scene_desc}, children's photo book"
+            f"{scene_desc}, cinematic children's book photo, magical storybook scene"
         )
         scene_t5 = (
             f"{avoid_str}"
