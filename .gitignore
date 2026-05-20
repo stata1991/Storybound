@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 scripts/loadtest-sessions.json
 scripts/loadtest-results-*.txt
+.vercel

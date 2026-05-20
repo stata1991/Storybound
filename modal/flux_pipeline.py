@@ -36,7 +36,7 @@ flux_image = (
     .pip_install([
         "torch==2.5.1",
         "torchvision==0.20.1",
-        "diffusers>=0.30.0",
+        "diffusers>=0.31.0",
         "transformers>=4.44.0",
         "accelerate>=0.33.0",
         "peft>=0.12.0",
@@ -819,6 +819,8 @@ def generate_single_image(payload: dict) -> dict:
     guidance_scale = payload["guidance_scale"]
     seed = payload["seed"]
     enable_retry = payload["enable_retry"]
+    negative_prompt = payload.get("negative_prompt", "")
+    true_cfg_scale = payload.get("true_cfg_scale", 1.0)
 
     print(f'{label}: CLIP prompt ({len(clip_prompt.split())} words): {clip_prompt[:80]}...')
     print(f'{label}: T5 prompt ({len(t5_prompt.split())} words): {t5_prompt[:80]}...')
@@ -827,10 +829,12 @@ def generate_single_image(payload: dict) -> dict:
     candidates = pipe(
         prompt=clip_prompt,
         prompt_2=t5_prompt,
+        negative_prompt=negative_prompt,
         height=height,
         width=width,
         num_inference_steps=35,
         guidance_scale=guidance_scale,
+        true_cfg_scale=true_cfg_scale,
         num_images_per_prompt=5,
         generator=torch.Generator("cuda").manual_seed(seed),
     ).images
@@ -891,10 +895,12 @@ def generate_single_image(payload: dict) -> dict:
         candidates_retry = pipe(
             prompt=clip_prompt,
             prompt_2=t5_prompt,
+            negative_prompt=negative_prompt,
             height=height,
             width=width,
             num_inference_steps=35,
             guidance_scale=guidance_scale,
+            true_cfg_scale=true_cfg_scale,
             num_images_per_prompt=5,
             generator=torch.Generator("cuda").manual_seed(retry_seed),
         ).images
@@ -1137,7 +1143,8 @@ def generate_flux_illustrations(body: dict) -> dict:
         "face_model_id": face_model_id,
         "clip_prompt": cover_clip,
         "t5_prompt": cover_t5,
-        "negative_prompt": NEGATIVE_PROMPT,
+        "negative_prompt": PEOPLE_SUPPRESSION + NEGATIVE_PROMPT,
+        "true_cfg_scale": 1.5,
         "height": 1024,
         "width": 1024,
         "guidance_scale": 3.5,
@@ -1173,7 +1180,8 @@ def generate_flux_illustrations(body: dict) -> dict:
             "face_model_id": face_model_id,
             "clip_prompt": scene_clip,
             "t5_prompt": scene_t5,
-            "negative_prompt": NEGATIVE_PROMPT,
+            "negative_prompt": scene_negative,
+            "true_cfg_scale": 1.5,
             "height": 768,
             "width": 768,
             "guidance_scale": 4.5,
