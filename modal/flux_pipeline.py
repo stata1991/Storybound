@@ -220,6 +220,7 @@ def train_flux_lora(
     harvest_id: str,
     callback_url: str,
     webhook_secret: str,
+    pronouns: str = "they_them",
 ):
     """
     Train a FLUX.1-dev LoRA on parent-uploaded photos.
@@ -301,6 +302,40 @@ def train_flux_lora(
         raise RuntimeError("No valid photos after preprocessing")
 
     print(f"Preprocessed {len(pil_images)} photos at 1024x1024")
+
+    # ── Bindi pre-pass: filter bindi photos from training set for boys ──
+    if pronouns == "boy":
+        # InsightFace needed early for bindi detection; init here, reused by STEP 2
+        from insightface.app import FaceAnalysis as _FA
+        _bindi_app = _FA(
+            name="buffalo_l",
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+        )
+        _bindi_app.prepare(ctx_id=0, det_size=(640, 640))
+
+        bindi_indices = set()
+        for i, img in enumerate(pil_images):
+            img_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            faces = _bindi_app.get(img_bgr)
+            if faces:
+                face = max(faces,
+                    key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                has_bindi, _ = has_forehead_mark(img_bgr, face.bbox)
+                if has_bindi:
+                    bindi_indices.add(i)
+                    print(f"Photo {i}: bindi detected, will be filtered (pronouns=boy)")
+
+        if bindi_indices:
+            surviving = len(pil_images) - len(bindi_indices)
+            if surviving == 0:
+                print(f"training.bindi_filter_fallback all_{len(bindi_indices)}_photos_had_bindi total={len(pil_images)} — keeping all photos")
+            else:
+                print(f"training.bindi_photos_filtered count={len(bindi_indices)} total={len(pil_images)} surviving={surviving} pronouns=boy")
+                if surviving < 5:
+                    print(f"training.bindi_filter_warning surviving={surviving} below_floor=5 proceeding_anyway")
+                pil_images = [img for i, img in enumerate(pil_images) if i not in bindi_indices]
+
+        del _bindi_app
 
     # ── STEP 2: Extract face embedding via InsightFace ──
     face_app = FaceAnalysis(
@@ -1339,6 +1374,7 @@ def train_face_model_http(request: dict) -> dict:
     harvest_id = request.get("harvest_id")
     callback_url = request.get("callback_url")
     webhook_secret = os.environ.get("MODAL_WEBHOOK_SECRET", "")
+    pronouns = request.get("pronouns", "they_them")
 
     # Spawn training as async job
     train_flux_lora.spawn(
@@ -1347,6 +1383,7 @@ def train_face_model_http(request: dict) -> dict:
         harvest_id=harvest_id,
         callback_url=callback_url,
         webhook_secret=webhook_secret,
+        pronouns=pronouns,
     )
 
     return {"status": "training_started", "face_model_id": face_model_id}

@@ -610,6 +610,7 @@ export async function startFaceTraining(
         callback_url: callbackUrl,
         child_id: childId,
         harvest_id: harvestId,
+        pronouns: child.pronouns ?? "they_them",
       }),
       signal: AbortSignal.timeout(120_000), // 120s — Modal cold starts can take 60-90s
     });
