@@ -73,6 +73,7 @@ def validate_photos(urls: list[str]) -> dict:
     """
     import asyncio
     import io
+    from datetime import datetime
 
     import cv2
     import httpx
@@ -130,13 +131,27 @@ def validate_photos(urls: list[str]) -> dict:
                     "laplacian_variance": 0.0,
                     "short_side_px": 0,
                     "embedding_present": False,
+                    "exif_taken_at": None,
                 },
             })
             continue
 
         # Decode image
         try:
-            pil_img = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
+            pil_img_raw = Image.open(io.BytesIO(photo_bytes))
+
+            # Extract EXIF DateTimeOriginal (tag 36867), fallback DateTime (306)
+            exif_taken_at: str | None = None
+            try:
+                exif_data = pil_img_raw.getexif()
+                raw_dt = exif_data.get(36867) or exif_data.get(306)
+                if raw_dt:
+                    parsed = datetime.strptime(raw_dt, "%Y:%m:%d %H:%M:%S")
+                    exif_taken_at = parsed.isoformat()
+            except Exception:
+                pass
+
+            pil_img = pil_img_raw.convert("RGB")
             img_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         except Exception:
             per_photo.append({
@@ -152,6 +167,7 @@ def validate_photos(urls: list[str]) -> dict:
                     "laplacian_variance": 0.0,
                     "short_side_px": 0,
                     "embedding_present": False,
+                    "exif_taken_at": None,
                 },
             })
             continue
@@ -230,6 +246,7 @@ def validate_photos(urls: list[str]) -> dict:
                 "laplacian_variance": laplacian_var,
                 "short_side_px": short_side_px,
                 "embedding_present": embedding_present,
+                "exif_taken_at": exif_taken_at,
             },
         })
 
@@ -333,6 +350,23 @@ def validate_photos(urls: list[str]) -> dict:
             members for members in components.values() if len(members) > 1
         ]
 
+    # ── EXIF time spread ─────────────────────────────────────────────
+    exif_dates: list[datetime] = []
+    for p in per_photo:
+        taken_at = p["metrics"].get("exif_taken_at")
+        if taken_at is not None:
+            exif_dates.append(datetime.fromisoformat(taken_at))
+
+    total_photos = len(per_photo)
+    exif_coverage_pct = (
+        round(len(exif_dates) / total_photos * 100, 1)
+        if total_photos > 0
+        else 0.0
+    )
+    photo_time_spread_days: int | None = None
+    if exif_coverage_pct >= 70.0 and len(exif_dates) >= 2:
+        photo_time_spread_days = (max(exif_dates) - min(exif_dates)).days
+
     timing_seconds = round(time.monotonic() - t_start, 3)
 
     return {
@@ -347,6 +381,8 @@ def validate_photos(urls: list[str]) -> dict:
                 "outlier_indices": outlier_indices,
                 "outlier_threshold": outlier_threshold,
             },
+            "exif_coverage_pct": exif_coverage_pct,
+            "photo_time_spread_days": photo_time_spread_days,
         },
         "timing_seconds": timing_seconds,
     }

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useValidationPoll } from "@/hooks/useValidationPoll";
+import { readPhotoTakenAt, computeSpreadDays } from "@/lib/exif-spread";
 import {
   createCharacterPhotoUploadUrls,
   confirmCharacterPhotosUploaded,
@@ -53,6 +54,8 @@ export default function StepPhotos({
   const [harvestId, setHarvestId] = useState<string | null>(null);
   const [validationFailedIndices, setValidationFailedIndices] =
     useState<Set<number>>(new Set());
+  const [spreadWarning, setSpreadWarning] = useState(false);
+  const exifCacheRef = useRef<WeakMap<File, Date | null>>(new WeakMap());
 
   const validation = useValidationPoll(harvestId, "character_only");
 
@@ -245,6 +248,35 @@ export default function StepPhotos({
   }, [validation.status, validation.errors, validation.reason,
       onComplete, photos.length]);
 
+  // ── EXIF time spread check (non-blocking) ────────────────────────────
+  useEffect(() => {
+    if (photos.length < 2) {
+      setSpreadWarning(false);
+      return;
+    }
+
+    let cancelled = false;
+    const cache = exifCacheRef.current;
+
+    async function checkSpread() {
+      const dates = await Promise.all(
+        photos.map(async (p) => {
+          const cached = cache.get(p.file);
+          if (cached !== undefined) return cached;
+          const date = await readPhotoTakenAt(p.file);
+          cache.set(p.file, date);
+          return date;
+        })
+      );
+      if (cancelled) return;
+      const { spread_days } = computeSpreadDays(dates);
+      setSpreadWarning(spread_days !== null && spread_days > 180);
+    }
+
+    checkSpread();
+    return () => { cancelled = true; };
+  }, [photos]);
+
   const displayName =
     childName.charAt(0).toUpperCase() + childName.slice(1);
 
@@ -258,7 +290,7 @@ export default function StepPhotos({
         {displayName} will shine in their story.
       </p>
 
-      <div className="mb-5 grid grid-cols-2 sm:grid-cols-5 gap-2">
+      <div className="mb-5 grid grid-cols-2 sm:grid-cols-3 gap-2">
         <div className="rounded-xl border-2 border-green-400/50 bg-green-50/50 px-2 py-2.5 text-center">
           <span className="block text-xl leading-none">😊</span>
           <p className="mt-1.5 font-sans text-[11px] font-semibold text-green-700">Just their face</p>
@@ -284,11 +316,26 @@ export default function StepPhotos({
           <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Sharp and bright</p>
           <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">Good lighting, no blur</p>
         </div>
+        <div className="rounded-xl border border-navy/8 bg-navy/[0.02] px-2 py-2.5 text-center">
+          <span className="block text-xl leading-none">📅</span>
+          <p className="mt-1.5 font-sans text-[11px] font-semibold text-navy/50">Same season</p>
+          <p className="mt-0.5 font-sans text-[10px] leading-tight text-navy/35">All from the last ~6 months</p>
+        </div>
       </div>
 
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
           <p className="font-sans text-sm text-red-700">{error}</p>
+        </div>
+      )}
+
+      {spreadWarning && !error && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="font-sans text-sm text-amber-700">
+            Heads up &mdash; these photos span more than 6 months. For best
+            results, try photos taken within the same 6-month window. You can
+            still continue.
+          </p>
         </div>
       )}
 

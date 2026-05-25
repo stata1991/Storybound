@@ -274,7 +274,7 @@ export default async function HarvestDetailPage({
     .maybeSingle();
 
   const validation = validationRow as {
-    metadata: { set?: { set_pass?: boolean; effective_photo_count?: number; near_duplicate_clusters?: number[][] } };
+    metadata: { context?: string; set?: { set_pass?: boolean; effective_photo_count?: number; near_duplicate_clusters?: number[][]; exif_coverage_pct?: number; photo_time_spread_days?: number | null } };
     created_at: string;
   } | null;
 
@@ -1015,6 +1015,35 @@ export default async function HarvestDetailPage({
                     <span className="text-gray-700">
                       {validation.metadata?.set?.near_duplicate_clusters?.length ?? 0}
                     </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Photo time spread</span>
+                    {(() => {
+                      const spread = validation.metadata?.set?.photo_time_spread_days;
+                      const coverage = validation.metadata?.set?.exif_coverage_pct ?? 0;
+                      const isTraining = validation.metadata?.context === "character_only";
+                      if (spread == null) {
+                        return (
+                          <span className="text-gray-400">
+                            N/A ({coverage}% EXIF coverage)
+                          </span>
+                        );
+                      }
+                      const label =
+                        spread < 60
+                          ? `${spread} days`
+                          : spread <= 365
+                            ? `${spread} days (~${Math.round(spread / 30)} months)`
+                            : `${spread} days (~${(spread / 365).toFixed(1)} years)`;
+                      const color = isTraining
+                        ? spread <= 180
+                          ? "text-green-700"
+                          : spread <= 365
+                            ? "text-amber-600"
+                            : "text-red-600"
+                        : "text-gray-700";
+                      return <span className={color}>{label}</span>;
+                    })()}
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-400">Validated</span>
