@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
     child_id?: string;
     face_model_id: string;
     status: string;
+    message?: string;
   };
 
   if (!body.harvest_id || !body.face_model_id) {
@@ -27,19 +28,30 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (body.status !== "ok") {
-    return NextResponse.json(
-      { error: `Training failed with status: ${body.status}` },
-      { status: 400 }
-    );
-  }
-
-  // Store face_model_id on harvest (startFaceTraining fires before training completes)
   const admin = createAdminClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { autoRefreshToken: false, persistSession: false } }
   );
+
+  // ── Training failed — reset harvest so it can be retried ──
+  if (body.status !== "ok") {
+    console.error(
+      `Training failed for harvest ${body.harvest_id}: ${body.message ?? body.status}`
+    );
+    await admin
+      .from("harvests")
+      .update({ status: "processing" })
+      .eq("id", body.harvest_id);
+    // Return 200 — Modal must not retry this callback
+    return NextResponse.json({
+      success: false,
+      reason: "training_error",
+      message: body.message ?? `Training failed with status: ${body.status}`,
+    });
+  }
+
+  // ── Training succeeded — store model ID and generate illustrations ──
   await admin
     .from("harvests")
     .update({ face_ref_path: body.face_model_id })
