@@ -304,7 +304,7 @@ def train_flux_lora(
     print(f"Preprocessed {len(pil_images)} photos at 1024x1024")
 
     # ── Bindi pre-pass: filter bindi photos from training set for boys ──
-    if pronouns == "boy":
+    if pronouns in ("he_him", "boy"):
         # InsightFace needed early for bindi detection; init here, reused by STEP 2
         from insightface.app import FaceAnalysis as _FA
         _bindi_app = _FA(
