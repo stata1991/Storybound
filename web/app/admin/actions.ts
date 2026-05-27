@@ -1702,6 +1702,17 @@ interface StoryStyle {
 }
 
 const STORY_STYLE: Record<string, StoryStyle> = {
+  "1-2": {
+    wordsPerScene: 12,
+    sentenceLength: "1-5 words per sentence, sometimes just one",
+    vocabulary:
+      "single nouns, sound words, body parts, everyday actions a toddler recognizes",
+    tone: "musical, rhyming, repetitive — like a lullaby or chant",
+    tension: "none",
+    emotionalArc: "no arc — comfort, rhythm, or sensory wonder is enough",
+    catchphrase: true,
+    exampleSentence: 'Soft cat. "Meow!" Sleepy cat curls up.',
+  },
   "3-4": {
     wordsPerScene: 30,
     sentenceLength: "very short — max 8 words per sentence",
@@ -1742,20 +1753,23 @@ const STORY_STYLE: Record<string, StoryStyle> = {
 };
 
 // Scene counts are intentionally age-scaled. Total illustrations = SCENE_COUNT + 1 (cover).
-// Age 3-4: 8 scenes + 1 cover = 9 images. Age 5-6: 8+1=9. Age 7-8: 10+1=11.
+// Age 1-2: 8 scenes + 1 cover = 9 images (board-book). Age 3-4: 8+1=9. Age 5-6: 8+1=9. Age 7-8: 10+1=11.
 const SCENE_COUNT: Record<string, number> = {
+  "1-2": 8,
   "3-4": 8,
   "5-6": 8,
   "7-8": 10,
 };
 
-function getStoryStyle(age: number): { style: StoryStyle; sceneCount: number; band: string } {
-  const clamped = Math.max(3, Math.min(8, age));
+function getStoryStyle(age: number): { style: StoryStyle; sceneCount: number; band: string; isBoardBook: boolean } {
+  const clamped = Math.min(8, age);
+  const isBoardBook = clamped <= 2;
   let band: string;
-  if (clamped <= 4) band = "3-4";
+  if (clamped <= 2) band = "1-2";
+  else if (clamped <= 4) band = "3-4";
   else if (clamped <= 6) band = "5-6";
   else band = "7-8";
-  return { style: STORY_STYLE[band], sceneCount: SCENE_COUNT[band], band };
+  return { style: STORY_STYLE[band], sceneCount: SCENE_COUNT[band], band, isBoardBook };
 }
 
 interface ChildStoryDbRow {
@@ -2064,7 +2078,8 @@ function buildEpisodePrompt(
   storyBible: Record<string, unknown>,
   harvest: HarvestStoryDbRow,
   age: number,
-  previousEpisodes: PreviousEpisodeSeed[]
+  previousEpisodes: PreviousEpisodeSeed[],
+  isBoardBook: boolean
 ): { system: string; user: string } {
   const episodeNumber = harvest.quarter;
   const isEp4 = episodeNumber === 4;
@@ -2101,10 +2116,12 @@ function buildEpisodePrompt(
         }
       }
     }
-    if (isEp4) {
-      continuitySection += "\n\nEpisode 4 is the BIRTHDAY EPISODE — the emotional climax. You MUST reference at least one key moment or callback-worthy moment from each previous episode. Weave them into the resolution as a celebration of the hero's growth this year.";
-    } else {
-      continuitySection += "\n\nWeave in at least one reference to a previous episode's unresolved thread or callback moment. Show growth — the hero should feel like they're building on what they learned before.";
+    if (!isBoardBook) {
+      if (isEp4) {
+        continuitySection += "\n\nEpisode 4 is the BIRTHDAY EPISODE — the emotional climax. You MUST reference at least one key moment or callback-worthy moment from each previous episode. Weave them into the resolution as a celebration of the hero's growth this year.";
+      } else {
+        continuitySection += "\n\nWeave in at least one reference to a previous episode's unresolved thread or callback moment. Show growth — the hero should feel like they're building on what they learned before.";
+      }
     }
   }
 
@@ -2121,6 +2138,52 @@ function buildEpisodePrompt(
     : "see character block";
   const personalityDesc = heroTraits?.join(", ") ?? "see character block";
 
+  // ── Board-book conditional prompt sections ──────────────────────────────
+
+  const arcSection = isBoardBook
+    ? `This is a board-book — there is no required arc. The story may be a concept book (colors, sounds, objects), a comfort routine, or a sensory exploration. Structure is whatever rhythm or pattern fits.
+
+Every story must use a clear rhyme pattern OR a clear repetition pattern (same phrase, sound, or sentence structure repeated across multiple scenes). Pick whichever fits the topic — do not mix. The pattern is what makes this a board-book.`
+    : `Emotional arc for this age: ${style.emotionalArc}
+The story must follow this arc. Do not skip the middle — the resolution only lands if the struggle is real first.`;
+
+  const beatSection = isBoardBook
+    ? ""
+    : `
+Emotional beat structure (MANDATORY):
+Every scene MUST be labeled with exactly one emotional beat. The valid beats are:
+  setup, escalation, setback, turning_point, resolution, celebration, teaser
+
+Rules for beat assignment:
+1. The story MUST contain at least 2 CONSECUTIVE scenes labeled "escalation" or "setback" BEFORE any scene labeled "turning_point". The child must try and fail, or face increasing difficulty, at least twice before the breakthrough. A single struggle scene is NOT enough — the arc feels thin without sustained tension.
+2. Every story must include at least one "setback" beat — a moment where the child's attempt genuinely does not work and they must regroup.
+3. The "turning_point" must come AFTER the escalation/setback sequence, never before it.
+4. The final scene should be "celebration" or "teaser", not "resolution" — give the triumph room to breathe.
+5. Each beat must be output in the scene's JSON object as a "beat" field (see output schema below).
+
+Example beat sequence for an 8-scene story:
+  setup → escalation → setback → escalation → turning_point → resolution → celebration → teaser
+Another valid sequence:
+  setup → setup → escalation → escalation → setback → turning_point → resolution → celebration`;
+
+  const finalPageSection = isBoardBook
+    ? `"final_page": "A soft closing line (1 sentence). Match the rhythm of the book — if the book rhymes, the closing rhymes. If it uses repetition, the closing echoes the pattern one last time. Must feel like a gentle goodnight or a cozy full-stop, not a teaser. Examples: 'Soft cat, sleepy cat. Goodnight, ${heroName}.' / 'One more puddle. One more splash. One more laugh — and home.' No new characters, no cliffhangers, no sequel hooks."`
+    : `"final_page": "End-credits teaser (2-3 sentences). Think movie post-credits scene, not a fade to black. MUST include ALL three elements: HARD RULE: The final_page must not introduce ANY named entity (character, place, object, organization, event) that has not appeared in this story or in the Story Bible. Hallucinated proper nouns are a hard failure of this beat. When in doubt, use atmospheric language over invented names. (1) CALLBACK — reference a specific object, place, or detail from THIS story (e.g. the glowing seed, the cracked compass, the melody the child hummed). (2) USE WHAT EXISTS — gesture toward an upcoming adventure using ONLY elements already established in THIS story OR in the Story Bible. Permitted sources: the companion, supporting_characters, world.key_locations, or world details from the Story Bible. If a key_location exists in the Story Bible that has not yet been visited in this story, you may name and tease it. Otherwise, use atmospheric language tied to ${nextSeason} energy without naming unestablished entities. (3) TONE — warm and excited, matching ${nextSeason} energy (${nextSeason === "summer" ? "long golden days, fireflies, warm nights" : nextSeason === "fall" ? "crunchy leaves, cozy sweaters, harvest moon" : nextSeason === "winter" ? "first snowfall, warm cocoa, glowing windows" : "new blossoms, puddle-jumping, birdsong"}). BAD example: 'Where will ${heroName} go next?' (too vague, no hook) BAD example: 'In Splashing Springs, Captain Marina swam toward the storm.' (invents both a location AND a character not in this story or Story Bible) GOOD example: 'That night, the glowing seed from the garden began to hum. By morning it had sprouted a single silver leaf — and Pebble swore it was pointing toward the mountains. ${heroName} pressed ${child.pronouns === "he/him" ? "his" : child.pronouns === "she/her" ? "her" : "their"} nose to the window. The ${nextSeason} air smelled like pine and promises.' GOOD example pattern: callback to a story object + companion's reaction + atmospheric ${nextSeason} closer. No new proper nouns. REMINDER: No invented proper nouns. If it isn't in this story's scenes or in the Story Bible (world.key_locations, supporting_characters, companion), you may not name it. Use atmospheric language."`;
+
+  const storySeedsSection = isBoardBook
+    ? `"story_seeds": {
+    "key_moment": "",
+    "emotional_growth": "",
+    "unresolved_thread": "",
+    "callback_moment": ""
+  }`
+    : `"story_seeds": {
+    "key_moment": "The single most vivid, emotionally resonant scene in this episode (1 sentence — specific enough to callback later)",
+    "emotional_growth": "What the hero learned or how they grew (1 sentence — e.g., 'learned that being scared doesn't mean you can't be brave')",
+    "unresolved_thread": "A small loose end or curiosity that a future episode could pick up (1 sentence — e.g., 'the glowing seed they planted hasn't sprouted yet')",
+    "callback_moment": "A specific visual or dialogue moment worth referencing in a future episode (1 sentence — e.g., 'when Aria whispered to the firefly and it blinked three times')"
+  }`;
+
   return {
     system: `You are writing a personalized children's storybook for ${heroName}, age ${age}.
 
@@ -2132,8 +2195,7 @@ Writing style rules — follow these exactly:
 - Tension level: ${style.tension}
 ${style.catchphrase ? `- Give ${heroName} a short personal catchphrase they repeat at exciting moments (1 line, invented for this child based on their traits)` : "- No catchphrase needed at this age"}
 
-Emotional arc for this age: ${style.emotionalArc}
-The story must follow this arc. Do not skip the middle — the resolution only lands if the struggle is real first.
+${arcSection}
 
 Example of the correct sentence style for this age:
 "${style.exampleSentence}"
@@ -2149,37 +2211,24 @@ CRITICAL: Character consistency
 You are given a detailed character reference block below. Every physical description, personality trait, and speech pattern MUST match exactly. Do not invent new traits, change appearance details, or contradict the Story Bible. The illustrations will be generated from your scene descriptions, so visual accuracy is essential.
 
 Episode rules:
-- Generate exactly ${sceneCount} scenes. Each scene should advance the story. Do not pad or repeat. End with a satisfying resolution in the final scene.
+- Generate exactly ${sceneCount} scenes. Each scene should advance the story. Do not pad or repeat. End with a ${isBoardBook ? "gentle close" : "satisfying resolution"} in the final scene.
 - Target ~${totalWordTarget} words total (${sceneCount} scenes × ~${style.wordsPerScene} words each)
 - Each scene gets one illustration prompt (separate field)
 - Episode is self-contained (new reader can follow it)
-- Episode threads the seasonal arc (existing reader feels continuity)
-${isEp4 ? "- Episode 4 must reference specific moments from Episodes 1, 2, and 3" : ""}
+${isBoardBook ? "" : "- Episode threads the seasonal arc (existing reader feels continuity)"}
+${isEp4 && !isBoardBook ? "- Episode 4 must reference specific moments from Episodes 1, 2, and 3" : ""}
 
-Story depth requirements:
+${isBoardBook ? `Sensory details:
+- Sensory details: sounds, textures, smells
+- The companion animal reacting emotionally to the child` : `Story depth requirements:
 - Child's interests: ${child.interests.join(", ")}
 - Current milestone: ${safeMilestone}
 - Interest as mechanism (CRITICAL): The child's specific interest or skill (${child.interests.join(", ")}) must be the DIRECT REASON they solve the central problem. A character who did NOT have this interest could NOT have solved it the same way. The interest is not backdrop or setting — it is the tool, the insight, or the unique knowledge that unlocks the turning_point. Example: a child who loves cooking doesn't just have an adventure in a kitchen — they recognize that a rising dough is blocking a door and know to cool it down because they understand how yeast works.
 - Acknowledgment scene: At least one scene must include another character (the companion, a side character, or a narrator aside) explicitly recognizing the child's unique skill. Example: '"Nobody else would have known that," whispered Pebble, eyes wide.' This moment should land in a "resolution" or "celebration" beat.
 - A memorable line the child will want to repeat
 - Sensory details: sounds, textures, smells
-- The companion animal reacting emotionally to the child
-
-Emotional beat structure (MANDATORY):
-Every scene MUST be labeled with exactly one emotional beat. The valid beats are:
-  setup, escalation, setback, turning_point, resolution, celebration, teaser
-
-Rules for beat assignment:
-1. The story MUST contain at least 2 CONSECUTIVE scenes labeled "escalation" or "setback" BEFORE any scene labeled "turning_point". The child must try and fail, or face increasing difficulty, at least twice before the breakthrough. A single struggle scene is NOT enough — the arc feels thin without sustained tension.
-2. Every story must include at least one "setback" beat — a moment where the child's attempt genuinely does not work and they must regroup.
-3. The "turning_point" must come AFTER the escalation/setback sequence, never before it.
-4. The final scene should be "celebration" or "teaser", not "resolution" — give the triumph room to breathe.
-5. Each beat must be output in the scene's JSON object as a "beat" field (see output schema below).
-
-Example beat sequence for an 8-scene story:
-  setup → escalation → setback → escalation → turning_point → resolution → celebration → teaser
-Another valid sequence:
-  setup → setup → escalation → escalation → setback → turning_point → resolution → celebration
+- The companion animal reacting emotionally to the child`}
+${beatSection}
 
 Illustration prompt rules:
 - Do NOT include character appearance details (hair color, eye color, skin tone, clothing, facial features) in the illustration_prompt. Character appearance is handled automatically by the illustration system. Including appearance words will degrade quality.
@@ -2227,22 +2276,18 @@ Output this exact JSON structure:
   "dedication": "A short, warm dedication line (1 sentence)",
   "scenes": [
     {
-      "number": 1,
-      "beat": "setup | escalation | setback | turning_point | resolution | celebration | teaser",
+      "number": 1,${isBoardBook ? "" : `
+      "beat": "setup | escalation | setback | turning_point | resolution | celebration | teaser",`}
       "text": "...",
       "illustration_prompt": "..."
     }
   ],
-  "final_page": "End-credits teaser (2-3 sentences). Think movie post-credits scene, not a fade to black. MUST include ALL three elements: HARD RULE: The final_page must not introduce ANY named entity (character, place, object, organization, event) that has not appeared in this story or in the Story Bible. Hallucinated proper nouns are a hard failure of this beat. When in doubt, use atmospheric language over invented names. (1) CALLBACK — reference a specific object, place, or detail from THIS story (e.g. the glowing seed, the cracked compass, the melody the child hummed). (2) USE WHAT EXISTS — gesture toward an upcoming adventure using ONLY elements already established in THIS story OR in the Story Bible. Permitted sources: the companion, supporting_characters, world.key_locations, or world details from the Story Bible. If a key_location exists in the Story Bible that has not yet been visited in this story, you may name and tease it. Otherwise, use atmospheric language tied to ${nextSeason} energy without naming unestablished entities. (3) TONE — warm and excited, matching ${nextSeason} energy (${nextSeason === "summer" ? "long golden days, fireflies, warm nights" : nextSeason === "fall" ? "crunchy leaves, cozy sweaters, harvest moon" : nextSeason === "winter" ? "first snowfall, warm cocoa, glowing windows" : "new blossoms, puddle-jumping, birdsong"}). BAD example: 'Where will ${heroName} go next?' (too vague, no hook) BAD example: 'In Splashing Springs, Captain Marina swam toward the storm.' (invents both a location AND a character not in this story or Story Bible) GOOD example: 'That night, the glowing seed from the garden began to hum. By morning it had sprouted a single silver leaf — and Pebble swore it was pointing toward the mountains. ${heroName} pressed ${child.pronouns === "he/him" ? "his" : child.pronouns === "she/her" ? "her" : "their"} nose to the window. The ${nextSeason} air smelled like pine and promises.' GOOD example pattern: callback to a story object + companion's reaction + atmospheric ${nextSeason} closer. No new proper nouns. REMINDER: No invented proper nouns. If it isn't in this story's scenes or in the Story Bible (world.key_locations, supporting_characters, companion), you may not name it. Use atmospheric language.",
+  ${finalPageSection},
   "parent_note": "A brief warm note for the parent about what this story celebrated (2-3 sentences, not printed in book)",
-  "story_seeds": {
-    "key_moment": "The single most vivid, emotionally resonant scene in this episode (1 sentence — specific enough to callback later)",
-    "emotional_growth": "What the hero learned or how they grew (1 sentence — e.g., 'learned that being scared doesn't mean you can't be brave')",
-    "unresolved_thread": "A small loose end or curiosity that a future episode could pick up (1 sentence — e.g., 'the glowing seed they planted hasn't sprouted yet')",
-    "callback_moment": "A specific visual or dialogue moment worth referencing in a future episode (1 sentence — e.g., 'when Aria whispered to the firefly and it blinked three times')"
-  }
+  ${storySeedsSection}
 }
 
+${isBoardBook ? `Board-book rules: story_seeds fields must all be empty strings "". No beat labels needed — omit the "beat" field from each scene. Focus on rhythm, repetition, and sensory delight over narrative arc.` : ""}
 Remember: exactly ${sceneCount} scenes. Each illustration_prompt MUST show the child as the dominant foreground subject with face clearly visible (close-up or medium-close). Fantastical/magical elements fill the background behind the child. Never show child from behind, far away, as silhouette, or face obscured. 20-40 words. Do NOT include character appearance details — the illustration system handles that automatically.`,
   };
 }
@@ -2633,6 +2678,7 @@ export async function generateStory(
 
   const child = childRaw as unknown as ChildStoryDbRow;
   const age = storyChildAge(child.date_of_birth);
+  const { isBoardBook } = getStoryStyle(age);
 
   // ── Memory richness validation ─────────────────────────────────────────
 
@@ -2761,7 +2807,7 @@ export async function generateStory(
 
   // ── Generate episode (Pass 2) ──────────────────────────────────────────
 
-  const episodePrompt = buildEpisodePrompt(child, storyBible, harvest, age, previousEpisodes);
+  const episodePrompt = buildEpisodePrompt(child, storyBible, harvest, age, previousEpisodes, isBoardBook);
 
   let episodeResult: Record<string, unknown>;
   try {
@@ -2782,10 +2828,18 @@ export async function generateStory(
 
   // ── Quality checks ────────────────────────────────────────────────────
 
-  const qualityWarnings = [
-    ...richness.warnings,
-    ...runStoryQualityChecks(episodeResult, child, age),
-  ];
+  const qualityWarnings = [...richness.warnings];
+
+  if (isBoardBook) {
+    logEvent({
+      event_type: "story.quality",
+      status: "success",
+      harvest_id: harvestId,
+      message: "Beat validation skipped: board-book profile (age 1-2)",
+    });
+  } else {
+    qualityWarnings.push(...runStoryQualityChecks(episodeResult, child, age));
+  }
 
   // ── Enrich scene prompts with memory photo captions (Fix 8A) ──────────
 

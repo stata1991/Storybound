@@ -154,11 +154,15 @@ def get_age_prefix(age: int, pronouns: str = "they_them", lora_active: bool = Fa
     else:
         word = "child"
 
-    clamped = max(3, min(10, age))
+    clamped = max(1, min(10, age))
 
     if lora_active:
         # Minimal — LoRA handles facial structure
-        if clamped <= 4:
+        if clamped == 1:
+            return f"1-year-old baby {word}"
+        elif clamped == 2:
+            return f"2-year-old toddler {word}"
+        elif clamped <= 4:
             return f"3-year-old toddler {word}"
         elif clamped <= 6:
             return f"5-year-old young {word}"
@@ -168,7 +172,11 @@ def get_age_prefix(age: int, pronouns: str = "they_them", lora_active: bool = Fa
             return f"10-year-old {word}"
     else:
         # Skip-lora — base model needs facial guidance
-        if clamped <= 4:
+        if clamped == 1:
+            return f"1-year-old baby {word}, baby face, very chubby cheeks, infant proportions"
+        elif clamped == 2:
+            return f"2-year-old toddler {word}, toddler face, soft round cheeks, young child proportions"
+        elif clamped <= 4:
             return f"3-year-old toddler {word}, baby face, chubby cheeks, very young child"
         elif clamped <= 6:
             return f"5-year-old little {word}, round face, chubby cheeks, young child"
