@@ -1,9 +1,6 @@
 """
 Storybound — FLUX.1-dev Illustration Pipeline (Modal.com)
 
-Replaces SDXL pipeline with FLUX.1-dev for higher quality illustrations.
-The SDXL pipeline (illustration_pipeline.py) remains as fallback.
-
 Architecture:
   - Base model: black-forest-labs/FLUX.1-dev (DiT, not UNet)
   - Training: LoRA on FLUX transformer blocks
@@ -12,7 +9,7 @@ Architecture:
   - Text encoders: T5-XXL (no 77-token limit) + CLIP-L
   - No IP-Adapter needed — FLUX handles identity through LoRA alone
 
-Privacy contract (same as SDXL pipeline):
+Privacy contract:
   1. Photos uploaded → Supabase Storage private bucket
   2. Processing triggered → photos downloaded to Modal memory only
   3. LoRA training completes → source photos deleted from Modal memory immediately
