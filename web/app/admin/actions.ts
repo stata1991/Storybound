@@ -7,10 +7,6 @@ import { logEvent } from "@/lib/audit";
 import { sanitizeForPrompt, sanitizeArrayForPrompt } from "@/lib/utils/sanitize";
 import { checkPhotoValidationGate } from "@/lib/photo-validator";
 
-/* ─── Pipeline toggle ─────────────────────────────────────────────────────── */
-
-const USE_FLUX = process.env.USE_FLUX_PIPELINE === "true";
-
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
 export interface AdminStats {
@@ -87,11 +83,6 @@ interface ChildFullDbRow {
 interface EpisodeDbRow {
   id: string;
   scenes: { number: number; text: string; illustration_prompt: string }[] | null;
-}
-
-interface ModalGenerateResponse {
-  face_model_id: string;
-  illustrations: { index: number; data: string; prompt: string }[];
 }
 
 interface ParentDbRow {
@@ -594,9 +585,7 @@ export async function startFaceTraining(
 
   // Fire Modal train request — short timeout just to confirm Modal accepted the job
   // Training runs async on Modal; completion arrives via /api/admin/training-complete webhook
-  const trainUrl = USE_FLUX
-    ? process.env.MODAL_FLUX_TRAIN_URL!
-    : process.env.MODAL_TRAIN_URL!;
+  const trainUrl = process.env.MODAL_FLUX_TRAIN_URL!;
 
   try {
     const res = await fetch(trainUrl, {
@@ -811,18 +800,13 @@ export async function completeIllustrationGeneration(
     ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
   };
 
-  // ── Generate illustrations with LoRA ───────────────────────────────────────
+  // ── Spawn illustration generation on Modal ──────────────────────────────────
 
-  const generateUrl = USE_FLUX
-    ? process.env.MODAL_FLUX_GENERATE_URL!
-    : process.env.MODAL_GENERATE_URL!;
-  const deleteUrl = USE_FLUX
-    ? process.env.MODAL_FLUX_DELETE_URL!
-    : process.env.MODAL_DELETE_URL!;
+  const generateUrl = process.env.MODAL_FLUX_GENERATE_URL!;
+  const deleteUrl = process.env.MODAL_FLUX_DELETE_URL!;
 
-  let genResult: ModalGenerateResponse;
   try {
-    genResult = await callModal<ModalGenerateResponse>(
+    await callModal(
       generateUrl,
       {
         face_model_id: faceModelId,
@@ -830,13 +814,11 @@ export async function completeIllustrationGeneration(
         scene_has_humans: sceneHasHumans,
 
         ...modalSharedParams,
-        ...(USE_FLUX ? {
-          harvest_id: harvestId,
-          episode_id: episode?.id,
-          child_id: harvest.child_id,
-          callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/api/admin/illustrations-complete`,
-          webhook_secret: process.env.MODAL_WEBHOOK_SECRET,
-        } : {}),
+        harvest_id: harvestId,
+        episode_id: episode?.id,
+        child_id: harvest.child_id,
+        callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/api/admin/illustrations-complete`,
+        webhook_secret: process.env.MODAL_WEBHOOK_SECRET,
       }
     );
   } catch (e) {
@@ -853,97 +835,11 @@ export async function completeIllustrationGeneration(
     return { error: `Illustration generation failed: ${msg}` };
   }
 
-  // FLUX path: generation is async — Modal returns immediately, webhook handles completion
-  if (USE_FLUX) {
-    logEvent({
-      event_type: "illustration.generation",
-      status: "started",
-      harvest_id: harvestId,
-      message: "FLUX generation spawned — waiting for webhook callback",
-    });
-    return { success: true };
-  }
-
-  // SDXL path: generation is synchronous — process results inline
-
-  // Delete LoRA weights + character photos
-  await callModal(deleteUrl, {
-    face_model_id: faceModelId,
-    child_id: harvest.child_id,
-  }).catch(() => {});
-  logEvent({
-    event_type: "face_model_deleted",
-    status: "success",
-    harvest_id: harvestId,
-    message: `LoRA weights deleted (face_model_id: ${faceModelId})`,
-  });
-
-  // ── Upload illustrations to Supabase Storage ───────────────────────────────
-
-  await supa.storage.createBucket("illustrations", {
-    public: false,
-    allowedMimeTypes: ["image/png"],
-  });
-
-  const childId = harvest.child_id;
-  const episodeId = episode?.id ?? "no-episode";
-  const illustrationPaths: string[] = [];
-
-  if (genResult?.illustrations && Array.isArray(genResult.illustrations)) {
-    for (const ill of genResult.illustrations) {
-      const pngBuffer = Buffer.from(ill.data, "base64");
-      const storagePath = `${child.id}/${episodeId}/${ill.index}.png`;
-
-      const { error: upErr } = await supa.storage
-        .from("illustrations")
-        .upload(storagePath, pngBuffer, {
-          contentType: "image/png",
-          upsert: true,
-        });
-
-      if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
-      illustrationPaths.push(storagePath);
-    }
-  }
-
-  // ── Update episode ─────────────────────────────────────────────────────────
-
-  if (episode) {
-    await supa
-      .from("episodes")
-      .update({
-        illustration_paths: illustrationPaths,
-        illustration_status: "review",
-      })
-      .eq("id", episode.id);
-  }
-
-  // Delete harvest memory photos
-  if (harvest.photo_paths && harvest.photo_paths.length > 0) {
-    try {
-      await supa.storage.from("harvest-photos").remove(harvest.photo_paths);
-      await supa
-        .from("harvests")
-        .update({ photos_deleted_at: new Date().toISOString() })
-        .eq("id", harvestId);
-    } catch (cleanupErr) {
-      console.error("Harvest photo cleanup failed (non-blocking):", cleanupErr);
-    }
-  }
-
-  // Update harvest status to processing (complete comes after book generation)
-  await supa
-    .from("harvests")
-    .update({ status: "processing" })
-    .eq("id", harvestId);
-
   logEvent({
     event_type: "illustration.generation",
-    status: "success",
+    status: "started",
     harvest_id: harvestId,
-    child_id: childId,
-    message: "Illustration generation completed",
-    metadata: { illustration_count: illustrationPaths.length },
+    message: "Illustration generation spawned — waiting for webhook callback",
   });
 
   return { success: true };
@@ -952,8 +848,7 @@ export async function completeIllustrationGeneration(
 /* ─── triggerIllustrationPipeline — synchronous wrapper ───────────────────── */
 
 export async function triggerIllustrationPipeline(
-  harvestId: string,
-  skipLora?: boolean
+  harvestId: string
 ): Promise<{ success: true } | { error: string }> {
   const auth = await verifyAdmin();
   if ("error" in auth) return { error: auth.error };
@@ -1002,36 +897,14 @@ export async function triggerIllustrationPipeline(
 
   const episode = episodeRaw as unknown as (EpisodeDbRow & { illustration_status?: string }) | null;
 
-  let forceSkipLora = skipLora ?? false;
-
   if (child.character_photos_deleted_at) {
     const illStatus = episode?.illustration_status;
     if (illStatus === "review" || illStatus === "approved" || illStatus === "complete") {
       return { error: "Illustrations already complete for this episode." };
     }
-    // Only skip LoRA if training never succeeded (no face ref available)
-    // If face_ref_generated = true, training succeeded and LoRA weights exist — use them
-    if (harvest.face_ref_generated && harvest.face_ref_path) {
-      forceSkipLora = false;
-    } else {
-      forceSkipLora = true;
+    if (!harvest.face_ref_generated || !harvest.face_ref_path) {
+      return { error: "Photos deleted and no LoRA available. Cannot generate illustrations." };
     }
-  }
-
-  console.log("skip_lora decision:", {
-    skipLora,
-    forceSkipLora,
-    characterPhotosDeletedAt: child.character_photos_deleted_at,
-    faceRefGenerated: harvest.face_ref_generated,
-    faceRefPath: harvest.face_ref_path,
-  });
-
-  // ── Guard: FLUX pipeline does not support skip-lora ────────────────────────
-  if (forceSkipLora && USE_FLUX) {
-    return {
-      error:
-        "Skip-LoRA is not supported on the FLUX pipeline. Set USE_FLUX_PIPELINE=false, redeploy, then retry.",
-    };
   }
 
   // ── Build character description ──────────────────────────────────────────
@@ -1093,7 +966,6 @@ export async function triggerIllustrationPipeline(
     : [];
 
   const childId = harvest.child_id;
-  let genResult: ModalGenerateResponse;
 
   // ── Download memory photos for color mood extraction ───────────────────────
 
@@ -1122,52 +994,17 @@ export async function triggerIllustrationPipeline(
     ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
   };
 
-  const generateUrl = USE_FLUX
-    ? process.env.MODAL_FLUX_GENERATE_URL!
-    : process.env.MODAL_GENERATE_URL!;
-  const deleteUrl = USE_FLUX
-    ? process.env.MODAL_FLUX_DELETE_URL!
-    : process.env.MODAL_DELETE_URL!;
+  const generateUrl = process.env.MODAL_FLUX_GENERATE_URL!;
 
-  const fluxExtraFields = USE_FLUX ? {
+  const asyncFields = {
     harvest_id: harvestId,
     episode_id: episode?.id,
     child_id: childId,
     callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/api/admin/illustrations-complete`,
     webhook_secret: process.env.MODAL_WEBHOOK_SECRET,
-  } : {};
+  };
 
-  if (forceSkipLora) {
-    logEvent({
-      event_type: "illustration.pipeline",
-      status: "started",
-      harvest_id: harvestId,
-      message: "Running with base model only (skip_lora)",
-    });
-
-    try {
-      genResult = await callModal<ModalGenerateResponse>(
-        generateUrl,
-        {
-          prompts,
-          scene_has_humans: sceneHasHumans,
-          skip_lora: true,
-  
-          ...modalSharedParams,
-          ...fluxExtraFields,
-        }
-      );
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      logEvent({
-        event_type: "illustration.pipeline",
-        status: "error",
-        harvest_id: harvestId,
-        message: `Illustration generation (skip_lora) failed: ${msg}`,
-      });
-      return { error: `Illustration generation failed: ${msg}` };
-    }
-  } else if (harvest.face_ref_generated && harvest.face_ref_path) {
+  if (harvest.face_ref_generated && harvest.face_ref_path) {
     // Existing LoRA — skip training, generate directly
     const existingModelId = harvest.face_ref_path;
     console.log("Skipping training — using existing LoRA:", existingModelId);
@@ -1180,7 +1017,7 @@ export async function triggerIllustrationPipeline(
     });
 
     try {
-      genResult = await callModal<ModalGenerateResponse>(
+      await callModal(
         generateUrl,
         {
           face_model_id: existingModelId,
@@ -1188,13 +1025,9 @@ export async function triggerIllustrationPipeline(
           scene_has_humans: sceneHasHumans,
   
           ...modalSharedParams,
-          ...fluxExtraFields,
+          ...asyncFields,
         }
       );
-      console.log("Modal generate_illustrations returned:", {
-        illustrationCount: genResult?.illustrations?.length,
-        faceModelId: existingModelId,
-      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       logEvent({
@@ -1206,120 +1039,20 @@ export async function triggerIllustrationPipeline(
       return { error: `Illustration generation failed: ${msg}` };
     }
 
-    // SDXL: delete LoRA inline. FLUX: webhook handles deletion.
-    if (!USE_FLUX) {
-      try {
-        await callModal(deleteUrl, {
-          face_model_id: existingModelId,
-          child_id: harvest.child_id,
-        });
-        logEvent({
-          event_type: "face_model_deleted",
-          status: "success",
-          harvest_id: harvestId,
-          message: `LoRA weights deleted (face_model_id: ${existingModelId})`,
-        });
-      } catch (err) {
-        console.error("Failed to delete face model:", err);
-        logEvent({
-          event_type: "face_model_delete_failed",
-          status: "error",
-          harvest_id: harvestId,
-          message: `Failed to delete LoRA (face_model_id: ${existingModelId})`,
-        });
-      }
-
-      // Clear face ref from harvest
-      await supa
-        .from("harvests")
-        .update({ face_ref_generated: false, face_ref_path: null })
-        .eq("id", harvestId);
-    }
   } else {
     // Training is now async — use the generate-illustrations route which fires
     // startFaceTraining + webhook. This sync path should not be reached.
     return { error: "No LoRA model found. Use the async training path (generate-illustrations route) instead." };
   }
 
-  // FLUX path: generation is async — Modal returns immediately, webhook handles completion
-  if (USE_FLUX) {
-    logEvent({
-      event_type: "illustration.pipeline",
-      status: "started",
-      harvest_id: harvestId,
-      message: "FLUX generation spawned — waiting for webhook callback",
-    });
-    return { success: true };
-  }
+  logEvent({
+    event_type: "illustration.pipeline",
+    status: "started",
+    harvest_id: harvestId,
+    message: "Illustration generation spawned — waiting for webhook callback",
+  });
 
-  // SDXL path: generation is synchronous — process results inline
-
-  // ── Upload illustrations to Supabase Storage ───────────────────────────────
-
-  try {
-    console.log("Modal raw result:", JSON.stringify(genResult).slice(0, 500));
-
-    await supa.storage.createBucket("illustrations", {
-      public: false,
-      allowedMimeTypes: ["image/png"],
-    });
-
-    const episodeId = episode?.id ?? "no-episode";
-    const illustrationPaths: string[] = [];
-
-    if (genResult?.illustrations && Array.isArray(genResult.illustrations)) {
-      for (const ill of genResult.illustrations) {
-        const pngBuffer = Buffer.from(ill.data, "base64");
-        const storagePath = `${child.id}/${episodeId}/${ill.index}.png`;
-
-        const { error: upErr } = await supa.storage
-          .from("illustrations")
-          .upload(storagePath, pngBuffer, {
-            contentType: "image/png",
-            upsert: true,
-          });
-
-        if (upErr) return { error: `Failed to upload illustration ${ill.index}: ${upErr.message}` };
-        illustrationPaths.push(storagePath);
-      }
-    }
-
-    if (episode) {
-      await supa
-        .from("episodes")
-        .update({
-          illustration_paths: illustrationPaths,
-          illustration_status: "review",
-        })
-        .eq("id", episode.id);
-    }
-
-    if (harvest.photo_paths && harvest.photo_paths.length > 0) {
-      try {
-        await supa.storage.from("harvest-photos").remove(harvest.photo_paths);
-        await supa
-          .from("harvests")
-          .update({ photos_deleted_at: new Date().toISOString() })
-          .eq("id", harvestId);
-      } catch (cleanupErr) {
-        console.error("Harvest photo cleanup failed (non-blocking):", cleanupErr);
-      }
-    }
-
-    logEvent({
-      event_type: "illustration.pipeline",
-      status: "success",
-      harvest_id: harvestId,
-      child_id: childId,
-      message: "Illustration pipeline completed",
-      metadata: { illustration_count: illustrationPaths.length },
-    });
-
-    return { success: true };
-  } catch (e) {
-    console.error("triggerIllustrationPipeline post-generation error:", e);
-    throw e;
-  }
+  return { success: true };
 }
 
 /* ─── Book generation ─────────────────────────────────────────────────────── */

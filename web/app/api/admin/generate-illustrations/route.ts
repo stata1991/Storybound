@@ -1,4 +1,4 @@
-export const maxDuration = 600; // 10 minutes
+export const maxDuration = 120; // Generation is async — no long waits
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
@@ -18,13 +18,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
 
-  const { harvestId, skipLora: clientSkipLora } = body as {
-    harvestId: string;
-    skipLora?: boolean;
-  };
-
-  // Server is source of truth — check DB for LoRA state
-  let skipLora = clientSkipLora ?? false;
+  const { harvestId } = body as { harvestId: string };
 
   const admin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -36,27 +30,21 @@ export async function POST(req: NextRequest) {
     .eq("id", harvestId)
     .single();
 
-  // If client says skipLora but LoRA exists, use the LoRA
-  if (skipLora && harvest?.face_ref_generated && harvest?.face_ref_path) {
-    skipLora = false;
-  }
-
   // If LoRA already trained, go straight to illustration generation
   // (photos may be deleted per privacy contract — don't re-train)
   const loraExists = harvest?.face_ref_generated && harvest?.face_ref_path;
 
-  if (skipLora || loraExists || process.env.NODE_ENV === "development") {
-    const result = await triggerIllustrationPipeline(harvestId, skipLora);
+  if (loraExists || process.env.NODE_ENV === "development") {
+    const result = await triggerIllustrationPipeline(harvestId);
 
-    // FLUX path: generation is async — return 202 so client polls
-    if (process.env.USE_FLUX_PIPELINE === "true" && "success" in result) {
-      return NextResponse.json(
-        { status: "generating", message: "Illustrations generating in background" },
-        { status: 202 }
-      );
+    if ("error" in result) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
     }
 
-    return NextResponse.json(result);
+    return NextResponse.json(
+      { status: "generating", message: "Illustrations generating in background" },
+      { status: 202 }
+    );
   }
 
   // Production: start training (sends photos to Modal, returns in <30s)

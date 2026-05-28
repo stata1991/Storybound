@@ -201,8 +201,6 @@ export default async function HarvestDetailPage({
     redirect("/dashboard");
   }
 
-  const fluxPipelineActive = process.env.USE_FLUX_PIPELINE === "true";
-
   const admin = getAdmin();
   const harvestId = params.id;
 
@@ -598,43 +596,10 @@ export default async function HarvestDetailPage({
                     Pipeline crashed &mdash; photos already deleted.
                   </p>
                   <p className="mt-1">
-                    Re-run will generate without face conditioning (base model only).
+                    Skip-LoRA recovery is not available. Contact support if this
+                    harvest needs to be re-processed.
                   </p>
-                  {fluxPipelineActive && (
-                    <p className="mt-1 font-medium">
-                      Skip-LoRA recovery is not available on the FLUX pipeline.
-                      Follow the manual procedure below.
-                    </p>
-                  )}
                 </div>
-                {fluxPipelineActive ? (
-                  <div className="rounded border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
-                    <p className="font-medium">Manual recovery (SDXL fallback)</p>
-                    <ol className="mt-2 list-decimal space-y-1 pl-5">
-                      <li>
-                        In Vercel → Settings → Environment Variables, set{" "}
-                        <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">
-                          USE_FLUX_PIPELINE
-                        </code>{" "}
-                        to{" "}
-                        <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">
-                          false
-                        </code>
-                      </li>
-                      <li>Redeploy (the change only takes effect after a new deployment)</li>
-                      <li>Return to this page and click &ldquo;Run without face conditioning&rdquo;</li>
-                      <li>
-                        After illustrations complete, restore{" "}
-                        <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">
-                          USE_FLUX_PIPELINE=true
-                        </code>{" "}
-                        and redeploy
-                      </li>
-                    </ol>
-                  </div>
-                ) : (
-                  <RunIllustrationsButton harvestId={harvestId} skipLora />
-                )}
               </div>
             )}
             {storyComplete && !illustrationsComplete && (harvest.status === "training" || (harvest.status === "processing" && !!harvest.face_ref_path)) && (
@@ -662,43 +627,10 @@ export default async function HarvestDetailPage({
                       <p className="mt-1">
                         Last updated {elapsedSinceUpdate} ago. No LoRA was
                         trained and character photos have been deleted &mdash;
-                        this is the skip-LoRA recovery scenario.
+                        skip-LoRA recovery is not available. Contact support if
+                        this harvest needs to be re-processed.
                       </p>
-                      {fluxPipelineActive && (
-                        <p className="mt-1 font-medium">
-                          Skip-LoRA recovery is not available on the FLUX
-                          pipeline. Follow the manual procedure below.
-                        </p>
-                      )}
                     </div>
-                    {fluxPipelineActive ? (
-                      <div className="rounded border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
-                        <p className="font-medium">Manual recovery (SDXL fallback)</p>
-                        <ol className="mt-2 list-decimal space-y-1 pl-5">
-                          <li>
-                            In Vercel → Settings → Environment Variables, set{" "}
-                            <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">
-                              USE_FLUX_PIPELINE
-                            </code>{" "}
-                            to{" "}
-                            <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">
-                              false
-                            </code>
-                          </li>
-                          <li>Redeploy (the change only takes effect after a new deployment)</li>
-                          <li>Return to this page and click &ldquo;Run without face conditioning&rdquo;</li>
-                          <li>
-                            After illustrations complete, restore{" "}
-                            <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">
-                              USE_FLUX_PIPELINE=true
-                            </code>{" "}
-                            and redeploy
-                          </li>
-                        </ol>
-                      </div>
-                    ) : (
-                      <RunIllustrationsButton harvestId={harvestId} skipLora />
-                    )}
                   </div>
                 ) : (
                   <div>

@@ -198,10 +198,8 @@ export default function GenerateStoryButton({
 
 export function RunIllustrationsButton({
   harvestId,
-  skipLora,
 }: {
   harvestId: string;
-  skipLora?: boolean;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -254,13 +252,13 @@ export function RunIllustrationsButton({
     inFlightRef.current = true;
     setLoading(true);
     setError(null);
-    setPhase(skipLora ? "generating" : "training");
+    setPhase("training");
 
     try {
       const res = await fetch("/api/admin/generate-illustrations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ harvestId, skipLora }),
+        body: JSON.stringify({ harvestId }),
       });
 
       const result = await res.json();
@@ -310,9 +308,7 @@ export function RunIllustrationsButton({
       ? "Training face model... "
       : phase === "generating"
         ? "Generating illustrations... "
-        : skipLora
-          ? "Running (base model)... "
-          : "Running illustrations... ";
+        : "Running illustrations... ";
 
   return (
     <div>
@@ -350,16 +346,12 @@ export function RunIllustrationsButton({
             {phaseLabel}
             {elapsed}
           </>
-        ) : skipLora ? (
-          "Run without face conditioning"
         ) : (
           "Run illustrations"
         )}
       </button>
       <p className="mt-2 text-xs text-gray-400">
-        {skipLora
-          ? "Takes 5-10 minutes (no LoRA \u2014 base model only)"
-          : "Training ~10 min, then illustrations ~5 min"}
+        Training ~10 min, then illustrations ~5 min
       </p>
     </div>
   );

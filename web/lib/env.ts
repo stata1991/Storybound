@@ -32,9 +32,6 @@ const serverSchema = z.object({
   // ── Modal – pipeline endpoints ────────────────────────
   MODAL_AUTH_TOKEN: z.string().min(1),
   MODAL_WEBHOOK_SECRET: z.string().min(1),
-  MODAL_TRAIN_URL: z.string().url().optional(),
-  MODAL_GENERATE_URL: z.string().url().optional(),
-  MODAL_DELETE_URL: z.string().url().optional(),
   MODAL_FLUX_TRAIN_URL: z.string().url(),
   MODAL_FLUX_GENERATE_URL: z.string().url(),
   MODAL_FLUX_DELETE_URL: z.string().url(),
@@ -43,7 +40,6 @@ const serverSchema = z.object({
   PHOTO_VALIDATION_COMPLETE_WEBHOOK_URL: z.string().url(),
 
   // ── Feature flags / load testing ─────────────────────
-  USE_FLUX_PIPELINE: z.enum(["true", "false"]),
   LOADTEST_ENABLED: z.string().optional(),
   LOADTEST_SECRET: z.string().optional(),
 
