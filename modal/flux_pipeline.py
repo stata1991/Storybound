@@ -704,7 +704,7 @@ def train_flux_lora(
                 "x-webhook-secret": webhook_secret,
                 "Content-Type": "application/json",
             },
-            timeout=30,
+            timeout=120,
             allow_redirects=True,
         )
         print(f"Webhook: {resp.status_code}")
@@ -1067,7 +1067,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                         "x-webhook-secret": body.get("webhook_secret", ""),
                         "Content-Type": "application/json",
                     },
-                    timeout=30,
+                    timeout=120,
                     allow_redirects=True,
                 )
                 print(f"Webhook fired to {callback_url}")
@@ -1287,7 +1287,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                             "x-webhook-secret": body.get("webhook_secret", ""),
                             "Content-Type": "application/json",
                         },
-                        timeout=30,
+                        timeout=120,
                         allow_redirects=True,
                     )
                     print(f"Webhook fired to {callback_url}")
@@ -1337,7 +1337,7 @@ def generate_flux_illustrations(body: dict) -> dict:
                     "x-webhook-secret": body.get("webhook_secret", ""),
                     "Content-Type": "application/json",
                 },
-                timeout=30,
+                timeout=120,
                 allow_redirects=True,
             )
             print(f"Webhook fired to {callback_url}")
