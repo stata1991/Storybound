@@ -82,7 +82,7 @@ interface ChildFullDbRow {
 
 interface EpisodeDbRow {
   id: string;
-  scenes: { number: number; text: string; illustration_prompt: string; outfit?: string; has_humans?: boolean }[] | null;
+  scenes: { number: number; text: string; illustration_prompt: string; outfit?: string; has_humans?: boolean; companions_in_scene?: string[] }[] | null;
 }
 
 interface ParentDbRow {
@@ -709,10 +709,11 @@ export async function completeIllustrationGeneration(
   let characterDescription = "";
   let hairDescription = "";
   let signatureLook = "";
+  const companions: { name: string; physical_description: string }[] = [];
 
   const { data: bibleRaw } = await supa
     .from("story_bibles")
-    .select("hero_profile, season_arc")
+    .select("hero_profile, companion, season_arc")
     .eq("child_id", harvest.child_id)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -738,10 +739,38 @@ export async function completeIllustrationGeneration(
       characterDescription = appearance;
     }
 
+    // Extract companions lookup for FLUX T5 injection
+    const comp = (bibleRaw as Record<string, unknown>).companion as
+      | Record<string, unknown>
+      | undefined;
+    if (comp?.name && comp?.physical_description) {
+      companions.push({
+        name: String(comp.name),
+        physical_description: String(comp.physical_description).slice(0, 120),
+      });
+    }
+    const arc = (bibleRaw as Record<string, unknown>).season_arc as
+      | Record<string, unknown>
+      | undefined;
+    const suppChars = arc?.supporting_characters as
+      | Record<string, unknown>[]
+      | undefined;
+    if (suppChars) {
+      for (const sc of suppChars) {
+        if (sc.name && sc.physical_description) {
+          companions.push({
+            name: String(sc.name),
+            physical_description: String(sc.physical_description).slice(0, 120),
+          });
+        }
+      }
+    }
+
     console.log("Story bible physical_description:", JSON.stringify(phys));
     console.log("characterDescription sent to Modal:", characterDescription);
     console.log("hairDescription sent to Modal:", hairDescription);
     console.log("signatureLook sent to Modal:", signatureLook);
+    console.log("companions lookup:", JSON.stringify(companions));
   }
 
   // ── Build prompts ──────────────────────────────────────────────────────────
@@ -763,6 +792,11 @@ export async function completeIllustrationGeneration(
   // Build parallel array of per-scene human-detection flags (LLM-classified)
   const sceneHasHumans = (episode?.scenes && episode.scenes.length > 0)
     ? episode.scenes.slice(0, 12).map((s) => s.has_humans ?? false)
+    : [];
+
+  // Build parallel array of per-scene companion name lists
+  const sceneCompanions = (episode?.scenes && episode.scenes.length > 0)
+    ? episode.scenes.slice(0, 12).map((s) => s.companions_in_scene ?? [])
     : [];
 
   // ── Download memory photos for color mood extraction ───────────────────────
@@ -791,6 +825,8 @@ export async function completeIllustrationGeneration(
     ...(hairDescription ? { hair_description: hairDescription } : {}),
     ...(signatureLook ? { cover_outfit: signatureLook } : {}),
     scene_outfits: sceneOutfits,
+    ...(companions.length > 0 ? { companions } : {}),
+    scene_companions: sceneCompanions,
     ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
   };
 
@@ -901,10 +937,11 @@ export async function triggerIllustrationPipeline(
   let characterDescription = "";
   let hairDescription = "";
   let signatureLook = "";
+  const companions: { name: string; physical_description: string }[] = [];
 
   const { data: bibleRaw } = await supa
     .from("story_bibles")
-    .select("hero_profile, season_arc")
+    .select("hero_profile, companion, season_arc")
     .eq("child_id", harvest.child_id)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -930,10 +967,38 @@ export async function triggerIllustrationPipeline(
       characterDescription = appearance;
     }
 
+    // Extract companions lookup for FLUX T5 injection
+    const comp = (bibleRaw as Record<string, unknown>).companion as
+      | Record<string, unknown>
+      | undefined;
+    if (comp?.name && comp?.physical_description) {
+      companions.push({
+        name: String(comp.name),
+        physical_description: String(comp.physical_description).slice(0, 120),
+      });
+    }
+    const arc = (bibleRaw as Record<string, unknown>).season_arc as
+      | Record<string, unknown>
+      | undefined;
+    const suppChars = arc?.supporting_characters as
+      | Record<string, unknown>[]
+      | undefined;
+    if (suppChars) {
+      for (const sc of suppChars) {
+        if (sc.name && sc.physical_description) {
+          companions.push({
+            name: String(sc.name),
+            physical_description: String(sc.physical_description).slice(0, 120),
+          });
+        }
+      }
+    }
+
     console.log("[triggerPipeline] Story bible physical_description:", JSON.stringify(phys));
     console.log("[triggerPipeline] characterDescription:", characterDescription);
     console.log("[triggerPipeline] hairDescription:", hairDescription);
     console.log("[triggerPipeline] signatureLook:", signatureLook);
+    console.log("[triggerPipeline] companions lookup:", JSON.stringify(companions));
   }
 
   // ── Build prompts ──────────────────────────────────────────────────────────
@@ -955,6 +1020,11 @@ export async function triggerIllustrationPipeline(
   // Build parallel array of per-scene human-detection flags (LLM-classified)
   const sceneHasHumans = (episode?.scenes && episode.scenes.length > 0)
     ? episode.scenes.slice(0, 12).map((s) => s.has_humans ?? false)
+    : [];
+
+  // Build parallel array of per-scene companion name lists
+  const sceneCompanions = (episode?.scenes && episode.scenes.length > 0)
+    ? episode.scenes.slice(0, 12).map((s) => s.companions_in_scene ?? [])
     : [];
 
   const childId = harvest.child_id;
@@ -985,6 +1055,8 @@ export async function triggerIllustrationPipeline(
     ...(hairDescription ? { hair_description: hairDescription } : {}),
     ...(signatureLook ? { cover_outfit: signatureLook } : {}),
     scene_outfits: sceneOutfits,
+    ...(companions.length > 0 ? { companions } : {}),
+    scene_companions: sceneCompanions,
     ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
   };
 
@@ -1989,6 +2061,15 @@ Scene cast classification (the "has_humans" field per scene):
   * Scene exploring the forest with friend Pebble the rabbit → has_humans: false
   * Scene meeting the village wizard in his cottage → has_humans: true
 
+Scene companion tagging (the "companions_in_scene" field per scene):
+- List the exact names of all named companion or supporting characters who are physically present and visible in the scene. Use names exactly as they appear in the Characters section above.
+- If no named companions appear (hero is alone, or only unnamed background figures), use an empty array [].
+- Only include characters who would be visible in the illustration — characters mentioned in dialogue or thought but not physically present are excluded.
+- Examples:
+  * Scene with hero and Pebble the rabbit exploring a cave → companions_in_scene: ["Pebble"]
+  * Scene with hero alone gazing at the stars → companions_in_scene: []
+  * Scene at the dinner table with Mama and Pebble → companions_in_scene: ["Pebble", "Mama"]
+
 Content safety:
 - No violence, blood, death, or injury
 - No scary darkness or isolation
@@ -2023,7 +2104,8 @@ Output this exact JSON structure:
       "text": "...",
       "illustration_prompt": "...",
       "outfit": "4-10 words: concrete clothing items for this scene",
-      "has_humans": false
+      "has_humans": false,
+      "companions_in_scene": ["CompanionName"]
     }
   ],
   ${finalPageSection},

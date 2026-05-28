@@ -1055,6 +1055,8 @@ def generate_flux_illustrations(body: dict) -> dict:
     skin_tone = body.get("skin_tone_hint", "")
     cover_outfit_raw = (body.get("cover_outfit") or "").strip()[:120]
     scene_outfits_raw = body.get("scene_outfits", [])
+    companions_lookup = body.get("companions", [])
+    scene_companions_raw = body.get("scene_companions", [])
     harvest_id = body.get("harvest_id")
     episode_id = body.get("episode_id")
     child_id = body.get("child_id")
@@ -1130,6 +1132,14 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     # Outfit clause for cover (signature_look from story bible)
     cover_outfit_clause = f"wearing {cover_outfit_raw}, " if cover_outfit_raw else ""
+
+    # Companion name→description lookup for per-scene T5 injection
+    companion_map = {}
+    for c in companions_lookup:
+        cname = (c.get("name") or "").strip()
+        cdesc = (c.get("physical_description") or "").strip()[:120]
+        if cname and cdesc:
+            companion_map[cname] = cdesc
 
     # Style anchor — applied to EVERY scene and cover without exception
     STYLE_SUFFIX = (
@@ -1214,6 +1224,19 @@ def generate_flux_illustrations(body: dict) -> dict:
                       else "")
         scene_outfit_clause = f"wearing {raw_outfit}, " if raw_outfit else ""
 
+        # Per-scene companion clause from LLM-tagged names + story bible descriptions
+        scene_comp_names = (scene_companions_raw[i]
+                            if i < len(scene_companions_raw) and scene_companions_raw[i]
+                            else [])
+        comp_parts = []
+        for cname in scene_comp_names[:3]:
+            cdesc = companion_map.get(cname, "")
+            if cdesc:
+                comp_parts.append(f"{cname} ({cdesc})")
+            else:
+                comp_parts.append(cname)
+        companion_clause = ("with " + " and ".join(comp_parts) + ", ") if comp_parts else ""
+
         scene_clip = (
             f"{gender_clip_reinforcement}"
             f"{age_prefix}, sks child, "
@@ -1227,6 +1250,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             f"{skin_tone + ', ' if skin_tone else ''}"
             f"{scene_outfit_clause}"
             f"foreground, head and shoulders to waist-up framing, facing camera, "
+            f"{companion_clause}"
             f"{scene_desc}"
             f"{STYLE_SUFFIX}"
         )
@@ -1469,6 +1493,8 @@ def generate_illustrations_http(request: dict) -> dict:
         "scene_has_humans": scene_has_humans,
         "scene_outfits": request.get("scene_outfits", []),
         "cover_outfit": request.get("cover_outfit", ""),
+        "companions": request.get("companions", []),
+        "scene_companions": request.get("scene_companions", []),
         "child_age": request.get("age", 3),
         "pronouns": pronouns,
         "skin_tone_hint": skin_tone_hint,
