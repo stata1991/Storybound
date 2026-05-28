@@ -853,6 +853,7 @@ def generate_single_image(payload: dict) -> dict:
     enable_retry = payload["enable_retry"]
     negative_prompt = payload.get("negative_prompt", "")
     true_cfg_scale = payload.get("true_cfg_scale", 1.0)
+    scene_has_humans = payload.get("has_humans", False)
 
     print(f'{label}: CLIP prompt ({len(clip_prompt.split())} words): {clip_prompt[:80]}...')
     print(f'{label}: T5 prompt ({len(t5_prompt.split())} words): {t5_prompt[:80]}...')
@@ -905,8 +906,12 @@ def generate_single_image(payload: dict) -> dict:
             ).item()
             has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
             score = raw_score * 0.3 if has_mark else raw_score
+            extra_faces = not scene_has_humans and len(faces) > 1
+            if extra_faces:
+                score *= 0.1
             print(f'  {label} candidate {j}: '
                   f'cosine={raw_score:.3f}, bindi={has_mark}, '
+                  f'faces={len(faces)}, extra_penalized={extra_faces}, '
                   f'adjusted={score:.3f}')
             if score > best_score:
                 best_score = score
@@ -962,8 +967,12 @@ def generate_single_image(payload: dict) -> dict:
             ).item()
             has_mark, n_marks = has_forehead_mark(candidate_np, face.bbox)
             score = raw_score * 0.3 if has_mark else raw_score
+            extra_faces = not scene_has_humans and len(faces) > 1
+            if extra_faces:
+                score *= 0.1
             print(f'  {label} retry candidate {j}: '
                   f'cosine={raw_score:.3f}, bindi={has_mark}, '
+                  f'faces={len(faces)}, extra_penalized={extra_faces}, '
                   f'adjusted={score:.3f}')
             if score > best_score:
                 best_score = score
@@ -1182,6 +1191,7 @@ def generate_flux_illustrations(body: dict) -> dict:
         "clip_prompt": cover_clip,
         "t5_prompt": cover_t5,
         "negative_prompt": PEOPLE_SUPPRESSION + NEGATIVE_PROMPT,
+        "has_humans": False,
         "true_cfg_scale": 1.5,
         "height": 1024,
         "width": 1024,
@@ -1226,6 +1236,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             "clip_prompt": scene_clip,
             "t5_prompt": scene_t5,
             "negative_prompt": scene_negative,
+            "has_humans": has_humans,
             "true_cfg_scale": 1.5,
             "height": 768,
             "width": 768,

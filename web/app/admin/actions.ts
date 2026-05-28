@@ -82,7 +82,7 @@ interface ChildFullDbRow {
 
 interface EpisodeDbRow {
   id: string;
-  scenes: { number: number; text: string; illustration_prompt: string; outfit?: string }[] | null;
+  scenes: { number: number; text: string; illustration_prompt: string; outfit?: string; has_humans?: boolean }[] | null;
 }
 
 interface ParentDbRow {
@@ -438,17 +438,6 @@ function buildDefaultPrompts(
 
 /* ─── Scene human-detection helper ────────────────────────────────────────── */
 
-function hasExtraHumans(sceneText: string): boolean {
-  const humanKeywords = [
-    "mama", "papa", "mom", "dad", "mother", "father",
-    "brother", "sister", "friend", "grandma", "grandpa",
-    "uncle", "aunty", "auntie", "nana", "nanu",
-    "family", "parent", "sibling",
-  ];
-  const lower = sceneText.toLowerCase();
-  return humanKeywords.some((k) => new RegExp(`\\b${k}\\b`).test(lower));
-}
-
 /* ─── startFaceTraining — async training kickoff ──────────────────────────── */
 
 export async function startFaceTraining(
@@ -771,10 +760,9 @@ export async function completeIllustrationGeneration(
 
   if (prompts.length === 0) return { error: "No illustration prompts available." };
 
-  // Build parallel array of per-scene human-detection flags
+  // Build parallel array of per-scene human-detection flags (LLM-classified)
   const sceneHasHumans = (episode?.scenes && episode.scenes.length > 0)
-    ? episode.scenes.slice(0, 12).map((s) =>
-        hasExtraHumans(s.text ?? ""))
+    ? episode.scenes.slice(0, 12).map((s) => s.has_humans ?? false)
     : [];
 
   // ── Download memory photos for color mood extraction ───────────────────────
@@ -964,10 +952,9 @@ export async function triggerIllustrationPipeline(
 
   if (prompts.length === 0) return { error: "No illustration prompts available." };
 
-  // Build parallel array of per-scene human-detection flags
+  // Build parallel array of per-scene human-detection flags (LLM-classified)
   const sceneHasHumans = (episode?.scenes && episode.scenes.length > 0)
-    ? episode.scenes.slice(0, 12).map((s) =>
-        hasExtraHumans(s.text ?? ""))
+    ? episode.scenes.slice(0, 12).map((s) => s.has_humans ?? false)
     : [];
 
   const childId = harvest.child_id;
@@ -1994,6 +1981,14 @@ Outfit rules (the "outfit" field per scene):
 - Do NOT include skin tone, hair, face, or body details — only clothing and accessories.
 - Examples: "blue swim trunks and a rash guard", "soft striped pajamas", "denim shorts and a green explorer hat"
 
+Scene cast classification (the "has_humans" field per scene):
+- Set has_humans = true if the scene contains any human characters besides the hero — parents, siblings, human friends, a wizard, old man, stranger, neighbor, anyone human.
+- Set has_humans = false if the only non-hero characters are animals, fantasy creatures, magical beings, talking objects, or otherwise non-human companions. A companion called "friend" that is an animal does NOT make a scene have humans.
+- Examples:
+  * Scene at the playground with Mama and a sibling → has_humans: true
+  * Scene exploring the forest with friend Pebble the rabbit → has_humans: false
+  * Scene meeting the village wizard in his cottage → has_humans: true
+
 Content safety:
 - No violence, blood, death, or injury
 - No scary darkness or isolation
@@ -2027,7 +2022,8 @@ Output this exact JSON structure:
       "beat": "setup | escalation | setback | turning_point | resolution | celebration | teaser",`}
       "text": "...",
       "illustration_prompt": "...",
-      "outfit": "4-10 words: concrete clothing items for this scene"
+      "outfit": "4-10 words: concrete clothing items for this scene",
+      "has_humans": false
     }
   ],
   ${finalPageSection},
