@@ -68,30 +68,47 @@ export async function POST(req: NextRequest) {
 
   console.log(`Illustrations complete for harvest ${harvest_id}`);
 
-  // Clean up LoRA weights
+  // Clean up harvest photos (LoRA retained for regen)
   const { data: harvest, error: harvestError } = await supabase
     .from("harvests")
-    .select("face_ref_path, child_id")
+    .select("photo_paths")
     .eq("id", harvest_id)
     .single();
 
-  if (!harvestError && harvest?.face_ref_path) {
+  if (harvestError) {
+    console.error(
+      `[illustrations-complete] Failed to fetch photo_paths for harvest ${harvest_id}:`,
+      harvestError
+    );
+  } else if (!harvest?.photo_paths || harvest.photo_paths.length === 0) {
+    console.warn(
+      `[illustrations-complete] harvest ${harvest_id} has no photo_paths — skipping photo cleanup`
+    );
+  } else {
     try {
-      const deleteUrl = process.env.MODAL_FLUX_DELETE_URL!;
-      const deleteRes = await fetch(deleteUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.MODAL_AUTH_TOKEN}`,
-        },
-        body: JSON.stringify({
-          face_model_id: harvest.face_ref_path,
-          child_id: harvest.child_id,
-          harvest_id: harvest_id,
-        }),
-      });
-      if (deleteRes.ok) {
-        console.log(`Face model deleted for harvest ${harvest_id}`);
+      const { data: removed, error: removeError } = await supabase.storage
+        .from("harvest-photos")
+        .remove(harvest.photo_paths);
+
+      if (removeError) {
+        console.error(
+          `[illustrations-complete] harvest-photos removal error for ${harvest_id}:`,
+          removeError
+        );
+      } else {
+        const removedCount = removed?.length ?? 0;
+        const expectedCount = harvest.photo_paths.length;
+        if (removedCount !== expectedCount) {
+          console.error(
+            `[illustrations-complete] harvest-photos count mismatch for ${harvest_id}: ` +
+            `removed ${removedCount} vs expected ${expectedCount}`
+          );
+        } else {
+          console.log(
+            `[illustrations-complete] Deleted ${removedCount} harvest photos for ${harvest_id}`
+          );
+        }
+
         const { error: timestampError } = await supabase
           .from("harvests")
           .update({ photos_deleted_at: new Date().toISOString() })
@@ -102,14 +119,12 @@ export async function POST(req: NextRequest) {
             timestampError
           );
         }
-      } else {
-        console.error(
-          `Face model deletion returned ${deleteRes.status} for harvest ${harvest_id}`
-        );
       }
     } catch (e) {
-      console.error("Failed to delete face model:", e);
-      // Don't fail the webhook — deletion failure is non-critical
+      console.error(
+        `[illustrations-complete] harvest-photos cleanup threw for ${harvest_id}:`,
+        e
+      );
     }
   }
 

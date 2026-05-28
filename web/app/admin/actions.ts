@@ -803,8 +803,6 @@ export async function completeIllustrationGeneration(
   // ── Spawn illustration generation on Modal ──────────────────────────────────
 
   const generateUrl = process.env.MODAL_FLUX_GENERATE_URL!;
-  const deleteUrl = process.env.MODAL_FLUX_DELETE_URL!;
-
   try {
     await callModal(
       generateUrl,
@@ -822,9 +820,6 @@ export async function completeIllustrationGeneration(
       }
     );
   } catch (e) {
-    await callModal(deleteUrl, {
-      face_model_id: faceModelId,
-    }).catch(() => {});
     const msg = e instanceof Error ? e.message : "Unknown error";
     logEvent({
       event_type: "illustration.generation",
