@@ -1044,6 +1044,8 @@ def generate_flux_illustrations(body: dict) -> dict:
     child_age = body.get("child_age", 3)
     pronouns = body.get("pronouns", "child")
     skin_tone = body.get("skin_tone_hint", "")
+    cover_outfit_raw = (body.get("cover_outfit") or "").strip()[:120]
+    scene_outfits_raw = body.get("scene_outfits", [])
     harvest_id = body.get("harvest_id")
     episode_id = body.get("episode_id")
     child_id = body.get("child_id")
@@ -1117,6 +1119,9 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     age_prefix = f"{child_age}-year-old toddler {gender_word}"
 
+    # Outfit clause for cover (signature_look from story bible)
+    cover_outfit_clause = f"wearing {cover_outfit_raw}, " if cover_outfit_raw else ""
+
     # Style anchor — applied to EVERY scene and cover without exception
     STYLE_SUFFIX = (
         ", cinematic children's book photography, warm golden hour lighting, "
@@ -1167,6 +1172,7 @@ def generate_flux_illustrations(body: dict) -> dict:
         f"{gender_t5_reinforcement}"
         f"{age_prefix}, sks child, "
         f"{skin_tone + ', ' if skin_tone else ''}"
+        f"{cover_outfit_clause}"
         f"portrait, head and shoulders framing, magical storybook world, "
         f"looking at viewer, warm smile"
         f"{STYLE_SUFFIX}"
@@ -1192,6 +1198,12 @@ def generate_flux_illustrations(body: dict) -> dict:
         scene_negative = people_suppression + NEGATIVE_PROMPT
         avoid_str = f"avoid: {scene_negative}. "
 
+        # Per-scene outfit from LLM
+        raw_outfit = (scene_outfits_raw[i].strip()[:80]
+                      if i < len(scene_outfits_raw) and scene_outfits_raw[i]
+                      else "")
+        scene_outfit_clause = f"wearing {raw_outfit}, " if raw_outfit else ""
+
         scene_clip = (
             f"{gender_clip_reinforcement}"
             f"{age_prefix}, sks child, "
@@ -1203,6 +1215,7 @@ def generate_flux_illustrations(body: dict) -> dict:
             f"{gender_t5_reinforcement}"
             f"{age_prefix}, sks child, "
             f"{skin_tone + ', ' if skin_tone else ''}"
+            f"{scene_outfit_clause}"
             f"foreground, head and shoulders to waist-up framing, facing camera, "
             f"{scene_desc}"
             f"{STYLE_SUFFIX}"
@@ -1443,6 +1456,8 @@ def generate_illustrations_http(request: dict) -> dict:
         "face_model_id": request.get("face_model_id"),
         "scene_prompts": scene_prompts,
         "scene_has_humans": scene_has_humans,
+        "scene_outfits": request.get("scene_outfits", []),
+        "cover_outfit": request.get("cover_outfit", ""),
         "child_age": request.get("age", 3),
         "pronouns": pronouns,
         "skin_tone_hint": skin_tone_hint,

@@ -82,7 +82,7 @@ interface ChildFullDbRow {
 
 interface EpisodeDbRow {
   id: string;
-  scenes: { number: number; text: string; illustration_prompt: string }[] | null;
+  scenes: { number: number; text: string; illustration_prompt: string; outfit?: string }[] | null;
 }
 
 interface ParentDbRow {
@@ -719,6 +719,7 @@ export async function completeIllustrationGeneration(
 
   let characterDescription = "";
   let hairDescription = "";
+  let signatureLook = "";
 
   const { data: bibleRaw } = await supa
     .from("story_bibles")
@@ -737,6 +738,7 @@ export async function completeIllustrationGeneration(
       | undefined;
 
     hairDescription = phys?.hair ?? "";
+    signatureLook = (phys?.signature_look ?? "").trim().slice(0, 120);
     const appearance = phys
       ? [phys.hair, phys.eyes, phys.skin_tone, phys.signature_look]
           .filter(Boolean)
@@ -750,19 +752,21 @@ export async function completeIllustrationGeneration(
     console.log("Story bible physical_description:", JSON.stringify(phys));
     console.log("characterDescription sent to Modal:", characterDescription);
     console.log("hairDescription sent to Modal:", hairDescription);
+    console.log("signatureLook sent to Modal:", signatureLook);
   }
 
   // ── Build prompts ──────────────────────────────────────────────────────────
 
   let prompts: string[];
+  let sceneOutfits: string[];
 
   if (episode?.scenes && episode.scenes.length > 0) {
-    prompts = episode.scenes
-      .map((s) => s.illustration_prompt)
-      .filter(Boolean)
-      .slice(0, 12);
+    const scenes = episode.scenes.slice(0, 12);
+    prompts = scenes.map((s) => s.illustration_prompt).filter(Boolean);
+    sceneOutfits = scenes.map((s) => (s.outfit ?? "").trim().slice(0, 80));
   } else {
     prompts = buildDefaultPrompts(child, harvest);
+    sceneOutfits = [];
   }
 
   if (prompts.length === 0) return { error: "No illustration prompts available." };
@@ -797,6 +801,8 @@ export async function completeIllustrationGeneration(
     pronouns: child.pronouns ?? "they_them",
     ...(characterDescription ? { character_description: characterDescription } : {}),
     ...(hairDescription ? { hair_description: hairDescription } : {}),
+    ...(signatureLook ? { cover_outfit: signatureLook } : {}),
+    scene_outfits: sceneOutfits,
     ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
   };
 
@@ -906,6 +912,7 @@ export async function triggerIllustrationPipeline(
 
   let characterDescription = "";
   let hairDescription = "";
+  let signatureLook = "";
 
   const { data: bibleRaw } = await supa
     .from("story_bibles")
@@ -924,6 +931,7 @@ export async function triggerIllustrationPipeline(
       | undefined;
 
     hairDescription = phys?.hair ?? "";
+    signatureLook = (phys?.signature_look ?? "").trim().slice(0, 120);
     const appearance = phys
       ? [phys.hair, phys.eyes, phys.skin_tone, phys.signature_look]
           .filter(Boolean)
@@ -937,19 +945,21 @@ export async function triggerIllustrationPipeline(
     console.log("[triggerPipeline] Story bible physical_description:", JSON.stringify(phys));
     console.log("[triggerPipeline] characterDescription:", characterDescription);
     console.log("[triggerPipeline] hairDescription:", hairDescription);
+    console.log("[triggerPipeline] signatureLook:", signatureLook);
   }
 
   // ── Build prompts ──────────────────────────────────────────────────────────
 
   let prompts: string[];
+  let sceneOutfits: string[];
 
   if (episode?.scenes && episode.scenes.length > 0) {
-    prompts = episode.scenes
-      .map((s) => s.illustration_prompt)
-      .filter(Boolean)
-      .slice(0, 12);
+    const scenes = episode.scenes.slice(0, 12);
+    prompts = scenes.map((s) => s.illustration_prompt).filter(Boolean);
+    sceneOutfits = scenes.map((s) => (s.outfit ?? "").trim().slice(0, 80));
   } else {
     prompts = buildDefaultPrompts(child, harvest);
+    sceneOutfits = [];
   }
 
   if (prompts.length === 0) return { error: "No illustration prompts available." };
@@ -986,6 +996,8 @@ export async function triggerIllustrationPipeline(
     pronouns: child.pronouns ?? "they_them",
     ...(characterDescription ? { character_description: characterDescription } : {}),
     ...(hairDescription ? { hair_description: hairDescription } : {}),
+    ...(signatureLook ? { cover_outfit: signatureLook } : {}),
+    scene_outfits: sceneOutfits,
     ...(memoryPhotosBase64.length > 0 ? { memory_photos_b64: memoryPhotosBase64 } : {}),
   };
 
@@ -1959,7 +1971,7 @@ ${isBoardBook ? `Sensory details:
 ${beatSection}
 
 Illustration prompt rules:
-- Do NOT include character appearance details (hair color, eye color, skin tone, clothing, facial features) in the illustration_prompt. Character appearance is handled automatically by the illustration system. Including appearance words will degrade quality.
+- Do NOT include character appearance details (hair color, eye color, skin tone, facial features) or clothing in the illustration_prompt. Character appearance and outfit are handled in separate fields. Including appearance or clothing words in illustration_prompt will degrade quality.
 - CHILD FRAMING (hard rule): In EVERY scene, the child must be the dominant subject in the foreground with their face clearly visible at close-up or medium-close framing (head and shoulders or waist-up). The magical/fantastical elements from the story should fill the background behind the child. Never show the child from behind, far away, as a silhouette, or with their face obscured.
 - The background MUST feature the most fantastical or magical visual element from the scene. If the story mentions flying bikes, cloud stations, sky-paths, glowing rivers, talking trees — those must be vividly described as the background environment behind the child.
 - Keep each illustration_prompt between 20 and 40 words. Every prompt MUST include ALL of these elements:
@@ -1974,6 +1986,13 @@ Illustration prompt rules:
   GOOD: "child gripping glowing bicycle handlebars, face lit with excitement, spiraling cloud trails and luminous sky-stations filling the vast golden sky behind them, medium-close shot, sense of boundless freedom"
   BAD: "child from behind looking at a glowing tree" — face not visible, child from behind
   GOOD: "child gazing upward in awe, enormous ancient oak with a glowing face in the bark behind them, dappled green light filtering through canopy, mossy roots framing the scene, close-up, deep forest mystery"
+
+Outfit rules (the "outfit" field per scene):
+- Pick a single outfit fitting the scene's setting, activity, and mood. Concrete clothing items only, 4–10 words.
+- Maintain continuity: do NOT change outfit between scenes sharing the same setting or time of day. Change outfit only when setting or time shifts naturally (e.g. daytime adventure → bedtime).
+- Stay consistent with the hero's signature look as a baseline aesthetic. A child whose default is denim still gets denim-feel outfits where appropriate — the wardrobe should feel like the same kid's closet.
+- Do NOT include skin tone, hair, face, or body details — only clothing and accessories.
+- Examples: "blue swim trunks and a rash guard", "soft striped pajamas", "denim shorts and a green explorer hat"
 
 Content safety:
 - No violence, blood, death, or injury
@@ -2007,7 +2026,8 @@ Output this exact JSON structure:
       "number": 1,${isBoardBook ? "" : `
       "beat": "setup | escalation | setback | turning_point | resolution | celebration | teaser",`}
       "text": "...",
-      "illustration_prompt": "..."
+      "illustration_prompt": "...",
+      "outfit": "4-10 words: concrete clothing items for this scene"
     }
   ],
   ${finalPageSection},
@@ -2016,7 +2036,7 @@ Output this exact JSON structure:
 }
 
 ${isBoardBook ? `Board-book rules: story_seeds fields must all be empty strings "". No beat labels needed — omit the "beat" field from each scene. Focus on rhythm, repetition, and sensory delight over narrative arc.` : ""}
-Remember: exactly ${sceneCount} scenes. Each illustration_prompt MUST show the child as the dominant foreground subject with face clearly visible (close-up or medium-close). Fantastical/magical elements fill the background behind the child. Never show child from behind, far away, as silhouette, or face obscured. 20-40 words. Do NOT include character appearance details — the illustration system handles that automatically.`,
+Remember: exactly ${sceneCount} scenes. Each illustration_prompt MUST show the child as the dominant foreground subject with face clearly visible (close-up or medium-close). Fantastical/magical elements fill the background behind the child. Never show child from behind, far away, as silhouette, or face obscured. 20-40 words. Do NOT include appearance or clothing in illustration_prompt — use the outfit field for clothing (4-10 words, concrete items only).`,
   };
 }
 
