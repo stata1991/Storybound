@@ -1021,6 +1021,157 @@ def generate_single_image(payload: dict) -> dict:
     }
 
 
+# ─── Prompt constants ────────────────────────────────────────────────────────
+
+STYLE_SUFFIX = (
+    ", cinematic children's book photography, warm golden hour lighting, "
+    "soft natural light, dreamy magical atmosphere, "
+    "shallow depth of field, soft bokeh background, "
+    "professional portrait photography, magical realism, "
+    "rich saturated colors, whimsical storybook scene, "
+    "realistic proportions"
+)
+
+PEOPLE_SUPPRESSION = (
+    "multiple children, two children, siblings, brother, sister, "
+    "other child, second child, background children, extra person, "
+    "parent, mother, father, grandparent, family members, "
+    "crowd, group of people, "
+)
+
+_NEGATIVE_BASE = (
+    "illustration, illustrated, drawing, cartoon, anime, "
+    "painting, gouache, painterly, 2D illustrated, flat shading, "
+    "3D render, CGI, Pixar, Disney 3D, animated film, "
+    "digital painting, oil painting, watercolor, "
+    "disproportionate head, oversized head, chibi, bobblehead, "
+    "back of head, facing away, looking away, "
+    "black and white, monochrome, "
+    "sketch, line art, text, watermark, blurry, deformed, "
+    "extra limbs, adult, teenager, low quality face, "
+    "blurry face"
+)
+
+
+# ─── Payload-building helpers ────────────────────────────────────────────────
+
+
+def _build_cover_payload(
+    face_model_id: str,
+    age_prefix: str,
+    skin_tone: str,
+    gender_clip_reinforcement: str,
+    gender_t5_reinforcement: str,
+    gender_negative: str,
+    cover_outfit: str,
+    seed: int,
+) -> dict:
+    """Returns the Modal payload dict for the cover illustration."""
+    negative_prompt = gender_negative + _NEGATIVE_BASE
+    cover_outfit_clause = f"wearing {cover_outfit}, " if cover_outfit else ""
+    cover_avoid_str = f"avoid: {PEOPLE_SUPPRESSION}{negative_prompt}. "
+
+    cover_clip = (
+        f"{gender_clip_reinforcement}"
+        f"{age_prefix}, sks child, "
+        f"realistic proportions, portrait, head and shoulders framing, "
+        f"cinematic children's book photo, magical storybook scene"
+    )
+    cover_t5 = (
+        f"{cover_avoid_str}"
+        f"{gender_t5_reinforcement}"
+        f"{age_prefix}, sks child, "
+        f"{skin_tone + ', ' if skin_tone else ''}"
+        f"{cover_outfit_clause}"
+        f"portrait, head and shoulders framing, magical storybook world, "
+        f"looking at viewer, warm smile"
+        f"{STYLE_SUFFIX}"
+    )
+
+    return {
+        "face_model_id": face_model_id,
+        "clip_prompt": cover_clip,
+        "t5_prompt": cover_t5,
+        "negative_prompt": PEOPLE_SUPPRESSION + negative_prompt,
+        "has_humans": False,
+        "true_cfg_scale": 1.5,
+        "height": 1024,
+        "width": 1024,
+        "guidance_scale": 3.5,
+        "seed": seed,
+        "enable_retry": False,
+        "label": "Cover",
+    }
+
+
+def _build_scene_payload(
+    idx: int,
+    scene: dict,
+    face_model_id: str,
+    age_prefix: str,
+    skin_tone: str,
+    gender_clip_reinforcement: str,
+    gender_t5_reinforcement: str,
+    gender_negative: str,
+    companion_map: dict,
+    seed: int,
+) -> dict:
+    """Returns the Modal payload dict for one scene illustration."""
+    scene_desc = scene.get("illustration_prompt", "")
+    has_humans = scene.get("has_humans", False)
+    raw_outfit = (scene.get("outfit") or "").strip()[:80]
+    companions_in_scene = scene.get("companions_in_scene") or []
+
+    negative_prompt = gender_negative + _NEGATIVE_BASE
+    people_suppression = "" if has_humans else PEOPLE_SUPPRESSION
+    scene_negative = people_suppression + negative_prompt
+    avoid_str = f"avoid: {scene_negative}. "
+
+    scene_outfit_clause = f"wearing {raw_outfit}, " if raw_outfit else ""
+
+    comp_parts = []
+    for cname in companions_in_scene[:3]:
+        cdesc = companion_map.get(cname, "")
+        if cdesc:
+            comp_parts.append(f"{cname} ({cdesc})")
+        else:
+            comp_parts.append(cname)
+    companion_clause = ("with " + " and ".join(comp_parts) + ", ") if comp_parts else ""
+
+    scene_clip = (
+        f"{gender_clip_reinforcement}"
+        f"{age_prefix}, sks child, "
+        f"realistic proportions, head and shoulders framing, foreground, facing camera, "
+        f"{scene_desc}, cinematic children's book photo, magical storybook scene"
+    )
+    scene_t5 = (
+        f"{avoid_str}"
+        f"{gender_t5_reinforcement}"
+        f"{age_prefix}, sks child, "
+        f"{skin_tone + ', ' if skin_tone else ''}"
+        f"{scene_outfit_clause}"
+        f"foreground, head and shoulders to waist-up framing, facing camera, "
+        f"{companion_clause}"
+        f"{scene_desc}"
+        f"{STYLE_SUFFIX}"
+    )
+
+    return {
+        "face_model_id": face_model_id,
+        "clip_prompt": scene_clip,
+        "t5_prompt": scene_t5,
+        "negative_prompt": scene_negative,
+        "has_humans": has_humans,
+        "true_cfg_scale": 1.5,
+        "height": 768,
+        "width": 768,
+        "guidance_scale": 4.5,
+        "seed": seed,
+        "enable_retry": True,
+        "label": f"Scene {idx+1}",
+    }
+
+
 # ─── Orchestrator ────────────────────────────────────────────────────────────
 # CPU-only coordinator: builds prompts, fans out 9 workers in parallel,
 # collects results, uploads to Supabase, updates DB, fires webhook.
@@ -1130,9 +1281,6 @@ def generate_flux_illustrations(body: dict) -> dict:
 
     age_prefix = f"{child_age}-year-old toddler {gender_word}"
 
-    # Outfit clause for cover (signature_look from story bible)
-    cover_outfit_clause = f"wearing {cover_outfit_raw}, " if cover_outfit_raw else ""
-
     # Companion name→description lookup for per-scene T5 injection
     companion_map = {}
     for c in companions_lookup:
@@ -1141,38 +1289,7 @@ def generate_flux_illustrations(body: dict) -> dict:
         if cname and cdesc:
             companion_map[cname] = cdesc
 
-    # Style anchor — applied to EVERY scene and cover without exception
-    STYLE_SUFFIX = (
-        ", cinematic children's book photography, warm golden hour lighting, "
-        "soft natural light, dreamy magical atmosphere, "
-        "shallow depth of field, soft bokeh background, "
-        "professional portrait photography, magical realism, "
-        "rich saturated colors, whimsical storybook scene, "
-        "realistic proportions"
-    )
-
-    NEGATIVE_PROMPT = (
-        gender_negative +
-        "illustration, illustrated, drawing, cartoon, anime, "
-        "painting, gouache, painterly, 2D illustrated, flat shading, "
-        "3D render, CGI, Pixar, Disney 3D, animated film, "
-        "digital painting, oil painting, watercolor, "
-        "disproportionate head, oversized head, chibi, bobblehead, "
-        "back of head, facing away, looking away, "
-        "black and white, monochrome, "
-        "sketch, line art, text, watermark, blurry, deformed, "
-        "extra limbs, adult, teenager, low quality face, "
-        "blurry face"
-    )
-
-    PEOPLE_SUPPRESSION = (
-        "multiple children, two children, siblings, brother, sister, "
-        "other child, second child, background children, extra person, "
-        "parent, mother, father, grandparent, family members, "
-        "crowd, group of people, "
-    )
-
-    # ── Build 9 payloads (1 cover + 8 scenes) ──
+    # ── Build payloads (1 cover + N scenes) ──
     seed_base = int(
         hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16
     ) & 0x7FFFFFFF
@@ -1180,95 +1297,37 @@ def generate_flux_illustrations(body: dict) -> dict:
     payloads = []
 
     # Cover payload
-    cover_avoid_str = f"avoid: {PEOPLE_SUPPRESSION}{NEGATIVE_PROMPT}. "
-    cover_clip = (
-        f"{gender_clip_reinforcement}"
-        f"{age_prefix}, sks child, "
-        f"realistic proportions, portrait, head and shoulders framing, cinematic children's book photo, magical storybook scene"
-    )
-    cover_t5 = (
-        f"{cover_avoid_str}"
-        f"{gender_t5_reinforcement}"
-        f"{age_prefix}, sks child, "
-        f"{skin_tone + ', ' if skin_tone else ''}"
-        f"{cover_outfit_clause}"
-        f"portrait, head and shoulders framing, magical storybook world, "
-        f"looking at viewer, warm smile"
-        f"{STYLE_SUFFIX}"
-    )
-    payloads.append({
-        "face_model_id": face_model_id,
-        "clip_prompt": cover_clip,
-        "t5_prompt": cover_t5,
-        "negative_prompt": PEOPLE_SUPPRESSION + NEGATIVE_PROMPT,
-        "has_humans": False,
-        "true_cfg_scale": 1.5,
-        "height": 1024,
-        "width": 1024,
-        "guidance_scale": 3.5,
-        "seed": int(hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16),
-        "enable_retry": False,
-        "label": "Cover",
-    })
+    payloads.append(_build_cover_payload(
+        face_model_id=face_model_id,
+        age_prefix=age_prefix,
+        skin_tone=skin_tone,
+        gender_clip_reinforcement=gender_clip_reinforcement,
+        gender_t5_reinforcement=gender_t5_reinforcement,
+        gender_negative=gender_negative,
+        cover_outfit=cover_outfit_raw,
+        seed=int(hashlib.md5(face_model_id.encode()).hexdigest()[:8], 16),
+    ))
 
     # Scene payloads
     for i, scene_desc in enumerate(scene_prompts):
-        has_humans = scene_has_humans[i] if i < len(scene_has_humans) else False
-        people_suppression = "" if has_humans else PEOPLE_SUPPRESSION
-        scene_negative = people_suppression + NEGATIVE_PROMPT
-        avoid_str = f"avoid: {scene_negative}. "
-
-        # Per-scene outfit from LLM
-        raw_outfit = (scene_outfits_raw[i].strip()[:80]
-                      if i < len(scene_outfits_raw) and scene_outfits_raw[i]
-                      else "")
-        scene_outfit_clause = f"wearing {raw_outfit}, " if raw_outfit else ""
-
-        # Per-scene companion clause from LLM-tagged names + story bible descriptions
-        scene_comp_names = (scene_companions_raw[i]
-                            if i < len(scene_companions_raw) and scene_companions_raw[i]
-                            else [])
-        comp_parts = []
-        for cname in scene_comp_names[:3]:
-            cdesc = companion_map.get(cname, "")
-            if cdesc:
-                comp_parts.append(f"{cname} ({cdesc})")
-            else:
-                comp_parts.append(cname)
-        companion_clause = ("with " + " and ".join(comp_parts) + ", ") if comp_parts else ""
-
-        scene_clip = (
-            f"{gender_clip_reinforcement}"
-            f"{age_prefix}, sks child, "
-            f"realistic proportions, head and shoulders framing, foreground, facing camera, "
-            f"{scene_desc}, cinematic children's book photo, magical storybook scene"
-        )
-        scene_t5 = (
-            f"{avoid_str}"
-            f"{gender_t5_reinforcement}"
-            f"{age_prefix}, sks child, "
-            f"{skin_tone + ', ' if skin_tone else ''}"
-            f"{scene_outfit_clause}"
-            f"foreground, head and shoulders to waist-up framing, facing camera, "
-            f"{companion_clause}"
-            f"{scene_desc}"
-            f"{STYLE_SUFFIX}"
-        )
-
-        payloads.append({
-            "face_model_id": face_model_id,
-            "clip_prompt": scene_clip,
-            "t5_prompt": scene_t5,
-            "negative_prompt": scene_negative,
-            "has_humans": has_humans,
-            "true_cfg_scale": 1.5,
-            "height": 768,
-            "width": 768,
-            "guidance_scale": 4.5,
-            "seed": seed_base + i * 1000,
-            "enable_retry": True,
-            "label": f"Scene {i+1}",
-        })
+        scene = {
+            "illustration_prompt": scene_desc,
+            "has_humans": scene_has_humans[i] if i < len(scene_has_humans) else False,
+            "outfit": scene_outfits_raw[i] if i < len(scene_outfits_raw) else "",
+            "companions_in_scene": scene_companions_raw[i] if i < len(scene_companions_raw) else [],
+        }
+        payloads.append(_build_scene_payload(
+            idx=i,
+            scene=scene,
+            face_model_id=face_model_id,
+            age_prefix=age_prefix,
+            skin_tone=skin_tone,
+            gender_clip_reinforcement=gender_clip_reinforcement,
+            gender_t5_reinforcement=gender_t5_reinforcement,
+            gender_negative=gender_negative,
+            companion_map=companion_map,
+            seed=seed_base + i * 1000,
+        ))
 
     print(f"[TIMING] phase=prompt_build count={len(payloads)} elapsed={_time.perf_counter()-_t0:.1f}s cumulative={_cum():.1f}s")
 
@@ -1515,3 +1574,161 @@ def generate_illustrations_http(request: dict) -> dict:
 @app.function(image=flux_image)
 def health_check():
     return {"status": "ok", "model": "FLUX.1-dev"}
+
+
+# ─── Single-image regeneration endpoint ──────────────────────────────────────
+
+
+@app.function(
+    image=flux_image,
+    timeout=180,
+    volumes={"/lora-weights": lora_volume},
+    secrets=[modal.Secret.from_name("storybound-secrets")],
+    memory=2048,
+)
+@modal.fastapi_endpoint(method="POST")
+def regenerate_illustration_http(request: dict) -> dict:
+    """Regenerate a single illustration (cover or scene) synchronously."""
+    import random
+    import re
+
+    face_model_id = request.get("face_model_id")
+    illustration_index = request.get("illustration_index")
+    child_age = request.get("age", 3)
+    scenes = request.get("scenes", [])
+    signature_look = (request.get("signature_look") or "").strip()[:120]
+    companions_list = request.get("companions", [])
+
+    # ── Validate ──
+    if not face_model_id:
+        return {"status": "error", "message": "face_model_id is required"}
+    if illustration_index is None:
+        return {"status": "error", "message": "illustration_index is required"}
+    if illustration_index < 0 or illustration_index > len(scenes):
+        return {
+            "status": "error",
+            "message": f"illustration_index {illustration_index} out of range [0, {len(scenes)}]",
+        }
+
+    # ── Extract skin tone from character_description ──
+    char_desc = request.get("character_description", "")
+    skin_tone = ""
+    if char_desc:
+        desc_lower = char_desc.lower()
+        if "warm brown" in desc_lower or "golden brown" in desc_lower:
+            skin_tone = "warm medium brown skin, South Asian skin tone"
+        elif "dark brown" in desc_lower or "deep brown" in desc_lower:
+            skin_tone = "medium brown skin"
+        elif "light brown" in desc_lower or "fair" in desc_lower:
+            skin_tone = "light brown skin"
+        elif "brown skin" in desc_lower:
+            skin_tone = "warm brown skin"
+
+    # ── Map pronouns ──
+    pronouns_raw = request.get("pronouns", "child")
+    if pronouns_raw in ["he_him", "boy", "male"]:
+        pronouns = "boy"
+    elif pronouns_raw in ["she_her", "girl", "female"]:
+        pronouns = "girl"
+    else:
+        pronouns = "child"
+
+    # ── Build identity context ──
+    if pronouns == "boy":
+        gender_word = "boy"
+        gender_clip_reinforcement = (
+            "boy, male child, short hair, "
+        )
+        gender_t5_reinforcement = (
+            "boy with short hair, male child, "
+            "short straight hair, hair cut above ears, "
+            "no hair accessories, no hair ties, "
+        )
+        gender_negative = (
+            "girl, female, feminine, "
+            "bindi, tilak, forehead dot, forehead mark, dot on forehead, red dot, sindoor, "
+            "pigtails, ponytails, twin tails, side tails, "
+            "hair ties, hair ribbons, hair clips, hair bows, "
+            "braids, plaits, "
+            "dress, skirt, frock, feminine clothing, "
+            "long hair, "
+        )
+    elif pronouns == "girl":
+        gender_word = "girl"
+        gender_clip_reinforcement = (
+            "girl, female child, "
+        )
+        gender_t5_reinforcement = (
+            "girl with long hair, female child, "
+        )
+        gender_negative = (
+            "boy, male, masculine, "
+            "short hair, buzz cut, "
+        )
+    else:
+        gender_word = "child"
+        gender_clip_reinforcement = ""
+        gender_t5_reinforcement = ""
+        gender_negative = ""
+
+    age_prefix = f"{child_age}-year-old toddler {gender_word}"
+
+    # ── Build companion map ──
+    companion_map = {}
+    for c in companions_list:
+        cname = (c.get("name") or "").strip()
+        cdesc = (c.get("physical_description") or "").strip()[:120]
+        if cname and cdesc:
+            companion_map[cname] = cdesc
+
+    # ── Fresh random seed ──
+    fresh_seed = random.randint(0, 2**31 - 1)
+
+    # ── Build payload ──
+    if illustration_index == 0:
+        payload = _build_cover_payload(
+            face_model_id=face_model_id,
+            age_prefix=age_prefix,
+            skin_tone=skin_tone,
+            gender_clip_reinforcement=gender_clip_reinforcement,
+            gender_t5_reinforcement=gender_t5_reinforcement,
+            gender_negative=gender_negative,
+            cover_outfit=signature_look,
+            seed=fresh_seed,
+        )
+    else:
+        scene = dict(scenes[illustration_index - 1])
+        # Strip hair descriptions that conflict with gender enforcement
+        if pronouns == "boy":
+            prompt = scene.get("illustration_prompt", "")
+            prompt = re.sub(r'\b(wavy|curly|long|flowing|bouncing)\s+hair\b', 'short hair', prompt, flags=re.IGNORECASE)
+            prompt = re.sub(r'\bpigtails?\b|\bponytails?\b|\bbraids?\b', 'short hair', prompt, flags=re.IGNORECASE)
+            scene["illustration_prompt"] = prompt
+        payload = _build_scene_payload(
+            idx=illustration_index - 1,
+            scene=scene,
+            face_model_id=face_model_id,
+            age_prefix=age_prefix,
+            skin_tone=skin_tone,
+            gender_clip_reinforcement=gender_clip_reinforcement,
+            gender_t5_reinforcement=gender_t5_reinforcement,
+            gender_negative=gender_negative,
+            companion_map=companion_map,
+            seed=fresh_seed,
+        )
+
+    # ── Synchronous generation — blocks until complete ──
+    result = generate_single_image.remote(payload)
+
+    if result["status"] != "ok":
+        return {
+            "status": "error",
+            "message": result.get("error_message", "Generation failed"),
+        }
+
+    return {
+        "status": "ok",
+        "image_png_b64": result["image_png_b64"],
+        "label": result["label"],
+        "seed": fresh_seed,
+    }
