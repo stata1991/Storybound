@@ -34,6 +34,7 @@ const serverSchema = z.object({
   MODAL_WEBHOOK_SECRET: z.string().min(1),
   MODAL_FLUX_TRAIN_URL: z.string().url(),
   MODAL_FLUX_GENERATE_URL: z.string().url(),
+  MODAL_FLUX_REGEN_URL: z.string().url(),
   MODAL_PDF_URL: z.string().url(),
   MODAL_VALIDATE_PHOTOS_URL: z.string().url(),
   PHOTO_VALIDATION_COMPLETE_WEBHOOK_URL: z.string().url(),

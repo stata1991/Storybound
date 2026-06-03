@@ -1121,6 +1121,237 @@ export async function triggerIllustrationPipeline(
   return { success: true };
 }
 
+/* ─── Single illustration regeneration ─────────────────────────────────────── */
+
+export async function regenerateIllustration(
+  harvestId: string,
+  illustrationIndex: number
+): Promise<{ success: true; signedUrl: string } | { error: string }> {
+  const auth = await verifyAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  // Validate index
+  if (!Number.isInteger(illustrationIndex) || illustrationIndex < 0) {
+    return { error: "illustrationIndex must be a non-negative integer." };
+  }
+
+  const supa = getAdmin();
+
+  // ── Fetch harvest ──────────────────────────────────────────────────────────
+
+  const { data: harvestRaw } = await supa
+    .from("harvests")
+    .select("id, child_id, face_ref_generated, face_ref_path")
+    .eq("id", harvestId)
+    .single();
+
+  if (!harvestRaw) return { error: "Harvest not found." };
+  const harvest = harvestRaw as {
+    id: string;
+    child_id: string;
+    face_ref_generated: boolean;
+    face_ref_path: string | null;
+  };
+
+  if (!harvest.face_ref_generated || !harvest.face_ref_path) {
+    return { error: "No LoRA model available for this harvest." };
+  }
+  const faceModelId = harvest.face_ref_path;
+
+  // ── Fetch child for age + pronouns ─────────────────────────────────────────
+
+  const { data: childRaw } = await supa
+    .from("children")
+    .select("date_of_birth, pronouns")
+    .eq("id", harvest.child_id)
+    .single();
+
+  if (!childRaw) return { error: "Child not found." };
+  const child = childRaw as { date_of_birth: string | null; pronouns: string };
+  const childAge = child.date_of_birth ? storyChildAge(child.date_of_birth) : 6;
+
+  // ── Fetch episode ──────────────────────────────────────────────────────────
+
+  const { data: episodeRaw } = await supa
+    .from("episodes")
+    .select("id, scenes, illustration_paths")
+    .eq("harvest_id", harvestId)
+    .single();
+
+  if (!episodeRaw) return { error: "Episode not found." };
+  const episode = episodeRaw as {
+    id: string;
+    scenes: {
+      number: number;
+      text: string;
+      illustration_prompt: string;
+      outfit?: string;
+      has_humans?: boolean;
+      companions_in_scene?: string[];
+    }[] | null;
+    illustration_paths: string[];
+  };
+
+  const scenes = episode.scenes ?? [];
+  // cover = index 0, scenes = 1..N → max valid index = len(scenes)
+  if (illustrationIndex > scenes.length) {
+    return {
+      error: `illustrationIndex ${illustrationIndex} exceeds scene count (${scenes.length}).`,
+    };
+  }
+
+  // ── Fetch story bible for signature_look + companions ──────────────────────
+
+  let characterDescription = "";
+  let signatureLook = "";
+  const companions: { name: string; physical_description: string }[] = [];
+
+  const { data: bibleRaw } = await supa
+    .from("story_bibles")
+    .select("hero_profile, companion, season_arc")
+    .eq("child_id", harvest.child_id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (bibleRaw) {
+    const hero = (bibleRaw as Record<string, unknown>).hero_profile as
+      | Record<string, unknown>
+      | undefined;
+    const phys = hero?.physical_description as
+      | Record<string, string>
+      | undefined;
+
+    signatureLook = (phys?.signature_look ?? "").trim().slice(0, 120);
+    const appearance = phys
+      ? [phys.hair, phys.eyes, phys.skin_tone, phys.signature_look]
+          .filter(Boolean)
+          .join(", ")
+      : "";
+    if (appearance) characterDescription = appearance;
+
+    // Companion from primary companion column
+    const comp = (bibleRaw as Record<string, unknown>).companion as
+      | Record<string, unknown>
+      | undefined;
+    if (comp?.name && comp?.physical_description) {
+      companions.push({
+        name: String(comp.name),
+        physical_description: String(comp.physical_description).slice(0, 120),
+      });
+    }
+
+    // Companions from season_arc.supporting_characters
+    const arc = (bibleRaw as Record<string, unknown>).season_arc as
+      | Record<string, unknown>
+      | undefined;
+    const suppChars = arc?.supporting_characters as
+      | Record<string, unknown>[]
+      | undefined;
+    if (suppChars) {
+      for (const sc of suppChars) {
+        if (sc.name && sc.physical_description) {
+          companions.push({
+            name: String(sc.name),
+            physical_description: String(sc.physical_description).slice(0, 120),
+          });
+        }
+      }
+    }
+  }
+
+  // ── Call Modal regen endpoint ───────────────────────────────────────────────
+
+  const regenUrl = process.env.MODAL_FLUX_REGEN_URL!;
+
+  let result: {
+    status: string;
+    image_png_b64?: string;
+    label?: string;
+    seed?: number;
+    message?: string;
+  };
+  try {
+    result = await callModal<{
+      status: string;
+      image_png_b64?: string;
+      label?: string;
+      seed?: number;
+      message?: string;
+    }>(regenUrl, {
+      face_model_id: faceModelId,
+      illustration_index: illustrationIndex,
+      age: childAge,
+      pronouns: child.pronouns ?? "they_them",
+      character_description: characterDescription,
+      signature_look: signatureLook,
+      scenes,
+      companions,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Unknown error";
+    logEvent({
+      event_type: "illustration.regen",
+      status: "error",
+      harvest_id: harvestId,
+      message: `Regen failed (Modal call): ${msg}`,
+    });
+    return { error: `Regen failed: ${msg}` };
+  }
+
+  if (result.status !== "ok" || !result.image_png_b64) {
+    const msg = result.message || "unknown";
+    logEvent({
+      event_type: "illustration.regen",
+      status: "error",
+      harvest_id: harvestId,
+      message: `Regen failed: ${msg}`,
+    });
+    return { error: `Regen failed: ${msg}` };
+  }
+
+  // ── Upload to Supabase Storage (upsert overwrites original) ────────────────
+
+  const buffer = Buffer.from(result.image_png_b64, "base64");
+  const storagePath = `${harvest.child_id}/${episode.id}/${illustrationIndex}.png`;
+
+  const { error: upErr } = await supa.storage
+    .from("illustrations")
+    .upload(storagePath, buffer, {
+      contentType: "image/png",
+      upsert: true,
+    });
+
+  if (upErr) {
+    logEvent({
+      event_type: "illustration.regen",
+      status: "error",
+      harvest_id: harvestId,
+      message: `Regen upload failed: ${upErr.message}`,
+    });
+    return { error: `Regen upload failed: ${upErr.message}` };
+  }
+
+  // ── Generate signed URL ────────────────────────────────────────────────────
+
+  const { data: urlData, error: urlErr } = await supa.storage
+    .from("illustrations")
+    .createSignedUrl(storagePath, 3600);
+
+  if (urlErr || !urlData?.signedUrl) {
+    return { error: "Illustration regenerated but failed to create signed URL." };
+  }
+
+  logEvent({
+    event_type: "illustration.regen",
+    status: "success",
+    harvest_id: harvestId,
+    message: `Regenerated illustration index ${illustrationIndex}, seed ${result.seed}`,
+  });
+
+  return { success: true, signedUrl: urlData.signedUrl };
+}
+
 /* ─── Book generation ─────────────────────────────────────────────────────── */
 
 export async function generateBook(
