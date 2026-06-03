@@ -1581,7 +1581,7 @@ def health_check():
 
 @app.function(
     image=flux_image,
-    timeout=180,
+    timeout=300,
     volumes={"/lora-weights": lora_volume},
     secrets=[modal.Secret.from_name("storybound-secrets")],
     memory=2048,
