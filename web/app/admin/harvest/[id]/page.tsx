@@ -14,6 +14,7 @@ import GenerateStoryButton, {
   ForceResetStuckButton,
   PrintFlowButtons,
 } from "./GenerateStoryButton";
+import { RegenerateIllustrationButton } from "./RegenerateIllustrationButton";
 import { isHarvestStuck, formatElapsedSince } from "@/lib/harvest-staleness";
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
@@ -575,14 +576,14 @@ export default async function HarvestDetailPage({
                   {illustrationUrls.length} illustration{illustrationUrls.length !== 1 ? "s" : ""} generated
                 </div>
                 {illustrationUrls.length > 0 && (
-                  <div className="mt-3 grid grid-cols-3 gap-2 md:grid-cols-5">
+                  <div className="mt-3 grid grid-cols-3 gap-3 md:grid-cols-5">
                     {illustrationUrls.map((url, i) => (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
+                      <RegenerateIllustrationButton
                         key={i}
-                        src={url}
-                        alt={`Illustration ${i + 1}`}
-                        className="aspect-square w-full rounded-lg object-cover"
+                        harvestId={harvestId}
+                        illustrationIndex={i}
+                        initialSignedUrl={url}
+                        label={i === 0 ? "Cover" : `Scene ${i}`}
                       />
                     ))}
                   </div>
