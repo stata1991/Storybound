@@ -83,7 +83,7 @@ function page(content: string, bg = CREAM): string {
 function coverPage(params: BookParams): string {
   return page(`
     <img
-      src="data:image/png;base64,${params.coverImageBase64}"
+      src="data:image/jpeg;base64,${params.coverImageBase64}"
       style="
         position: absolute;
         top: 0; left: 0;
@@ -177,7 +177,7 @@ function illustrationPage(
       background: #000;
     ">
       <img
-        src="data:image/png;base64,${scene.imageBase64}"
+        src="data:image/jpeg;base64,${scene.imageBase64}"
         style="
           width: 100%;
           height: 100%;
@@ -297,7 +297,7 @@ function combinedScenePage(
         position: relative;
       ">
         <img
-          src="data:image/png;base64,${scene.imageBase64}"
+          src="data:image/jpeg;base64,${scene.imageBase64}"
           style="
             width: 100%;
             height: 100%;
@@ -532,7 +532,7 @@ export function generateBookHTML(params: BookParams): string {
         opacity: 0.85;
       ">
         <img
-          src="data:image/png;base64,${params.finalPageImageBase64}"
+          src="data:image/jpeg;base64,${params.finalPageImageBase64}"
           style="width: 100%; height: 100%; object-fit: cover; display: block;"
         />
       </div>` : "";

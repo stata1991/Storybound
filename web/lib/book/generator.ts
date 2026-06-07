@@ -1,4 +1,5 @@
 import { createClient as createAdminClient } from "@supabase/supabase-js";
+import sharp from "sharp";
 import { generateBookHTML } from "./template";
 import type { BookParams } from "./template";
 
@@ -32,9 +33,11 @@ function getAdmin() {
   );
 }
 
-/* ─── Download illustration as base64 ─────────────────────────────────────── */
+/* ─── Download illustration, upscale to print res, return JPEG base64 ────── */
 
-async function downloadAsBase64(
+const PRINT_PX = 2625; // 8.5 in × 300 PPI + 75 px bleed ≈ 2625 px
+
+async function downloadAndUpscale(
   admin: ReturnType<typeof getAdmin>,
   bucket: string,
   path: string
@@ -48,14 +51,23 @@ async function downloadAsBase64(
     throw new Error(`Failed to sign URL for ${path}: ${urlErr?.message ?? "no data"}`);
   }
 
-  // Download via fetch → Buffer → base64 (never disk)
+  // Download source PNG
   const res = await fetch(urlData.signedUrl);
   if (!res.ok) {
     throw new Error(`Failed to download ${path}: HTTP ${res.status}`);
   }
 
-  const arrayBuf = await res.arrayBuffer();
-  return Buffer.from(arrayBuf).toString("base64");
+  const srcBuf = Buffer.from(await res.arrayBuffer());
+
+  // Upscale to print resolution via CPU Lanczos + JPEG q92
+  // Sources are square (cover 1024×1024, scenes 768×768), so fit:'fill'
+  // is an exact resize with no distortion — clean interpolated upscale.
+  const jpegBuf = await sharp(srcBuf)
+    .resize(PRINT_PX, PRINT_PX, { fit: "fill" })
+    .jpeg({ quality: 92 })
+    .toBuffer();
+
+  return jpegBuf.toString("base64");
 }
 
 /* ─── Main export ─────────────────────────────────────────────────────────── */
@@ -129,12 +141,12 @@ export async function generateBookPDF(episodeId: string): Promise<Buffer> {
 
   const harvest = harvestRaw as unknown as { season: string };
 
-  // ── (b+c) Download illustrations as base64 ────────────────────────────
+  // ── (b+c) Download illustrations + upscale to print resolution ────────
 
   const illustrationBase64: string[] = [];
 
   for (const path of episode.illustration_paths) {
-    const b64 = await downloadAsBase64(admin, "illustrations", path);
+    const b64 = await downloadAndUpscale(admin, "illustrations", path);
     illustrationBase64.push(b64);
   }
 
