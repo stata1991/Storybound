@@ -10,12 +10,21 @@ export default function GlobalError({
   reset: () => void;
 }) {
   // global-error replaces <html> and cannot import server actions
-  // reliably. We log to console only; runtime errors that reach root
-  // are rare and the audit_log entry from the layer above usually
-  // already captured them. If global-error starts firing regularly,
-  // consider a raw fetch() to a tiny /api/report-error endpoint.
+  // reliably. We POST to /api/client-error instead, matching the same
+  // audit_log insert shape that reportClientError uses.
   useEffect(() => {
     console.error("[global error boundary]", error);
+    void fetch("/api/client-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        boundary: "global",
+        digest: error.digest,
+        message: error.message,
+        pathname: window.location.pathname,
+      }),
+      keepalive: true,
+    }).catch(() => {});
   }, [error]);
 
   return (
