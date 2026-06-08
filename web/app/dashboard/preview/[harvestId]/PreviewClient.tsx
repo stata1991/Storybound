@@ -67,15 +67,19 @@ export default function PreviewClient({
   /* ─── Handlers ────────────────────────────────────────────────────────────── */
 
   async function handleApprove() {
+    if (processingRef.current) return;
+    processingRef.current = true;
     setLoading(true);
     setError(null);
     const result = await approveBookPreview(harvestId);
     if ("error" in result) {
       setError(result.error);
       setLoading(false);
+      processingRef.current = false;
     } else {
       setStatus("parent_approved");
       setLoading(false);
+      processingRef.current = false;
     }
   }
 
@@ -84,15 +88,19 @@ export default function PreviewClient({
       setError("Please describe what looks wrong.");
       return;
     }
+    if (processingRef.current) return;
+    processingRef.current = true;
     setLoading(true);
     setError(null);
     const result = await flagBookIssue(harvestId, flagText.trim());
     if ("error" in result) {
       setError(result.error);
       setLoading(false);
+      processingRef.current = false;
     } else {
       setStatus("parent_flagged");
       setLoading(false);
+      processingRef.current = false;
     }
   }
 
