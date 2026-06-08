@@ -357,7 +357,7 @@ export async function chooseDigitalOnly(
       // Continue without attachment
     }
 
-    sendEmail({
+    await sendEmail({
       to: parent.email,
       subject,
       html,

@@ -632,7 +632,7 @@ export async function submitOnboardingMemoryDrop(
     childName: child.name,
     season: harvest.season,
   });
-  sendEmail({ to: parent.email, subject, html }).catch((err) => console.error('[email] memory submitted:', err));
+  await sendEmail({ to: parent.email, subject, html }).catch((err) => console.error('[email] memory submitted:', err));
 
   return { success: true };
 }

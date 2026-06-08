@@ -273,7 +273,7 @@ export async function POST(request: Request) {
             childName: childForEmail.name,
             season: harvestForEmail.season,
           });
-        sendEmail({
+        await sendEmail({
           to: customerEmail,
           subject: confirmSubject,
           html: confirmHtml,
