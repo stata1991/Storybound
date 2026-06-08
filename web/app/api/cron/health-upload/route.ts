@@ -100,7 +100,7 @@ export async function GET(request: Request) {
 
   // ── Failure path ──────────────────────────────────────────────────────
   if (failed) {
-    logEvent({
+    await logEvent({
       event_type: "health_check.upload",
       status: "error",
       message: `Upload health check failed at ${failedStep}: ${errorMsg}`,
@@ -130,7 +130,7 @@ export async function GET(request: Request) {
   }
 
   // ── Success path ──────────────────────────────────────────────────────
-  logEvent({
+  await logEvent({
     event_type: "health_check.upload",
     status: "success",
     message: `Upload health check passed in ${elapsed_ms}ms`,
