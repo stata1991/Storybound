@@ -29,7 +29,7 @@
 ---
 
 ### 4. Claude API for Story Generation
-**Decision:** Use Claude (claude-sonnet) for all story generation.
+**Decision:** Use Claude (claude-sonnet-4-6) for all story generation.
 **Rationale:** Best-in-class narrative quality, strong instruction following for structured outputs, reliable content safety, good at maintaining character voice across episodes.
 **Implementation:** System prompt contains story bible + episode structure. User turn contains harvest data (child info, photos summary, quarterly memories). Output is structured story in JSON format.
 **Trade-off:** Cost per generation. Mitigated by caching story bibles and batching.

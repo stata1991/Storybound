@@ -95,7 +95,7 @@ Solo founder, pre-launch. In validation phase planning.
 - **Frontend:** Next.js 14 (App Router)
 - **Database:** Supabase (Postgres + Auth + Storage)
 - **Payments:** Stripe (annual subscriptions)
-- **AI Story Gen:** Claude API (claude-sonnet)
+- **AI Story Gen:** Claude API (claude-sonnet-4-6)
 - **AI Illustration:** Replicate (SDXL + face consistency)
 - **Print:** Mixam API or Peecho API
 - **Hosting:** Vercel

@@ -6,6 +6,7 @@ import { logEvent } from "@/lib/audit";
 
 import { sanitizeForPrompt, sanitizeArrayForPrompt } from "@/lib/utils/sanitize";
 import { checkPhotoValidationGate } from "@/lib/photo-validator";
+import { STORY_MODEL } from "@/lib/models";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -1710,8 +1711,7 @@ export async function forceResetStuckHarvest(
 // NOTE: This action takes 30-60 seconds (two Claude API calls).
 // The story bible is the single source of truth for character
 // consistency across all quarterly episodes.
-
-const STORY_MODEL = "claude-sonnet-4-20250514";
+// STORY_MODEL is imported from @/lib/models (canonical single source).
 
 const PROHIBITED_WORDS = [
   "spider", "spiders", "thunder", "dark", "scary",

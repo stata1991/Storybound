@@ -12,7 +12,9 @@ import {
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const MODEL = "claude-sonnet-4-20250514";
+// Keep in sync with web/lib/models.ts STORY_MODEL — this root script is a
+// separate package and cannot import across the web/ boundary cleanly.
+const MODEL = "claude-sonnet-4-6";
 const OUTPUT_DIR = join(__dirname, "..", "output");
 
 const client = new Anthropic();

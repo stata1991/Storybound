@@ -88,7 +88,7 @@ const client = new Anthropic();
 
 async function generateStoryBible(childProfile) {
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 4096,
     system: STORY_BIBLE_SYSTEM_PROMPT,  // from prompts/story-generation.md
     messages: [{
@@ -107,7 +107,7 @@ async function generateStoryBible(childProfile) {
 
 async function generateEpisode(storyBible, harvestData, episodeNumber) {
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 8192,
     system: EPISODE_GENERATION_SYSTEM_PROMPT,  // from prompts/story-generation.md
     messages: [{
