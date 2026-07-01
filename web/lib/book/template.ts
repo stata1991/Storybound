@@ -16,6 +16,16 @@ const TEXT_DARK = "#2C2C2A";
 const NUNITO = "'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const SERIF = "Georgia, 'Playfair Display', serif";
 
+/* ─── Print geometry (trim + bleed) ──────────────────────────────────────── */
+// Print trim is 8.0in square. Add 0.125in bleed on every side so full-bleed
+// art extends past the cut line → rendered page box is 8.25in, trim centered.
+// Labels stay ≥0.25in inside the trim (0.375in from the page edge) so nothing
+// near an edge gets cut.
+const TRIM_IN = 8.0;
+const BLEED_IN = 0.125;
+const PAGE_IN = TRIM_IN + BLEED_IN * 2; // 8.25in rendered page box
+const SAFE_INSET_IN = BLEED_IN + 0.25; // 0.375in label safe-area inset from page edge
+
 /* ─── Age profiles ───────────────────────────────────────────────────────── */
 
 interface AgeProfile {
@@ -68,8 +78,8 @@ function objectPronoun(pronouns: string): string {
 
 function page(content: string, bg = CREAM): string {
   return `<div style="
-    width: 8.5in;
-    height: 8.5in;
+    width: ${PAGE_IN}in;
+    height: ${PAGE_IN}in;
     overflow: hidden;
     position: relative;
     background-color: ${bg};
@@ -94,7 +104,10 @@ function coverPage(params: BookParams): string {
     <div style="
       position: absolute;
       bottom: 0; left: 0; right: 0;
-      padding: 48px 40px 48px;
+      /* Gradient panel bleeds to the page edges (design element); text padding
+         keeps the title ≥0.375in from the edge, inside the 8.0in trim safe area
+         so it survives the cut on the outer wraparound cover. */
+      padding: 0.5in 0.5in 0.5in;
       background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.35) 60%, transparent 100%);
     ">
       <p style="
@@ -124,6 +137,40 @@ function coverPage(params: BookParams): string {
       ">A Storybound Story &middot; ${escapeHtml(capitalize(params.season))} ${params.year}</p>
     </div>
   `, "#000000");
+}
+
+/* ─── Title page (interior — child-appropriate title + imprint line) ──────── */
+
+function titlePage(params: BookParams): string {
+  return page(`
+    <div style="
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      padding: 0.75in;
+      box-sizing: border-box;
+      text-align: center;
+    ">
+      <p style="
+        margin: 0 0 20px 0;
+        font-family: ${SERIF};
+        font-size: 38px;
+        font-weight: 700;
+        color: ${NAVY};
+        line-height: 1.2;
+      ">${escapeHtml(params.title)}</p>
+      <p style="
+        margin: 0;
+        font-family: ${NUNITO};
+        font-size: 12px;
+        color: ${MUTED};
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      ">A Storybound Story &middot; ${escapeHtml(capitalize(params.season))} ${params.year}</p>
+    </div>
+  `);
 }
 
 /* ─── Dedication page ─────────────────────────────────────────────────────── */
@@ -209,9 +256,9 @@ function textPage(
         height: 3px;
         background-color: ${GOLD};
       "></div>
-      <!-- Season label -->
+      <!-- Season label — inset into the trim safe area -->
       <div style="
-        padding: 16px 40px 0 0;
+        padding: ${SAFE_INSET_IN}in ${SAFE_INSET_IN}in 0 0;
         text-align: right;
       ">
         <span style="
@@ -244,9 +291,9 @@ function textPage(
           ${formatSceneText(scene.text, profile, profile.fontSize, 1.8)}
         </div>
       </div>
-      <!-- Page number -->
+      <!-- Page number — inset into the trim safe area -->
       <div style="
-        padding: 0 0 24px 0;
+        padding: 0 0 ${SAFE_INSET_IN}in 0;
         text-align: center;
       ">
         <span style="
@@ -270,14 +317,17 @@ function scenePage(
 }
 
 /* ─── Combined scene page — image + text on one page ─────────────────────── */
-
+// Retained intentionally as the future digital-edition layout branch. The print
+// path now uses a uniform full-bleed image + facing text-page layout, so this is
+// defined but not called until the print and digital paths are decoupled.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function combinedScenePage(
   scene: { number: number; text: string; imageBase64: string },
   profile: AgeProfile,
   seasonLabel: string,
   pageNumber: number
 ): string {
-  const imageHeight = (profile.label === "7-8" || profile.label === "9-10") ? "55%" : "60%";
+  const imageHeight = profile.label === "7-8" ? "55%" : "60%";
 
   return page(`
     <div style="
@@ -404,6 +454,34 @@ function backPage(childName: string, pronouns: string): string {
   `);
 }
 
+/* ─── Outer back cover (wraparound back — not counted in interior pages) ──── */
+// Cream + wordmark only. Deliberately no scene image so a child's face never
+// lands on the outer back of the book. Parallel to coverPage (the outer front).
+
+function backCoverPage(): string {
+  return page(`
+    <div style="
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      padding: 0.75in;
+      box-sizing: border-box;
+      text-align: center;
+    ">
+      <p style="
+        margin: 0;
+        font-family: ${SERIF};
+        font-size: 30px;
+        font-weight: 700;
+        color: ${NAVY};
+        letter-spacing: 0.5px;
+      ">Storybound</p>
+    </div>
+  `, CREAM);
+}
+
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 
 function escapeHtml(str: string): string {
@@ -488,39 +566,27 @@ export function generateBookHTML(params: BookParams): string {
   const seasonLabel = `${capitalize(params.season)} ${params.year}`;
   const pages: string[] = [];
 
-  // 1. Cover
+  // 1. Front cover (outer wrap — not counted in interior pages)
   pages.push(coverPage(params));
 
-  // 2. Dedication
+  // 2. Title page (interior)
+  pages.push(titlePage(params));
+
+  // 3. Dedication (interior)
   pages.push(dedicationPage(params.dedication));
 
-  // 3. Scene pages — beat-aware layout variety
-  // Key emotional beats get full-bleed illustration + separate text page;
-  // all others get combined image+text on one page.
-  // Cap full-bleed at 3 to control page count.
-  const FULL_BLEED_BEATS = new Set(["setup", "turning_point", "celebration"]);
-  const MAX_FULL_BLEED = 3;
-  let fullBleedCount = 0;
-  let pageNum = 2;
+  // 4. Scene pages — uniform layout: every beat is a full-bleed illustration
+  // page facing a text page. The text page carries the folio; the facing image
+  // page is unnumbered. pageNum runs 1..N across the N text pages, no gaps.
+  let pageNum = 1;
 
   for (const scene of params.scenes) {
-    const useFullBleed =
-      scene.beat &&
-      FULL_BLEED_BEATS.has(scene.beat) &&
-      fullBleedCount < MAX_FULL_BLEED;
-
-    if (useFullBleed) {
-      pages.push(illustrationPage(scene));
-      pages.push(textPage(scene, profile, seasonLabel, pageNum));
-      fullBleedCount++;
-      pageNum += 1; // text page gets the number
-    } else {
-      pages.push(combinedScenePage(scene, profile, seasonLabel, pageNum));
-      pageNum += 1;
-    }
+    pages.push(illustrationPage(scene));
+    pages.push(textPage(scene, profile, seasonLabel, pageNum));
+    pageNum += 1; // only the text page is numbered
   }
 
-  // 4. Final page (with optional vignette from last scene)
+  // 5. Final page (with optional vignette from last scene)
   const finalVignette = params.finalPageImageBase64 ? `
       <div style="
         width: 200px;
@@ -561,8 +627,11 @@ export function generateBookHTML(params: BookParams): string {
     </div>
   `));
 
-  // 5. Back page
+  // 6. Colophon (last interior page — keeps privacy/credits content)
   pages.push(backPage(params.childName, params.pronouns));
+
+  // 7. Outer back cover (wraparound back — not counted in interior pages)
+  pages.push(backCoverPage());
 
   return `<!DOCTYPE html>
 <html>
@@ -588,7 +657,7 @@ export function generateBookHTML(params: BookParams): string {
       font-style: normal;
     }
     @page {
-      size: 8.5in 8.5in;
+      size: ${PAGE_IN}in ${PAGE_IN}in;
       margin: 0;
     }
     * { margin: 0; padding: 0; }
