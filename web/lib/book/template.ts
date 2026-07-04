@@ -211,6 +211,81 @@ function dedicationPage(dedication: string): string {
   `);
 }
 
+/* ─── Bookplate page (interior front matter — personalized ownership) ─────── */
+
+function bookplatePage(childName: string): string {
+  const flourish = `<p style="
+    margin: 0;
+    font-family: ${SERIF};
+    font-size: 16px;
+    color: ${GOLD};
+    letter-spacing: 6px;
+    text-align: center;
+  ">&mdash; &#10087; &mdash;</p>`;
+
+  return page(`
+    <div style="
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      padding: 60px;
+      box-sizing: border-box;
+    ">
+      ${flourish}
+      <p style="
+        margin: 20px 0;
+        font-family: ${SERIF};
+        font-size: 22px;
+        color: ${NAVY};
+        font-style: italic;
+        text-align: center;
+        line-height: 1.8;
+        max-width: 5in;
+      ">This book belongs to ${escapeHtml(childName)}</p>
+      ${flourish}
+    </div>
+  `);
+}
+
+/* ─── "The End" page (interior back matter — closes story before the teaser) ─ */
+
+function theEndPage(): string {
+  const flourish = `<p style="
+    margin: 0;
+    font-family: ${SERIF};
+    font-size: 16px;
+    color: ${GOLD};
+    letter-spacing: 6px;
+    text-align: center;
+  ">&mdash; &#10087; &mdash;</p>`;
+
+  return page(`
+    <div style="
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      padding: 60px;
+      box-sizing: border-box;
+    ">
+      ${flourish}
+      <p style="
+        margin: 20px 0;
+        font-family: ${SERIF};
+        font-size: 28px;
+        color: ${NAVY};
+        font-style: italic;
+        text-align: center;
+        line-height: 1.8;
+      ">The End</p>
+      ${flourish}
+    </div>
+  `);
+}
+
 /* ─── Scene pages — two-page-per-scene layout (Fix 4) ────────────────────── */
 
 function illustrationPage(
@@ -569,13 +644,16 @@ export function generateBookHTML(params: BookParams): string {
   // 1. Front cover (outer wrap — not counted in interior pages)
   pages.push(coverPage(params));
 
-  // 2. Title page (interior)
+  // 2. Bookplate (interior front matter — "This book belongs to …")
+  pages.push(bookplatePage(params.childName));
+
+  // 3. Title page (interior)
   pages.push(titlePage(params));
 
-  // 3. Dedication (interior)
+  // 4. Dedication (interior)
   pages.push(dedicationPage(params.dedication));
 
-  // 4. Scene pages — uniform layout: every beat is a full-bleed illustration
+  // 5. Scene pages — uniform layout: every beat is a full-bleed illustration
   // page facing a text page. The text page carries the folio; the facing image
   // page is unnumbered. pageNum runs 1..N across the N text pages, no gaps.
   let pageNum = 1;
@@ -586,7 +664,10 @@ export function generateBookHTML(params: BookParams): string {
     pageNum += 1; // only the text page is numbered
   }
 
-  // 5. Final page (with optional vignette from last scene)
+  // 6. The End (interior back matter — closes the story before the teaser)
+  pages.push(theEndPage());
+
+  // 7. Final page (with optional vignette from last scene)
   const finalVignette = params.finalPageImageBase64 ? `
       <div style="
         width: 200px;
@@ -627,10 +708,10 @@ export function generateBookHTML(params: BookParams): string {
     </div>
   `));
 
-  // 6. Colophon (last interior page — keeps privacy/credits content)
+  // 8. Colophon (last interior page — keeps privacy/credits content)
   pages.push(backPage(params.childName, params.pronouns));
 
-  // 7. Outer back cover (wraparound back — not counted in interior pages)
+  // 9. Outer back cover (wraparound back — not counted in interior pages)
   pages.push(backCoverPage());
 
   return `<!DOCTYPE html>
