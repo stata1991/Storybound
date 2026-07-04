@@ -16,15 +16,14 @@ const TEXT_DARK = "#2C2C2A";
 const NUNITO = "'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const SERIF = "Georgia, 'Playfair Display', serif";
 
-/* ─── Print geometry (trim + bleed) ──────────────────────────────────────── */
-// Print trim is 8.0in square. Add 0.125in bleed on every side so full-bleed
-// art extends past the cut line → rendered page box is 8.25in, trim centered.
-// Labels stay ≥0.25in inside the trim (0.375in from the page edge) so nothing
-// near an edge gets cut.
-const TRIM_IN = 8.0;
-const BLEED_IN = 0.125;
-const PAGE_IN = TRIM_IN + BLEED_IN * 2; // 8.25in rendered page box
-const SAFE_INSET_IN = BLEED_IN + 0.25; // 0.375in label safe-area inset from page edge
+/* ─── Print geometry ─────────────────────────────────────────────────────── */
+// Prodigi hardcover photo book: content pages must match the book size EXACTLY
+// — no bleed, no crop marks. Prodigi generates bleed automatically, so the page
+// box is a flat 210mm square. Labels stay ≥11mm from the edge to clear Prodigi's
+// 10mm safe-area minimum with margin. (page.pdf in modal/pdf_generator.py must
+// use prefer_css_page_size so this @page size is the single source of truth.)
+const PAGE_MM = 210; // flat trim, no bleed
+const SAFE_INSET_MM = 11; // label safe-area inset from page edge (>10mm Prodigi min)
 
 /* ─── Age profiles ───────────────────────────────────────────────────────── */
 
@@ -78,8 +77,8 @@ function objectPronoun(pronouns: string): string {
 
 function page(content: string, bg = CREAM): string {
   return `<div style="
-    width: ${PAGE_IN}in;
-    height: ${PAGE_IN}in;
+    width: ${PAGE_MM}mm;
+    height: ${PAGE_MM}mm;
     overflow: hidden;
     position: relative;
     background-color: ${bg};
@@ -104,9 +103,9 @@ function coverPage(params: BookParams): string {
     <div style="
       position: absolute;
       bottom: 0; left: 0; right: 0;
-      /* Gradient panel bleeds to the page edges (design element); text padding
-         keeps the title ≥0.375in from the edge, inside the 8.0in trim safe area
-         so it survives the cut on the outer wraparound cover. */
+      /* Gradient panel extends to the page edges (design element); text padding
+         (0.5in ≈ 12.7mm) keeps the title clear of Prodigi's 10mm safe area so it
+         survives the cut on the outer cover. */
       padding: 0.5in 0.5in 0.5in;
       background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.35) 60%, transparent 100%);
     ">
@@ -333,7 +332,7 @@ function textPage(
       "></div>
       <!-- Season label — inset into the trim safe area -->
       <div style="
-        padding: ${SAFE_INSET_IN}in ${SAFE_INSET_IN}in 0 0;
+        padding: ${SAFE_INSET_MM}mm ${SAFE_INSET_MM}mm 0 0;
         text-align: right;
       ">
         <span style="
@@ -368,7 +367,7 @@ function textPage(
       </div>
       <!-- Page number — inset into the trim safe area -->
       <div style="
-        padding: 0 0 ${SAFE_INSET_IN}in 0;
+        padding: 0 0 ${SAFE_INSET_MM}mm 0;
         text-align: center;
       ">
         <span style="
@@ -738,7 +737,7 @@ export function generateBookHTML(params: BookParams): string {
       font-style: normal;
     }
     @page {
-      size: ${PAGE_IN}in ${PAGE_IN}in;
+      size: ${PAGE_MM}mm ${PAGE_MM}mm;
       margin: 0;
     }
     * { margin: 0; padding: 0; }
