@@ -74,8 +74,7 @@ async def generate_pdf(req: Request):
             await page.set_content(html, wait_until="networkidle")
 
             pdf_bytes = await page.pdf(
-                width="8.5in",
-                height="8.5in",
+                prefer_css_page_size=True,
                 print_background=True,
                 margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
             )
