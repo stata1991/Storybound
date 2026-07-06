@@ -73,6 +73,12 @@ async def generate_pdf(req: Request):
             page = await browser.new_page()
             await page.set_content(html, wait_until="networkidle")
 
+            # Wait for @font-face fonts to decode + apply before printing.
+            # Fonts are embedded as data: URIs, which produce no network traffic,
+            # so wait_until="networkidle" does NOT wait for them — without this,
+            # Chromium prints in fallback (DejaVu/Liberation) instead of Nunito.
+            await page.evaluate("document.fonts.ready")
+
             pdf_bytes = await page.pdf(
                 prefer_css_page_size=True,
                 print_background=True,
