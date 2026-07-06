@@ -1,6 +1,9 @@
 /* ─── Storybound Book HTML Template ────────────────────────────────────────── */
 
-import { NUNITO_BASE64 as nunitoBase64 } from "./font-data";
+import {
+  NUNITO_400, NUNITO_600, NUNITO_700, NUNITO_400I, NUNITO_600I,
+  GELASIO_400, GELASIO_700, GELASIO_400I,
+} from "./font-data";
 
 /* ─── Brand colors ────────────────────────────────────────────────────────── */
 
@@ -14,7 +17,7 @@ const TEXT_DARK = "#2C2C2A";
 /* ─── Font stack ─────────────────────────────────────────────────────────── */
 
 const NUNITO = "'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-const SERIF = "Georgia, 'Playfair Display', serif";
+const SERIF = "'Gelasio', Georgia, serif";
 
 /* ─── Print geometry ─────────────────────────────────────────────────────── */
 // Prodigi hardcover photo book: content pages must match the book size EXACTLY
@@ -182,7 +185,7 @@ function dedicationPage(dedication: string): string {
     color: ${GOLD};
     letter-spacing: 6px;
     text-align: center;
-  ">&mdash; &#10087; &mdash;</p>`;
+  ">&mdash; &#183; &mdash;</p>`;
 
   return page(`
     <div style="
@@ -220,7 +223,7 @@ function bookplatePage(childName: string): string {
     color: ${GOLD};
     letter-spacing: 6px;
     text-align: center;
-  ">&mdash; &#10087; &mdash;</p>`;
+  ">&mdash; &#183; &mdash;</p>`;
 
   return page(`
     <div style="
@@ -258,7 +261,7 @@ function theEndPage(): string {
     color: ${GOLD};
     letter-spacing: 6px;
     text-align: center;
-  ">&mdash; &#10087; &mdash;</p>`;
+  ">&mdash; &#183; &mdash;</p>`;
 
   return page(`
     <div style="
@@ -720,21 +723,51 @@ export function generateBookHTML(params: BookParams): string {
   <style>
     @font-face {
       font-family: 'Nunito';
-      src: url('data:font/woff2;base64,${nunitoBase64}') format('woff2');
+      src: url('data:font/ttf;base64,${NUNITO_400}') format('truetype');
       font-weight: 400;
       font-style: normal;
     }
     @font-face {
       font-family: 'Nunito';
-      src: url('data:font/woff2;base64,${nunitoBase64}') format('woff2');
+      src: url('data:font/ttf;base64,${NUNITO_600}') format('truetype');
       font-weight: 600;
       font-style: normal;
     }
     @font-face {
       font-family: 'Nunito';
-      src: url('data:font/woff2;base64,${nunitoBase64}') format('woff2');
+      src: url('data:font/ttf;base64,${NUNITO_700}') format('truetype');
       font-weight: 700;
       font-style: normal;
+    }
+    @font-face {
+      font-family: 'Nunito';
+      src: url('data:font/ttf;base64,${NUNITO_400I}') format('truetype');
+      font-weight: 400;
+      font-style: italic;
+    }
+    @font-face {
+      font-family: 'Nunito';
+      src: url('data:font/ttf;base64,${NUNITO_600I}') format('truetype');
+      font-weight: 600;
+      font-style: italic;
+    }
+    @font-face {
+      font-family: 'Gelasio';
+      src: url('data:font/ttf;base64,${GELASIO_400}') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Gelasio';
+      src: url('data:font/ttf;base64,${GELASIO_700}') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Gelasio';
+      src: url('data:font/ttf;base64,${GELASIO_400I}') format('truetype');
+      font-weight: 400;
+      font-style: italic;
     }
     @page {
       size: ${PAGE_MM}mm ${PAGE_MM}mm;
