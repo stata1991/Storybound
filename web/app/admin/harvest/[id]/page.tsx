@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 import { redirect } from "next/navigation";
 import Link from "next/link";

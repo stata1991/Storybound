@@ -721,7 +721,7 @@ def train_flux_lora(
 @app.function(
     image=flux_image,
     gpu="L40S",
-    timeout=600,
+    timeout=900,
     volumes={"/lora-weights": lora_volume},
     secrets=[modal.Secret.from_name("storybound-secrets")],
     memory=32768,
@@ -1163,8 +1163,8 @@ def _build_scene_payload(
         "negative_prompt": scene_negative,
         "has_humans": has_humans,
         "true_cfg_scale": 1.5,
-        "height": 768,
-        "width": 768,
+        "height": 1024,
+        "width": 1024,
         "guidance_scale": 4.5,
         "seed": seed,
         "enable_retry": True,
@@ -1581,7 +1581,7 @@ def health_check():
 
 @app.function(
     image=flux_image,
-    timeout=300,
+    timeout=600,
     volumes={"/lora-weights": lora_volume},
     secrets=[modal.Secret.from_name("storybound-secrets")],
     memory=2048,

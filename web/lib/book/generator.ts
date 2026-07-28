@@ -35,7 +35,7 @@ function getAdmin() {
 
 /* ─── Download illustration, upscale to print res, return JPEG base64 ────── */
 
-const PRINT_PX = 2625; // 8.5 in × 300 PPI + 75 px bleed ≈ 2625 px
+const PRINT_PX = 2625; // 2625 px over 210 mm flat trim ≈ 317 effective PPI (margin above 300)
 
 async function downloadAndUpscale(
   admin: ReturnType<typeof getAdmin>,
@@ -60,7 +60,7 @@ async function downloadAndUpscale(
   const srcBuf = Buffer.from(await res.arrayBuffer());
 
   // Upscale to print resolution via CPU Lanczos + JPEG q92
-  // Sources are square (cover 1024×1024, scenes 768×768), so fit:'fill'
+  // Sources are square (cover and scenes both 1024×1024), so fit:'fill'
   // is an exact resize with no distortion — clean interpolated upscale.
   const jpegBuf = await sharp(srcBuf)
     .resize(PRINT_PX, PRINT_PX, { fit: "fill" })
