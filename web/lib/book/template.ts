@@ -71,8 +71,8 @@ export interface BookParams {
 /* ─── Pronoun helper ─────────────────────────────────────────────────────── */
 
 function objectPronoun(pronouns: string): string {
-  if (pronouns === "she_her") return "her";
-  if (pronouns === "he_him") return "him";
+  if (pronouns === "girl" || pronouns === "she_her") return "her";
+  if (pronouns === "boy" || pronouns === "he_him") return "him";
   return "them";
 }
 
