@@ -1409,16 +1409,36 @@ def generate_flux_illustrations(body: dict) -> dict:
     supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
     sb = sb_module.create_client(supabase_url, supabase_key)
 
+    import httpx
     _t_upload = _time.perf_counter()
     illustration_paths = []
+    max_attempts = 3
 
     for idx, result in enumerate(results):
         png_bytes = base64.b64decode(result["image_png_b64"])
         path = f"{child_id}/{episode_id}/{idx}.png"
-        sb.storage.from_("illustrations").upload(
-            path, png_bytes,
-            {"content-type": "image/png", "upsert": "true"}
-        )
+        for attempt in range(1, max_attempts + 1):
+            t0 = _time.time()
+            try:
+                sb.storage.from_("illustrations").upload(
+                    path, png_bytes,
+                    {"content-type": "image/png", "upsert": "true"}
+                )
+                break
+            except httpx.TransportError as e:
+                elapsed = _time.time() - t0
+                if attempt < max_attempts:
+                    backoff = 2 ** attempt
+                    print(f"Upload attempt {attempt}/{max_attempts} failed for "
+                          f"{path} after {elapsed:.1f}s: "
+                          f"{type(e).__name__}: {e} "
+                          f"— retrying in {backoff}s")
+                    _time.sleep(backoff)
+                else:
+                    print(f"Upload failed after {max_attempts} attempts for "
+                          f"{path} after {elapsed:.1f}s: "
+                          f"{type(e).__name__}: {e}")
+                    raise
         illustration_paths.append(path)
         print(f"Uploaded illustration {idx} ({result['label']}, "
               f"score={result['best_score']:.3f}, "
