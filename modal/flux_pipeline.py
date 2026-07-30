@@ -715,8 +715,9 @@ def train_flux_lora(
 # ─── Single Image Worker ─────────────────────────────────────────────────────
 # Each worker loads FLUX + LoRA from scratch, generates one illustration
 # (cover or scene), reranks, and returns PNG bytes. Stateless — no @app.cls.
-# 9 workers run in parallel (1 cover + 8 scenes) for ~3.5 min wall-clock.
-# Cost: 9 containers × ~3.5 min ≈ $1.89/book (vs $0.47 sequential).
+# 9 workers run in parallel (1 cover + 8 scenes). Measured 2026-07-28 at
+# 1024×1024: single-worker regen worker_total=330.8s (80.5s model load,
+# 235.6s generation). Batch 9-worker wall-clock at 1024 is unmeasured.
 
 @app.function(
     image=flux_image,
@@ -1601,7 +1602,7 @@ def health_check():
 
 @app.function(
     image=flux_image,
-    timeout=600,
+    timeout=750,
     volumes={"/lora-weights": lora_volume},
     secrets=[modal.Secret.from_name("storybound-secrets")],
     memory=2048,
