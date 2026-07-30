@@ -399,7 +399,7 @@ const FAQS = [
   },
   {
     q: "What\u2019s coming next?",
-    a: "Bedtime audio, animated story videos, and a print option are all in the works. We\u2019ll share more soon.",
+    a: "Books starring brothers, sisters, parents, grandparents, and friends together \u2014 and stories in more languages. A print option is also in the works. We\u2019ll share more soon.",
   },
 ];
 

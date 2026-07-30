@@ -548,6 +548,22 @@ function backCoverPage(): string {
       text-align: center;
     ">
       <p style="
+        margin: 0 0 12px 0;
+        font-family: ${SERIF};
+        font-size: 16px;
+        color: ${NAVY};
+        line-height: 1.7;
+        max-width: 4.5in;
+      ">Storybound began as a birthday gift &mdash; one book, made so a baby in our family could be the hero of their own story.</p>
+      <p style="
+        margin: 0 0 40px 0;
+        font-family: ${SERIF};
+        font-size: 16px;
+        color: ${NAVY};
+        line-height: 1.7;
+        max-width: 4.5in;
+      ">They loved it so much we decided every child should get to be.</p>
+      <p style="
         margin: 0;
         font-family: ${SERIF};
         font-size: 30px;
@@ -555,6 +571,12 @@ function backCoverPage(): string {
         color: ${NAVY};
         letter-spacing: 0.5px;
       ">Storybound</p>
+      <p style="
+        margin: 12px 0 0 0;
+        font-family: ${NUNITO};
+        font-size: 10px;
+        color: ${MUTED};
+      ">thestoryboundapp.com</p>
     </div>
   `, CREAM);
 }
