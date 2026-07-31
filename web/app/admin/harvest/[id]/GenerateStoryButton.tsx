@@ -9,6 +9,7 @@ import {
   getPrintDetails,
   markSentToPrint,
   markShipped,
+  placeProdigiOrder,
   resetToBookReady,
 } from "@/app/admin/actions";
 
@@ -559,8 +560,39 @@ export function PrintFlowButtons({
     childAge: number | null;
     shippingAddress: string | null;
     pdfUrl: string;
+    episodeId: string;
+    shipping: {
+      name: string | null;
+      line1: string | null;
+      line2: string | null;
+      city: string | null;
+      state: string | null;
+      zip: string | null;
+      country: string | null;
+    } | null;
   } | null>(null);
   const [printLoading, setPrintLoading] = useState(false);
+
+  // Prodigi order modal state
+  const [showOrderModal, setShowOrderModal] = useState(false);
+  const [orderForm, setOrderForm] = useState({
+    name: "",
+    line1: "",
+    line2: "",
+    city: "",
+    state: "",
+    zip: "",
+    country: "US",
+    shippingMethod: "Budget",
+  });
+  const [orderLoading, setOrderLoading] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
+  const [orderResult, setOrderResult] = useState<{
+    prodigiOrderId: string;
+    issues?: unknown[];
+    adopted?: boolean;
+  } | null>(null);
+  const orderInFlight = useRef(false);
 
   // Ship state
   const [shipLoading, setShipLoading] = useState(false);
@@ -603,6 +635,72 @@ export function PrintFlowButtons({
     printInFlight.current = false;
   }
 
+  async function handleOpenOrderModal() {
+    setError(null);
+    setOrderError(null);
+    setOrderResult(null);
+    setOrderLoading(true);
+
+    const result = await getPrintDetails(harvestId);
+
+    if ("error" in result) {
+      setError(result.error);
+    } else {
+      setPrintDetails(result);
+      const s = result.shipping;
+      setOrderForm((prev) => ({
+        ...prev,
+        name: s?.name ?? "",
+        line1: s?.line1 ?? "",
+        line2: s?.line2 ?? "",
+        city: s?.city ?? "",
+        state: s?.state ?? "",
+        zip: s?.zip ?? "",
+        country: s?.country ?? "US",
+      }));
+      setShowOrderModal(true);
+    }
+
+    setOrderLoading(false);
+  }
+
+  async function handlePlaceOrder() {
+    if (orderInFlight.current || !printDetails) return;
+    orderInFlight.current = true;
+    setOrderLoading(true);
+    setOrderError(null);
+
+    const result = await placeProdigiOrder(
+      printDetails.episodeId,
+      {
+        name: orderForm.name.trim(),
+        address: {
+          line1: orderForm.line1.trim(),
+          line2: orderForm.line2.trim() || undefined,
+          postalOrZipCode: orderForm.zip.trim(),
+          countryCode: orderForm.country.trim(),
+          townOrCity: orderForm.city.trim(),
+          stateOrCounty: orderForm.state.trim() || undefined,
+        },
+      },
+      orderForm.shippingMethod
+    );
+
+    if ("error" in result) {
+      setOrderError(result.error);
+    } else {
+      setOrderResult({
+        prodigiOrderId: result.prodigiOrderId,
+        issues: result.issues,
+        adopted: result.adopted,
+      });
+      router.refresh();
+    }
+
+    setOrderLoading(false);
+    orderInFlight.current = false;
+  }
+
   async function handleMarkShipped() {
     if (shipInFlight.current) return;
     shipInFlight.current = true;
@@ -640,19 +738,34 @@ export function PrintFlowButtons({
       )}
 
       {episodeStatus === "parent_approved" && (
-        <button
-          onClick={handleOpenPrintModal}
-          disabled={printLoading}
-          className="inline-flex items-center gap-2 rounded-md bg-teal-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-600 disabled:opacity-60"
-        >
-          {printLoading && !showPrintModal ? (
-            <>
-              <Spinner /> Loading...
-            </>
-          ) : (
-            "Send to print"
-          )}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleOpenOrderModal}
+            disabled={orderLoading}
+            className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {orderLoading && !showOrderModal ? (
+              <>
+                <Spinner /> Loading...
+              </>
+            ) : (
+              "Order from Prodigi"
+            )}
+          </button>
+          <button
+            onClick={handleOpenPrintModal}
+            disabled={printLoading}
+            className="inline-flex items-center gap-2 rounded-md bg-teal-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-600 disabled:opacity-60"
+          >
+            {printLoading && !showPrintModal ? (
+              <>
+                <Spinner /> Loading...
+              </>
+            ) : (
+              "Send to print"
+            )}
+          </button>
+        </div>
       )}
 
       {episodeStatus === "printing" && (
@@ -669,6 +782,143 @@ export function PrintFlowButtons({
             "Mark as shipped"
           )}
         </button>
+      )}
+
+      {/* Prodigi order modal */}
+      {showOrderModal && printDetails && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !orderLoading) setShowOrderModal(false);
+          }}
+        >
+          <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <h3 className="text-base font-semibold text-gray-900">
+              Order from Prodigi
+            </h3>
+            <p className="mt-1 text-xs text-gray-400">
+              {printDetails.childName}
+              {printDetails.childAge != null && ` (age ${printDetails.childAge})`}
+              {" — 1 copy, hardcover 21×21cm"}
+            </p>
+
+            {orderResult ? (
+              <div className="mt-4 space-y-3 text-sm">
+                {orderResult.adopted ? (
+                  <div className="rounded bg-amber-50 px-4 py-3 text-amber-800">
+                    An earlier submission for this book already reached Prodigi
+                    (
+                    <span className="font-mono font-medium">
+                      {orderResult.prodigiOrderId}
+                    </span>
+                    ) — it will print with the address from that attempt.
+                  </div>
+                ) : (
+                  <div className="rounded bg-emerald-50 px-4 py-3 text-emerald-700">
+                    Order placed:{" "}
+                    <span className="font-mono font-medium">
+                      {orderResult.prodigiOrderId}
+                    </span>
+                  </div>
+                )}
+                {orderResult.issues && orderResult.issues.length > 0 && (
+                  <div className="rounded bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                    <p className="mb-1 font-medium">Created with issues:</p>
+                    <pre className="whitespace-pre-wrap">
+                      {JSON.stringify(orderResult.issues, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => setShowOrderModal(false)}
+                    className="rounded bg-gray-100 px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-200"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  {(
+                    [
+                      ["name", "Recipient name", "col-span-2"],
+                      ["line1", "Address line 1", "col-span-2"],
+                      ["line2", "Address line 2 (optional)", "col-span-2"],
+                      ["city", "City", ""],
+                      ["state", "State", ""],
+                      ["zip", "ZIP / postal code", ""],
+                      ["country", "Country code", ""],
+                    ] as const
+                  ).map(([key, label, span]) => (
+                    <label key={key} className={`block ${span}`}>
+                      <span className="mb-1 block text-xs font-medium text-gray-500">
+                        {label}
+                      </span>
+                      <input
+                        value={orderForm[key]}
+                        onChange={(e) =>
+                          setOrderForm((prev) => ({ ...prev, [key]: e.target.value }))
+                        }
+                        className="w-full rounded border border-gray-200 px-2 py-1.5 text-xs text-gray-800"
+                      />
+                    </label>
+                  ))}
+                  <label className="col-span-2 block">
+                    <span className="mb-1 block text-xs font-medium text-gray-500">
+                      Shipping method
+                    </span>
+                    <select
+                      value={orderForm.shippingMethod}
+                      onChange={(e) =>
+                        setOrderForm((prev) => ({
+                          ...prev,
+                          shippingMethod: e.target.value,
+                        }))
+                      }
+                      className="w-full rounded border border-gray-200 px-2 py-1.5 text-xs text-gray-800"
+                    >
+                      <option value="Budget">Budget</option>
+                      <option value="Standard">Standard</option>
+                      <option value="Express">Express</option>
+                      <option value="Overnight">Overnight</option>
+                    </select>
+                  </label>
+                </div>
+
+                {orderError && (
+                  <div className="mt-3 rounded bg-red-50 px-4 py-3 text-xs text-red-700">
+                    {orderError}
+                  </div>
+                )}
+
+                <div className="mt-6 flex items-center justify-end gap-3">
+                  <button
+                    onClick={() => setShowOrderModal(false)}
+                    disabled={orderLoading}
+                    className="rounded px-3 py-2 text-xs font-medium text-gray-500 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handlePlaceOrder}
+                    disabled={orderLoading}
+                    className="rounded bg-indigo-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {orderLoading ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <Spinner /> Placing order...
+                      </span>
+                    ) : (
+                      "Place order"
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Print confirmation modal */}

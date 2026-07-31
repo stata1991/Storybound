@@ -153,6 +153,19 @@ export async function createOrder(
   return result;
 }
 
+export async function getOrdersByMerchantReference(
+  merchantReference: string
+): Promise<ProdigiOrder[]> {
+  // Docs type `merchantReferences` as an array but show no serialization
+  // example; a single value works under either convention (repeated param
+  // or comma-joined). Revisit if multi-reference lookup is ever needed.
+  const result = await request<{ orders?: ProdigiOrder[] }>(
+    "GET",
+    `/v4.0/orders?merchantReferences=${encodeURIComponent(merchantReference)}`
+  );
+  return result.orders ?? [];
+}
+
 export async function getOrder(prodigiOrderId: string): Promise<ProdigiOrder> {
   const result = await request<{ order: ProdigiOrder }>(
     "GET",
