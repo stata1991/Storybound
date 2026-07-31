@@ -619,14 +619,9 @@ def train_flux_lora(
     transformer.peft_config["default"].save_pretrained(str(save_dir))
     print(f"LoRA saved to {save_dir}")
 
-    # Save face artifacts
-    if best_face_buffer.tell() > 0:
-        best_face_buffer.seek(0)
-        (save_dir / "best_face_crop.jpg").write_bytes(
-            best_face_buffer.read()
-        )
+    # Save face embedding (volume-only; excluded from the upload allowlist)
     torch.save(avg_embedding, str(save_dir / "face_embedding.pt"))
-    print("Face artifacts saved")
+    print("Face embedding saved")
 
     # Weight sanity check
     lora_weights = [p for p in transformer.parameters()
@@ -648,7 +643,12 @@ def train_flux_lora(
     import httpx
     max_attempts = 3
 
-    for fname in os.listdir(str(save_dir)):
+    # Only model artifacts leave the volume: the face embedding is retained
+    # volume-only as part of the model; no photo-derived images are persisted
+    # anywhere.
+    upload_allowlist = ["adapter_model.safetensors", "adapter_config.json"]
+
+    for fname in upload_allowlist:
         fpath = save_dir / fname
         if fpath.is_file():
             size_mb = fpath.stat().st_size / 1048576
