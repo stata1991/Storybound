@@ -12,7 +12,7 @@
 
 7. Never install a new dependency without telling me what it does  and why it's needed over a simpler alternative.
 
-8. Always use the data models in /storybound-kb/specs/data-models.md as the source of truth for schema. If you need to deviate,ask first.
+8. Always use the data models in data-models.md (repo root) as the source of truth for schema. If you need to deviate,ask first.
 
 9. When building any pipeline or workflow, design it as an agent loop with evaluation steps — not a linear sequence of function calls. Every generation step must have a quality check before proceeding.
 
