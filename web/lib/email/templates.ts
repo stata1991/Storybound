@@ -306,6 +306,47 @@ export function digitalBookReady(params: DigitalBookReadyParams) {
   return { subject, html };
 }
 
+/* ─── Template: Book Shipped ──────────────────────────────────────────────── */
+
+interface BookShippedParams {
+  childName: string;
+  trackingNumber?: string | null;
+  trackingUrl?: string | null;
+  carrier?: string | null;
+}
+
+export function bookShipped(params: BookShippedParams) {
+  const name = capitalize(params.childName);
+
+  const subject = `${name}'s book is on its way!`;
+
+  const trackingBlock = params.trackingNumber
+    ? `<p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      Tracking${params.carrier ? ` (${params.carrier})` : ""}:
+      ${
+        params.trackingUrl
+          ? `<a href="${params.trackingUrl}" style="color:${GOLD};font-weight:600;">${params.trackingNumber}</a>`
+          : `<strong>${params.trackingNumber}</strong>`
+      }
+    </p>`
+    : "";
+
+  const html = layout(`
+    <h1 style="margin:0 0 16px 0;font-size:22px;font-weight:700;color:${NAVY};font-family:Georgia,serif;line-height:1.3;">
+      ${name}'s book has shipped.
+    </h1>
+    <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      The printed book is on its way to your door — every page made from the memories you shared.
+    </p>
+    ${trackingBlock}
+    <p style="margin:0;font-size:14px;color:${GOLD};font-weight:600;line-height:1.5;">
+      We hope ${name} loves holding this one.
+    </p>
+  `);
+
+  return { subject, html };
+}
+
 /* ─── Template 8: Physical Subscription Confirmed ─────────────────────────── */
 
 export function physicalSubscriptionConfirmed(params: PhysicalSubscriptionConfirmedParams) {

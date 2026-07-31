@@ -3274,6 +3274,7 @@ export async function placeProdigiOrder(
       merchantReference: episodeId,
       shippingMethod,
       recipient,
+      callbackUrl: `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/prodigi?token=${process.env.PRODIGI_WEBHOOK_TOKEN}`,
       items: [
         {
           sku: PRODIGI_BOOK_SKU,

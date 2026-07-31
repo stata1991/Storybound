@@ -23,6 +23,7 @@ const serverSchema = z.object({
   // ── Prodigi ───────────────────────────────────────────
   PRODIGI_API_KEY: z.string().min(1),
   PRODIGI_API_URL: z.string().url(),
+  PRODIGI_WEBHOOK_TOKEN: z.string().min(32),
 
   // ── Resend ────────────────────────────────────────────
   RESEND_API_KEY: z.string().min(1),

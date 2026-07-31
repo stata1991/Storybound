@@ -187,6 +187,10 @@ print_orders {
   PDF is never re-rendered at order time. What was previewed is what prints.
 - RLS enabled with **no policies**: service-role only (admin actions + webhook
   routes); everything else is denied.
+- **Single creation path:** all Prodigi order creation flows through
+  `placeProdigiOrder` (or its extracted core); no other code path may POST
+  orders, preserving `merchantReference = episodeId` uniqueness for
+  recovery-adoption.
 
 ### Quarterly Delivery Calendar
 ```
