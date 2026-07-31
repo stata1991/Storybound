@@ -239,6 +239,7 @@ def train_flux_lora(
     import requests
     import io
     import base64
+    import traceback
 
     from diffusers import FluxPipeline
     from peft import LoraConfig
@@ -246,470 +247,503 @@ def train_flux_lora(
 
     os.environ["HF_TOKEN"] = os.environ.get("HF_TOKEN", "")
 
-    # ── STEP 1: Decode and preprocess photos ──
-    pil_images = []
-    for i, b64 in enumerate(photos_b64):
-        try:
-            img_bytes = base64.b64decode(b64)
-            img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    try:
+        # ── STEP 1: Decode and preprocess photos ──
+        pil_images = []
+        for i, b64 in enumerate(photos_b64):
+            try:
+                img_bytes = base64.b64decode(b64)
+                img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
-            # Face detection with OpenCV Haar cascade
-            img_np = np.array(img)
-            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-            face_cascade = cv2.CascadeClassifier(
-                cv2.data.haarcascades +
-                "haarcascade_frontalface_default.xml"
+                # Face detection with OpenCV Haar cascade
+                img_np = np.array(img)
+                gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                face_cascade = cv2.CascadeClassifier(
+                    cv2.data.haarcascades +
+                    "haarcascade_frontalface_default.xml"
+                )
+                faces = face_cascade.detectMultiScale(
+                    gray, scaleFactor=1.1,
+                    minNeighbors=5, minSize=(50, 50)
+                )
+
+                if len(faces) > 0:
+                    x, y, w, h = max(faces,
+                        key=lambda f: f[2] * f[3])
+                    pad = int(max(w, h) * 0.4)
+                    x1 = max(0, x - pad)
+                    y1 = max(0, y - pad)
+                    x2 = min(img.width, x + w + pad)
+                    y2 = min(img.height, y + h + pad)
+                    side = max(x2 - x1, y2 - y1)
+                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                    x1 = max(0, cx - side // 2)
+                    y1 = max(0, cy - side // 2)
+                    x2 = min(img.width, x1 + side)
+                    y2 = min(img.height, y1 + side)
+                    img = img.crop((x1, y1, x2, y2))
+                    print(f"Photo {i}: face detected, cropped")
+                else:
+                    w, h = img.size
+                    s = min(w, h)
+                    img = img.crop((
+                        (w-s)//2, (h-s)//2,
+                        (w+s)//2, (h+s)//2
+                    ))
+                    print(f"Photo {i}: no face, center crop")
+
+                img = img.resize((1024, 1024), Image.LANCZOS)
+                pil_images.append(img)
+            except Exception as e:
+                print(f"Photo {i} failed: {e}")
+
+        if not pil_images:
+            raise RuntimeError("No valid photos after preprocessing")
+
+        print(f"Preprocessed {len(pil_images)} photos at 1024x1024")
+
+        # ── Bindi pre-pass: filter bindi photos from training set for boys ──
+        if pronouns in ("he_him", "boy"):
+            # InsightFace needed early for bindi detection; init here, reused by STEP 2
+            from insightface.app import FaceAnalysis as _FA
+            _bindi_app = _FA(
+                name="buffalo_l",
+                providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
             )
-            faces = face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1,
-                minNeighbors=5, minSize=(50, 50)
-            )
+            _bindi_app.prepare(ctx_id=0, det_size=(640, 640))
 
-            if len(faces) > 0:
-                x, y, w, h = max(faces,
-                    key=lambda f: f[2] * f[3])
-                pad = int(max(w, h) * 0.4)
-                x1 = max(0, x - pad)
-                y1 = max(0, y - pad)
-                x2 = min(img.width, x + w + pad)
-                y2 = min(img.height, y + h + pad)
-                side = max(x2 - x1, y2 - y1)
-                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                x1 = max(0, cx - side // 2)
-                y1 = max(0, cy - side // 2)
-                x2 = min(img.width, x1 + side)
-                y2 = min(img.height, y1 + side)
-                img = img.crop((x1, y1, x2, y2))
-                print(f"Photo {i}: face detected, cropped")
-            else:
-                w, h = img.size
-                s = min(w, h)
-                img = img.crop((
-                    (w-s)//2, (h-s)//2,
-                    (w+s)//2, (h+s)//2
-                ))
-                print(f"Photo {i}: no face, center crop")
+            bindi_indices = set()
+            for i, img in enumerate(pil_images):
+                img_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                faces = _bindi_app.get(img_bgr)
+                if faces:
+                    face = max(faces,
+                        key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                    has_bindi, _ = has_forehead_mark(img_bgr, face.bbox)
+                    if has_bindi:
+                        bindi_indices.add(i)
+                        print(f"Photo {i}: bindi detected, will be filtered (pronouns=boy)")
 
-            img = img.resize((1024, 1024), Image.LANCZOS)
-            pil_images.append(img)
-        except Exception as e:
-            print(f"Photo {i} failed: {e}")
+            if bindi_indices:
+                surviving = len(pil_images) - len(bindi_indices)
+                if surviving == 0:
+                    print(f"training.bindi_filter_fallback all_{len(bindi_indices)}_photos_had_bindi total={len(pil_images)} — keeping all photos")
+                else:
+                    print(f"training.bindi_photos_filtered count={len(bindi_indices)} total={len(pil_images)} surviving={surviving} pronouns=boy")
+                    if surviving < 5:
+                        print(f"training.bindi_filter_warning surviving={surviving} below_floor=5 proceeding_anyway")
+                    pil_images = [img for i, img in enumerate(pil_images) if i not in bindi_indices]
 
-    if not pil_images:
-        raise RuntimeError("No valid photos after preprocessing")
+            del _bindi_app
 
-    print(f"Preprocessed {len(pil_images)} photos at 1024x1024")
-
-    # ── Bindi pre-pass: filter bindi photos from training set for boys ──
-    if pronouns in ("he_him", "boy"):
-        # InsightFace needed early for bindi detection; init here, reused by STEP 2
-        from insightface.app import FaceAnalysis as _FA
-        _bindi_app = _FA(
+        # ── STEP 2: Extract face embedding via InsightFace ──
+        face_app = FaceAnalysis(
             name="buffalo_l",
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
         )
-        _bindi_app.prepare(ctx_id=0, det_size=(640, 640))
+        face_app.prepare(ctx_id=0, det_size=(640, 640))
 
-        bindi_indices = set()
+        embeddings = []
+        best_face_img = None
+        best_face_size = 0
+
         for i, img in enumerate(pil_images):
             img_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-            faces = _bindi_app.get(img_bgr)
+            faces = face_app.get(img_bgr)
             if faces:
                 face = max(faces,
                     key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-                has_bindi, _ = has_forehead_mark(img_bgr, face.bbox)
-                if has_bindi:
-                    bindi_indices.add(i)
-                    print(f"Photo {i}: bindi detected, will be filtered (pronouns=boy)")
+                face_size = ((face.bbox[2]-face.bbox[0]) *
+                            (face.bbox[3]-face.bbox[1]))
+                embeddings.append(
+                    torch.from_numpy(face.normed_embedding).unsqueeze(0)
+                )
+                if face_size > best_face_size:
+                    best_face_size = face_size
+                    best_face_img = img
+                print(f"Photo {i}: InsightFace detected (size={int(face_size)})")
 
-        if bindi_indices:
-            surviving = len(pil_images) - len(bindi_indices)
-            if surviving == 0:
-                print(f"training.bindi_filter_fallback all_{len(bindi_indices)}_photos_had_bindi total={len(pil_images)} — keeping all photos")
+        if not embeddings:
+            raise RuntimeError("No faces detected by InsightFace")
+
+        avg_embedding = torch.cat(embeddings).mean(dim=0, keepdim=True)
+        print(f"Face embedding: averaged across {len(embeddings)} photos, "
+              f"shape={avg_embedding.shape}")
+
+        # Buffer best face crop — crop to face bbox, remove forehead marks
+        best_face_buffer = io.BytesIO()
+        if best_face_img:
+            img_bgr = cv2.cvtColor(np.array(best_face_img), cv2.COLOR_RGB2BGR)
+            faces = face_app.get(img_bgr)
+            if faces:
+                face = max(faces,
+                    key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                x1, y1, x2, y2 = [int(c) for c in face.bbox]
+                h, w = img_bgr.shape[:2]
+                x1, y1 = max(0, x1 - 20), max(0, y1 - 20)
+                x2, y2 = min(w, x2 + 20), min(h, y2 + 20)
+                crop = img_bgr[y1:y2, x1:x2].copy()
+
+                # Remove forehead marks in top 35% of crop
+                fh = int(crop.shape[0] * 0.35)
+                forehead = crop[:fh]
+                b, g, r = forehead[:,:,0], forehead[:,:,1], forehead[:,:,2]
+                red_mask = (r > 150) & (g < 100) & (b < 100)
+                yellow_mask = (r > 200) & (g > 150) & (b < 80)
+                mark_mask = red_mask | yellow_mask
+
+                mark_pixel_count = mark_mask.sum()
+                if mark_pixel_count > 30 and mark_pixel_count < 200:
+                    kernel = np.ones((3, 3), np.float32) / 9.0
+                    blurred = cv2.filter2D(forehead, -1, kernel)
+                    ys, xs = np.where(mark_mask)
+                    forehead[ys, xs] = blurred[ys, xs]
+                    crop[:fh] = forehead
+                    print(f"Forehead mark removal: {len(ys)} pixels replaced")
+
+                crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                Image.fromarray(crop_rgb).save(
+                    best_face_buffer, format="JPEG", quality=95)
             else:
-                print(f"training.bindi_photos_filtered count={len(bindi_indices)} total={len(pil_images)} surviving={surviving} pronouns=boy")
-                if surviving < 5:
-                    print(f"training.bindi_filter_warning surviving={surviving} below_floor=5 proceeding_anyway")
-                pil_images = [img for i, img in enumerate(pil_images) if i not in bindi_indices]
+                best_face_img.save(best_face_buffer, format="JPEG", quality=95)
 
-        del _bindi_app
+        # ── STEP 3: Privacy cleanup ──
+        del face_app
+        gc.collect()
 
-    # ── STEP 2: Extract face embedding via InsightFace ──
-    face_app = FaceAnalysis(
-        name="buffalo_l",
-        providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-    )
-    face_app.prepare(ctx_id=0, det_size=(640, 640))
+        # ── STEP 4: Load FLUX pipeline for training ──
+        print("Loading FLUX.1-dev pipeline...")
 
-    embeddings = []
-    best_face_img = None
-    best_face_size = 0
+        pipe = FluxPipeline.from_pretrained(
+            f"{MODEL_CACHE}/flux",
+            torch_dtype=torch.bfloat16,
+        ).to("cuda")
 
-    for i, img in enumerate(pil_images):
-        img_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        faces = face_app.get(img_bgr)
-        if faces:
-            face = max(faces,
-                key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-            face_size = ((face.bbox[2]-face.bbox[0]) *
-                        (face.bbox[3]-face.bbox[1]))
-            embeddings.append(
-                torch.from_numpy(face.normed_embedding).unsqueeze(0)
-            )
-            if face_size > best_face_size:
-                best_face_size = face_size
-                best_face_img = img
-            print(f"Photo {i}: InsightFace detected (size={int(face_size)})")
+        transformer = pipe.transformer
+        vae = pipe.vae
+        text_encoder = pipe.text_encoder      # CLIP-L
+        text_encoder_2 = pipe.text_encoder_2  # T5-XXL
+        tokenizer = pipe.tokenizer
+        tokenizer_2 = pipe.tokenizer_2
 
-    if not embeddings:
-        raise RuntimeError("No faces detected by InsightFace")
+        # Freeze everything except transformer LoRA
+        vae.requires_grad_(False)
+        text_encoder.requires_grad_(False)
+        text_encoder_2.requires_grad_(False)
+        transformer.requires_grad_(False)
 
-    avg_embedding = torch.cat(embeddings).mean(dim=0, keepdim=True)
-    print(f"Face embedding: averaged across {len(embeddings)} photos, "
-          f"shape={avg_embedding.shape}")
+        # ── STEP 5: Apply LoRA to FLUX transformer ──
+        # FLUX uses transformer blocks — different target modules than SDXL UNet
+        lora_config = LoraConfig(
+            r=32,
+            lora_alpha=16,
+            target_modules=[
+                "to_q", "to_k", "to_v", "to_out.0",
+                "add_q_proj", "add_k_proj", "add_v_proj",
+                "to_add_out",
+            ],
+            lora_dropout=0.0,
+            bias="none",
+        )
+        transformer.add_adapter(lora_config)
+        transformer.to(torch.bfloat16)
+        transformer.train()
 
-    # Buffer best face crop — crop to face bbox, remove forehead marks
-    best_face_buffer = io.BytesIO()
-    if best_face_img:
-        img_bgr = cv2.cvtColor(np.array(best_face_img), cv2.COLOR_RGB2BGR)
-        faces = face_app.get(img_bgr)
-        if faces:
-            face = max(faces,
-                key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-            x1, y1, x2, y2 = [int(c) for c in face.bbox]
-            h, w = img_bgr.shape[:2]
-            x1, y1 = max(0, x1 - 20), max(0, y1 - 20)
-            x2, y2 = min(w, x2 + 20), min(h, y2 + 20)
-            crop = img_bgr[y1:y2, x1:x2].copy()
+        trainable = sum(p.numel() for p in transformer.parameters()
+                       if p.requires_grad)
+        print(f"Trainable LoRA params: {trainable:,}")
 
-            # Remove forehead marks in top 35% of crop
-            fh = int(crop.shape[0] * 0.35)
-            forehead = crop[:fh]
-            b, g, r = forehead[:,:,0], forehead[:,:,1], forehead[:,:,2]
-            red_mask = (r > 150) & (g < 100) & (b < 100)
-            yellow_mask = (r > 200) & (g > 150) & (b < 80)
-            mark_mask = red_mask | yellow_mask
+        # ── STEP 6: Encode training images ──
+        # FLUX VAE encodes at 8x spatial compression, 16 channels
+        vae.to("cuda")
+        latents_list = []
 
-            mark_pixel_count = mark_mask.sum()
-            if mark_pixel_count > 30 and mark_pixel_count < 200:
-                kernel = np.ones((3, 3), np.float32) / 9.0
-                blurred = cv2.filter2D(forehead, -1, kernel)
-                ys, xs = np.where(mark_mask)
-                forehead[ys, xs] = blurred[ys, xs]
-                crop[:fh] = forehead
-                print(f"Forehead mark removal: {len(ys)} pixels replaced")
+        for img in pil_images:
+            img_tensor = torch.from_numpy(
+                np.array(img)
+            ).float().permute(2, 0, 1).unsqueeze(0) / 127.5 - 1.0
+            img_tensor = img_tensor.to("cuda", dtype=torch.bfloat16)
 
-            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-            Image.fromarray(crop_rgb).save(
-                best_face_buffer, format="JPEG", quality=95)
-        else:
-            best_face_img.save(best_face_buffer, format="JPEG", quality=95)
+            with torch.no_grad():
+                latent = vae.encode(img_tensor).latent_dist.sample()
+                shift_factor = getattr(vae.config, 'shift_factor', 0.0)
+                scaling_factor = getattr(vae.config, 'scaling_factor', 0.18215)
+                latent = (latent - shift_factor) * scaling_factor
+            latents_list.append(latent.cpu())
 
-    # ── STEP 3: Privacy cleanup ──
-    del face_app
-    gc.collect()
+        # Cache latent dimensions for packing
+        _, latent_c, latent_h, latent_w = latents_list[0].shape
+        print(f"Latent shape: [1, {latent_c}, {latent_h}, {latent_w}]")
 
-    # ── STEP 4: Load FLUX pipeline for training ──
-    print("Loading FLUX.1-dev pipeline...")
+        vae.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
 
-    pipe = FluxPipeline.from_pretrained(
-        f"{MODEL_CACHE}/flux",
-        torch_dtype=torch.bfloat16,
-    ).to("cuda")
+        # ── STEP 6b: Latent packing helpers ──
+        # FLUX transformer expects packed 3D tensors, not raw 4D latents.
+        # Packing: [B, C, H, W] → [B, (H/2)*(W/2), C*4]
 
-    transformer = pipe.transformer
-    vae = pipe.vae
-    text_encoder = pipe.text_encoder      # CLIP-L
-    text_encoder_2 = pipe.text_encoder_2  # T5-XXL
-    tokenizer = pipe.tokenizer
-    tokenizer_2 = pipe.tokenizer_2
+        def pack_latents(x):
+            b, c, h, w = x.shape
+            x = x.view(b, c, h // 2, 2, w // 2, 2)
+            x = x.permute(0, 2, 4, 1, 3, 5)
+            x = x.reshape(b, (h // 2) * (w // 2), c * 4)
+            return x
 
-    # Freeze everything except transformer LoRA
-    vae.requires_grad_(False)
-    text_encoder.requires_grad_(False)
-    text_encoder_2.requires_grad_(False)
-    transformer.requires_grad_(False)
+        # Pre-compute position IDs (constant across training)
+        packed_h, packed_w = latent_h // 2, latent_w // 2
+        img_ids = torch.zeros(packed_h, packed_w, 3, dtype=torch.bfloat16)
+        img_ids[..., 1] = torch.arange(packed_h, dtype=torch.bfloat16)[:, None]
+        img_ids[..., 2] = torch.arange(packed_w, dtype=torch.bfloat16)[None, :]
+        img_ids = img_ids.reshape(1, packed_h * packed_w, 3).cuda()
 
-    # ── STEP 5: Apply LoRA to FLUX transformer ──
-    # FLUX uses transformer blocks — different target modules than SDXL UNet
-    lora_config = LoraConfig(
-        r=32,
-        lora_alpha=16,
-        target_modules=[
-            "to_q", "to_k", "to_v", "to_out.0",
-            "add_q_proj", "add_k_proj", "add_v_proj",
-            "to_add_out",
-        ],
-        lora_dropout=0.0,
-        bias="none",
-    )
-    transformer.add_adapter(lora_config)
-    transformer.to(torch.bfloat16)
-    transformer.train()
+        print(f"Packed latent: [1, {packed_h * packed_w}, {latent_c * 4}]")
 
-    trainable = sum(p.numel() for p in transformer.parameters()
-                   if p.requires_grad)
-    print(f"Trainable LoRA params: {trainable:,}")
+        # ── STEP 7: Encode text prompt ──
+        instance_prompt = "a photo of sks child, clear smooth forehead, plain forehead skin, no forehead markings"
 
-    # ── STEP 6: Encode training images ──
-    # FLUX VAE encodes at 8x spatial compression, 16 channels
-    vae.to("cuda")
-    latents_list = []
-
-    for img in pil_images:
-        img_tensor = torch.from_numpy(
-            np.array(img)
-        ).float().permute(2, 0, 1).unsqueeze(0) / 127.5 - 1.0
-        img_tensor = img_tensor.to("cuda", dtype=torch.bfloat16)
-
+        # FLUX uses both CLIP-L and T5-XXL — no 77-token limit on T5
         with torch.no_grad():
-            latent = vae.encode(img_tensor).latent_dist.sample()
-            shift_factor = getattr(vae.config, 'shift_factor', 0.0)
-            scaling_factor = getattr(vae.config, 'scaling_factor', 0.18215)
-            latent = (latent - shift_factor) * scaling_factor
-        latents_list.append(latent.cpu())
+            # CLIP-L tokens — use pooler_output for pooled_projections
+            clip_tokens = tokenizer(
+                instance_prompt,
+                padding="max_length",
+                max_length=77,
+                truncation=True,
+                return_tensors="pt"
+            ).input_ids.to("cuda")
+            clip_output = text_encoder(clip_tokens,
+                                       output_hidden_states=False,
+                                       return_dict=True)
+            clip_pooled = clip_output.pooler_output  # shape [1, 768]
 
-    # Cache latent dimensions for packing
-    _, latent_c, latent_h, latent_w = latents_list[0].shape
-    print(f"Latent shape: [1, {latent_c}, {latent_h}, {latent_w}]")
+            # T5-XXL tokens — up to 512 tokens
+            t5_tokens = tokenizer_2(
+                instance_prompt,
+                padding="max_length",
+                max_length=512,
+                truncation=True,
+                return_tensors="pt"
+            ).input_ids.to("cuda")
+            t5_embeds = text_encoder_2(t5_tokens)[0]
 
-    vae.to("cpu")
-    gc.collect()
-    torch.cuda.empty_cache()
+        # Pre-compute text position IDs
+        txt_ids = torch.zeros(1, t5_embeds.shape[1], 3,
+                              device="cuda", dtype=torch.bfloat16)
 
-    # ── STEP 6b: Latent packing helpers ──
-    # FLUX transformer expects packed 3D tensors, not raw 4D latents.
-    # Packing: [B, C, H, W] → [B, (H/2)*(W/2), C*4]
+        text_encoder.to("cpu")
+        text_encoder_2.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
 
-    def pack_latents(x):
-        b, c, h, w = x.shape
-        x = x.view(b, c, h // 2, 2, w // 2, 2)
-        x = x.permute(0, 2, 4, 1, 3, 5)
-        x = x.reshape(b, (h // 2) * (w // 2), c * 4)
-        return x
-
-    # Pre-compute position IDs (constant across training)
-    packed_h, packed_w = latent_h // 2, latent_w // 2
-    img_ids = torch.zeros(packed_h, packed_w, 3, dtype=torch.bfloat16)
-    img_ids[..., 1] = torch.arange(packed_h, dtype=torch.bfloat16)[:, None]
-    img_ids[..., 2] = torch.arange(packed_w, dtype=torch.bfloat16)[None, :]
-    img_ids = img_ids.reshape(1, packed_h * packed_w, 3).cuda()
-
-    print(f"Packed latent: [1, {packed_h * packed_w}, {latent_c * 4}]")
-
-    # ── STEP 7: Encode text prompt ──
-    instance_prompt = "a photo of sks child, clear smooth forehead, plain forehead skin, no forehead markings"
-
-    # FLUX uses both CLIP-L and T5-XXL — no 77-token limit on T5
-    with torch.no_grad():
-        # CLIP-L tokens — use pooler_output for pooled_projections
-        clip_tokens = tokenizer(
-            instance_prompt,
-            padding="max_length",
-            max_length=77,
-            truncation=True,
-            return_tensors="pt"
-        ).input_ids.to("cuda")
-        clip_output = text_encoder(clip_tokens,
-                                   output_hidden_states=False,
-                                   return_dict=True)
-        clip_pooled = clip_output.pooler_output  # shape [1, 768]
-
-        # T5-XXL tokens — up to 512 tokens
-        t5_tokens = tokenizer_2(
-            instance_prompt,
-            padding="max_length",
-            max_length=512,
-            truncation=True,
-            return_tensors="pt"
-        ).input_ids.to("cuda")
-        t5_embeds = text_encoder_2(t5_tokens)[0]
-
-    # Pre-compute text position IDs
-    txt_ids = torch.zeros(1, t5_embeds.shape[1], 3,
-                          device="cuda", dtype=torch.bfloat16)
-
-    text_encoder.to("cpu")
-    text_encoder_2.to("cpu")
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    # ── STEP 8: Training loop ──
-    optimizer = torch.optim.AdamW(
-        [p for p in transformer.parameters() if p.requires_grad],
-        lr=5e-5,
-        weight_decay=1e-2,
-        betas=(0.9, 0.999),
-        eps=1e-8,
-    )
-
-    num_steps = 2000
-    print(f"Training config: steps={num_steps}, rank=32, "
-          f"lr=5e-5, resolution=1024, model=FLUX.1-dev, "
-          f"min-snr-gamma=5.0")
-
-    transformer.to("cuda")
-
-    for step in range(num_steps):
-        latent = latents_list[step % len(latents_list)].to(
-            "cuda", dtype=torch.bfloat16
+        # ── STEP 8: Training loop ──
+        optimizer = torch.optim.AdamW(
+            [p for p in transformer.parameters() if p.requires_grad],
+            lr=5e-5,
+            weight_decay=1e-2,
+            betas=(0.9, 0.999),
+            eps=1e-8,
         )
 
-        # Pack 4D latent → 3D for FLUX transformer
-        packed_latent = pack_latents(latent)
+        num_steps = 2000
+        print(f"Training config: steps={num_steps}, rank=32, "
+              f"lr=5e-5, resolution=1024, model=FLUX.1-dev, "
+              f"min-snr-gamma=5.0")
 
-        # FLUX flow matching noise (in packed space)
-        noise = torch.randn_like(packed_latent)
-        # Sample timestep — FLUX uses continuous timesteps [0, 1]
-        t = torch.rand(1, device="cuda", dtype=torch.bfloat16)
-        # Flow matching interpolation
-        noisy_latent = (1 - t) * packed_latent + t * noise
-        # Target is the noise direction (velocity)
-        target = noise - packed_latent
+        transformer.to("cuda")
 
-        bsz = noisy_latent.shape[0]
+        for step in range(num_steps):
+            latent = latents_list[step % len(latents_list)].to(
+                "cuda", dtype=torch.bfloat16
+            )
 
-        # FLUX transformer forward pass with packed latents + position IDs
-        # guidance=1.0 during training (no classifier-free guidance)
-        noise_pred = transformer(
-            hidden_states=noisy_latent,
-            timestep=t.expand(bsz),
-            guidance=torch.ones(bsz, device="cuda", dtype=torch.bfloat16),
-            encoder_hidden_states=t5_embeds.to("cuda", dtype=torch.bfloat16),
-            pooled_projections=clip_pooled.to("cuda", dtype=torch.bfloat16),
-            img_ids=img_ids,
-            txt_ids=txt_ids,
-            return_dict=False,
-        )[0]
+            # Pack 4D latent → 3D for FLUX transformer
+            packed_latent = pack_latents(latent)
 
-        loss = torch.nn.functional.mse_loss(
-            noise_pred.float(), target.float(), reduction="none"
-        )
-        loss = loss.mean(dim=list(range(1, loss.ndim)))  # per-sample mean
+            # FLUX flow matching noise (in packed space)
+            noise = torch.randn_like(packed_latent)
+            # Sample timestep — FLUX uses continuous timesteps [0, 1]
+            t = torch.rand(1, device="cuda", dtype=torch.bfloat16)
+            # Flow matching interpolation
+            noisy_latent = (1 - t) * packed_latent + t * noise
+            # Target is the noise direction (velocity)
+            target = noise - packed_latent
 
-        # Min-SNR-gamma weighting — same as SDXL pipeline
-        # Prevents high-noise timesteps from dominating training
-        # Critical for fine facial detail learning
-        snr = (1 - t) / (t + 1e-8)
-        mse_loss_weights = torch.clamp(snr, max=5.0) / (snr + 1e-8)
-        loss = (loss * mse_loss_weights).mean()
+            bsz = noisy_latent.shape[0]
 
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            transformer.parameters(), max_norm=1.0
-        )
-        optimizer.step()
+            # FLUX transformer forward pass with packed latents + position IDs
+            # guidance=1.0 during training (no classifier-free guidance)
+            noise_pred = transformer(
+                hidden_states=noisy_latent,
+                timestep=t.expand(bsz),
+                guidance=torch.ones(bsz, device="cuda", dtype=torch.bfloat16),
+                encoder_hidden_states=t5_embeds.to("cuda", dtype=torch.bfloat16),
+                pooled_projections=clip_pooled.to("cuda", dtype=torch.bfloat16),
+                img_ids=img_ids,
+                txt_ids=txt_ids,
+                return_dict=False,
+            )[0]
 
-        if step % 100 == 0:
-            print(f"Step {step}/{num_steps} — loss={loss.item():.4f}")
+            loss = torch.nn.functional.mse_loss(
+                noise_pred.float(), target.float(), reduction="none"
+            )
+            loss = loss.mean(dim=list(range(1, loss.ndim)))  # per-sample mean
 
-    print("Training complete")
+            # Min-SNR-gamma weighting — same as SDXL pipeline
+            # Prevents high-noise timesteps from dominating training
+            # Critical for fine facial detail learning
+            snr = (1 - t) / (t + 1e-8)
+            mse_loss_weights = torch.clamp(snr, max=5.0) / (snr + 1e-8)
+            loss = (loss * mse_loss_weights).mean()
 
-    # ── STEP 9: Save and upload ──
-    save_dir = Path(f"/lora-weights/{face_model_id}")
-    save_dir.mkdir(parents=True, exist_ok=True)
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                transformer.parameters(), max_norm=1.0
+            )
+            optimizer.step()
 
-    # Save LoRA adapter weights only (not full model)
-    from peft import get_peft_model_state_dict
-    from safetensors.torch import save_file
-    lora_state_dict = get_peft_model_state_dict(transformer)
-    save_file(lora_state_dict, str(save_dir / "adapter_model.safetensors"))
-    # Save adapter config
-    transformer.peft_config["default"].save_pretrained(str(save_dir))
-    print(f"LoRA saved to {save_dir}")
+            if step % 100 == 0:
+                print(f"Step {step}/{num_steps} — loss={loss.item():.4f}")
 
-    # Save face embedding (volume-only; excluded from the upload allowlist)
-    torch.save(avg_embedding, str(save_dir / "face_embedding.pt"))
-    print("Face embedding saved")
+        print("Training complete")
 
-    # Weight sanity check
-    lora_weights = [p for p in transformer.parameters()
-                   if p.requires_grad]
-    max_val = max(p.abs().max().item() for p in lora_weights)
-    print(f"LoRA weight max: {max_val:.4f}")
-    if max_val > 2.0:
-        raise RuntimeError(
-            f"FLUX LoRA weights unstable (max={max_val:.4f})"
-        )
+        # ── STEP 9: Save and upload ──
+        save_dir = Path(f"/lora-weights/{face_model_id}")
+        save_dir.mkdir(parents=True, exist_ok=True)
 
-    # Upload to Supabase
-    import supabase as sb_module
-    supabase_url = os.environ["SUPABASE_URL"]
-    supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-    sb = sb_module.create_client(supabase_url, supabase_key)
+        # Save LoRA adapter weights only (not full model)
+        from peft import get_peft_model_state_dict
+        from safetensors.torch import save_file
+        lora_state_dict = get_peft_model_state_dict(transformer)
+        save_file(lora_state_dict, str(save_dir / "adapter_model.safetensors"))
+        # Save adapter config
+        transformer.peft_config["default"].save_pretrained(str(save_dir))
+        print(f"LoRA saved to {save_dir}")
 
-    import time
-    import httpx
-    max_attempts = 3
+        # Save face embedding (volume-only; excluded from the upload allowlist)
+        torch.save(avg_embedding, str(save_dir / "face_embedding.pt"))
+        print("Face embedding saved")
 
-    # Only model artifacts leave the volume: the face embedding is retained
-    # volume-only as part of the model; no photo-derived images are persisted
-    # anywhere.
-    upload_allowlist = ["adapter_model.safetensors", "adapter_config.json"]
+        # Weight sanity check
+        lora_weights = [p for p in transformer.parameters()
+                       if p.requires_grad]
+        max_val = max(p.abs().max().item() for p in lora_weights)
+        print(f"LoRA weight max: {max_val:.4f}")
+        if max_val > 2.0:
+            raise RuntimeError(
+                f"FLUX LoRA weights unstable (max={max_val:.4f})"
+            )
 
-    for fname in upload_allowlist:
-        fpath = save_dir / fname
-        if fpath.is_file():
-            size_mb = fpath.stat().st_size / 1048576
-            data = fpath.read_bytes()
-            for attempt in range(1, max_attempts + 1):
-                print(f"Uploading {fname} ({size_mb:.1f} MB) to "
-                      f"lora-weights/{face_model_id}/{fname} "
-                      f"(attempt {attempt}/{max_attempts})")
-                t0 = time.time()
-                try:
-                    sb.storage.from_("lora-weights").upload(
-                        f"{face_model_id}/{fname}",
-                        data,
-                        {"content-type": "application/octet-stream",
-                         "upsert": "true"}
-                    )
-                    elapsed = time.time() - t0
-                    print(f"Uploaded {fname} ({size_mb:.1f} MB) in {elapsed:.1f}s")
-                    break
-                except httpx.TransportError as e:
-                    elapsed = time.time() - t0
-                    if attempt < max_attempts:
-                        backoff = 2 ** attempt
-                        print(f"Upload attempt {attempt}/{max_attempts} failed for "
-                              f"{fname} after {elapsed:.1f}s: "
-                              f"{type(e).__name__}: {e} "
-                              f"— retrying in {backoff}s")
-                        time.sleep(backoff)
-                    else:
-                        print(f"Upload failed after {max_attempts} attempts for "
-                              f"{fname} after {elapsed:.1f}s: "
-                              f"{type(e).__name__}: {e}")
-                        raise
-    print(f"LoRA uploaded to Supabase: lora-weights/{face_model_id}/")
+        # Upload to Supabase
+        import supabase as sb_module
+        supabase_url = os.environ["SUPABASE_URL"]
+        supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+        sb = sb_module.create_client(supabase_url, supabase_key)
 
-    # Commit to Modal volume
-    lora_volume.commit()
+        import time
+        import httpx
+        max_attempts = 3
 
-    # Privacy: clear photos from memory
-    del pil_images
-    gc.collect()
+        # Only model artifacts leave the volume: the face embedding is retained
+        # volume-only as part of the model; no photo-derived images are persisted
+        # anywhere.
+        upload_allowlist = ["adapter_model.safetensors", "adapter_config.json"]
 
-    # Fire webhook
-    try:
-        resp = requests.post(
-            callback_url,
-            json={
-                "harvest_id": harvest_id,
-                "face_model_id": face_model_id,
-                "status": "ok",
-            },
-            headers={
-                "x-webhook-secret": webhook_secret,
-                "Content-Type": "application/json",
-            },
-            timeout=120,
-            allow_redirects=True,
-        )
-        print(f"Webhook: {resp.status_code}")
+        for fname in upload_allowlist:
+            fpath = save_dir / fname
+            if fpath.is_file():
+                size_mb = fpath.stat().st_size / 1048576
+                data = fpath.read_bytes()
+                for attempt in range(1, max_attempts + 1):
+                    print(f"Uploading {fname} ({size_mb:.1f} MB) to "
+                          f"lora-weights/{face_model_id}/{fname} "
+                          f"(attempt {attempt}/{max_attempts})")
+                    t0 = time.time()
+                    try:
+                        sb.storage.from_("lora-weights").upload(
+                            f"{face_model_id}/{fname}",
+                            data,
+                            {"content-type": "application/octet-stream",
+                             "upsert": "true"}
+                        )
+                        elapsed = time.time() - t0
+                        print(f"Uploaded {fname} ({size_mb:.1f} MB) in {elapsed:.1f}s")
+                        break
+                    except httpx.TransportError as e:
+                        elapsed = time.time() - t0
+                        if attempt < max_attempts:
+                            backoff = 2 ** attempt
+                            print(f"Upload attempt {attempt}/{max_attempts} failed for "
+                                  f"{fname} after {elapsed:.1f}s: "
+                                  f"{type(e).__name__}: {e} "
+                                  f"— retrying in {backoff}s")
+                            time.sleep(backoff)
+                        else:
+                            print(f"Upload failed after {max_attempts} attempts for "
+                                  f"{fname} after {elapsed:.1f}s: "
+                                  f"{type(e).__name__}: {e}")
+                            raise
+        print(f"LoRA uploaded to Supabase: lora-weights/{face_model_id}/")
+
+        # Commit to Modal volume
+        lora_volume.commit()
+
+        # Privacy: clear photos from memory
+        del pil_images
+        gc.collect()
+
+        # Fire webhook
+        try:
+            resp = requests.post(
+                callback_url,
+                json={
+                    "harvest_id": harvest_id,
+                    "face_model_id": face_model_id,
+                    "status": "ok",
+                },
+                headers={
+                    "x-webhook-secret": webhook_secret,
+                    "Content-Type": "application/json",
+                },
+                timeout=120,
+                allow_redirects=True,
+            )
+            print(f"Webhook: {resp.status_code}")
+        except Exception as e:
+            print(f"Webhook failed: {e}")
     except Exception as e:
-        print(f"Webhook failed: {e}")
+        print(traceback.format_exc())
+        err_msg = f"{type(e).__name__}: {e}"
+        # Report failure so the harvest doesn't zombie in "training".
+        # Own try/except so a webhook failure can't mask the original error.
+        try:
+            requests.post(
+                callback_url,
+                json={
+                    "harvest_id": harvest_id,
+                    "face_model_id": face_model_id,
+                    "status": "error",
+                    "message": err_msg,
+                },
+                headers={
+                    "x-webhook-secret": webhook_secret,
+                    "Content-Type": "application/json",
+                },
+                timeout=120,
+                allow_redirects=True,
+            )
+            print("Error webhook fired")
+        except Exception as we:
+            print(f"Error webhook failed: {we}")
+        raise
+    finally:
+        # Privacy: photos must not outlive the run in memory
+        try:
+            del pil_images
+        except NameError:
+            pass
+        gc.collect()
 
 
 # ─── Single Image Worker ─────────────────────────────────────────────────────
