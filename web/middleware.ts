@@ -1,6 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+// Any new externally-called webhook route MUST be added here, or the auth
+// middleware silently 307s its callbacks to the homepage.
 const PUBLIC_ROUTES = [
   "/",
   "/auth",
@@ -8,6 +10,7 @@ const PUBLIC_ROUTES = [
   "/auth/magic-link",
   "/dashboard/preview",
   "/api/webhooks/stripe",
+  "/api/webhooks/prodigi",
   "/api/cron/memory-drop-notifications",
   "/api/cron/health-upload",
   "/api/admin/training-complete",
