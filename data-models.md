@@ -153,6 +153,41 @@ episodes {
 }
 ```
 
+### Print Order (Prodigi Submission)
+```
+print_orders {
+  id                   uuid PRIMARY KEY  // doubles as the Prodigi idempotencyKey
+  episode_id           uuid FK episodes
+  prodigi_order_id     string UNIQUE (partial: where not null)  // null until Prodigi accepts
+  status               enum print_status_enum  // pending = row created, not yet accepted;
+                                               // submitted set after successful POST
+  recipient            jsonb    // snapshot at submission: {name, address:{...}}
+  shipping_method      string   // e.g. "Budget"
+  page_count           integer
+  asset_url_expires_at timestamp  // expiry of the signed book.pdf URL handed to Prodigi
+  tracking_number      string
+  tracking_url         string
+  carrier              string
+  charges              jsonb    // Prodigi charges array, verbatim snapshot
+  created_at           timestamp
+  updated_at           timestamp
+}
+```
+
+**Design notes:**
+- One row = **one Prodigi submission attempt for one episode**. Episodes keep
+  denormalized current-order fields (`print_status`, `tracking_number`,
+  `shipped_at`, …) for UI reads; the submission history lives here.
+- **id-as-idempotencyKey:** the row is inserted *before* the Prodigi POST and its
+  `id` is sent as the `idempotencyKey`. A crash between insert and response is
+  recovered by re-POSTing the same body — Prodigi answers `AlreadyExists` with
+  the original order id (sparse object; follow up with a GET for full status).
+- **Byte-reuse principle:** an order always prints the stored
+  `books/{child}/{episode}/book.pdf` exactly as the parent approved it — the
+  PDF is never re-rendered at order time. What was previewed is what prints.
+- RLS enabled with **no policies**: service-role only (admin actions + webhook
+  routes); everything else is denied.
+
 ### Quarterly Delivery Calendar
 ```
 delivery_calendar {
@@ -225,6 +260,7 @@ families
       └── story_bibles (1:many — one per year)
       └── harvests (1:many — four per year)
           └── episodes (1:1 — one book per harvest)
+              └── print_orders (1:many — one per Prodigi submission attempt)
   └── gift_claims (1:many — as buyer)
 
 gift_claims

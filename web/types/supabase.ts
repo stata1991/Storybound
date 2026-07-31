@@ -512,6 +512,65 @@ export type Database = {
           },
         ]
       }
+      print_orders: {
+        Row: {
+          asset_url_expires_at: string | null
+          carrier: string | null
+          charges: Json | null
+          created_at: string
+          episode_id: string
+          id: string
+          page_count: number
+          prodigi_order_id: string | null
+          recipient: Json
+          shipping_method: string
+          status: Database["public"]["Enums"]["print_status_enum"]
+          tracking_number: string | null
+          tracking_url: string | null
+          updated_at: string
+        }
+        Insert: {
+          asset_url_expires_at?: string | null
+          carrier?: string | null
+          charges?: Json | null
+          created_at?: string
+          episode_id: string
+          id?: string
+          page_count: number
+          prodigi_order_id?: string | null
+          recipient: Json
+          shipping_method: string
+          status?: Database["public"]["Enums"]["print_status_enum"]
+          tracking_number?: string | null
+          tracking_url?: string | null
+          updated_at?: string
+        }
+        Update: {
+          asset_url_expires_at?: string | null
+          carrier?: string | null
+          charges?: Json | null
+          created_at?: string
+          episode_id?: string
+          id?: string
+          page_count?: number
+          prodigi_order_id?: string | null
+          recipient?: Json
+          shipping_method?: string
+          status?: Database["public"]["Enums"]["print_status_enum"]
+          tracking_number?: string | null
+          tracking_url?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "print_orders_episode_id_fkey"
+            columns: ["episode_id"]
+            isOneToOne: false
+            referencedRelation: "episodes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       story_bibles: {
         Row: {
           approved_at: string | null
