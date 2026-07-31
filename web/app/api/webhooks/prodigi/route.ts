@@ -69,6 +69,10 @@ export async function POST(req: NextRequest) {
   try {
     order = await getOrder(orderId);
   } catch (e) {
+    if (e instanceof ProdigiError && e.httpStatus === 404) {
+      // Permanent: junk id, foreign environment, or nothing of ours.
+      return NextResponse.json({ ignored: true });
+    }
     const msg =
       e instanceof ProdigiError
         ? `httpStatus=${e.httpStatus} outcome=${e.outcome}`
@@ -76,6 +80,9 @@ export async function POST(req: NextRequest) {
           ? e.message
           : "unknown";
     console.error(`[prodigi-webhook] verify fetch failed for ${orderId}: ${msg}`);
+    // Deferred = a subsequent stage-change callback will trigger a fresh
+    // verify-fetch (every path returns 200, so Prodigi never retries because
+    // of our response).
     return NextResponse.json({ deferred: true });
   }
 
