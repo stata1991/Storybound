@@ -20,6 +20,10 @@ const serverSchema = z.object({
   STRIPE_PRICE_GIFT_PHYSICAL: z.string().min(1),
   STRIPE_PRICE_ONETIME_PHYSICAL: z.string().min(1),
 
+  // ── Prodigi ───────────────────────────────────────────
+  PRODIGI_API_KEY: z.string().min(1),
+  PRODIGI_API_URL: z.string().url(),
+
   // ── Resend ────────────────────────────────────────────
   RESEND_API_KEY: z.string().min(1),
   RESEND_FROM_EMAIL: z.string().email().optional(),
