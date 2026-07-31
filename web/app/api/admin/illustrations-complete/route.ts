@@ -109,9 +109,12 @@ export async function POST(req: NextRequest) {
           );
         }
 
+        // Clear the now-dangling paths with the timestamp; captions are kept.
+        // On removal error above this is never reached — paths stay as the
+        // retry material.
         const { error: timestampError } = await supabase
           .from("harvests")
-          .update({ photos_deleted_at: new Date().toISOString() })
+          .update({ photos_deleted_at: new Date().toISOString(), photo_paths: [] })
           .eq("id", harvest_id);
         if (timestampError) {
           console.error(

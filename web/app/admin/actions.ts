@@ -573,6 +573,22 @@ export async function startFaceTraining(
     message: "LoRA face training started",
   });
 
+  // Delete character photos from bucket — Modal has them in memory once the
+  // job is accepted. Runs in BOTH the success and dispatch-timeout paths
+  // (training proceeds in both); never on genuine dispatch failure.
+  const deleteCharacterPhotos = async () => {
+    try {
+      const pathsToDelete = validFiles.map((f) => `${childId}/${f.name}`);
+      await supa.storage.from("character-photos").remove(pathsToDelete);
+      await supa
+        .from("children")
+        .update({ character_photos_deleted_at: new Date().toISOString() })
+        .eq("id", childId);
+    } catch (cleanupErr) {
+      console.error("Character photo cleanup failed (non-blocking):", cleanupErr);
+    }
+  };
+
   // Fire Modal train request — short timeout just to confirm Modal accepted the job
   // Training runs async on Modal; completion arrives via /api/admin/training-complete webhook
   const trainUrl = process.env.MODAL_FLUX_TRAIN_URL!;
@@ -612,6 +628,7 @@ export async function startFaceTraining(
         harvest_id: harvestId,
         message: "Training request timed out (120s) — Modal is still training. Webhook will complete the flow.",
       });
+      await deleteCharacterPhotos();
       return {
         success: true,
         message: "Training started — this takes ~10 minutes. The page will update automatically when complete.",
@@ -633,17 +650,7 @@ export async function startFaceTraining(
     return { error: `Face training request failed: ${msg}` };
   }
 
-  // Delete character photos from bucket — Modal has them in memory now
-  try {
-    const pathsToDelete = validFiles.map((f) => `${childId}/${f.name}`);
-    await supa.storage.from("character-photos").remove(pathsToDelete);
-    await supa
-      .from("children")
-      .update({ character_photos_deleted_at: new Date().toISOString() })
-      .eq("id", childId);
-  } catch (cleanupErr) {
-    console.error("Character photo cleanup failed (non-blocking):", cleanupErr);
-  }
+  await deleteCharacterPhotos();
 
   return { success: true };
 }
