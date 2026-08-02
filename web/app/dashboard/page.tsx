@@ -70,6 +70,31 @@ export default async function DashboardPage({
       }))
   );
 
+  // Post-approval episodes — the book must never be invisible between
+  // approval and delivery. Episodes whose status itself is shipped/delivered
+  // (manual markShipped path) are rendered by ChildCard and can't appear
+  // here (this filter requires status parent_approved); the Prodigi flow
+  // advances only print_status, which ChildCard doesn't key on, so those
+  // stay in this banner through shipping.
+  const approvedEpisodes = children.flatMap((child) =>
+    child.episodes
+      .filter((ep) => ep.status === "parent_approved")
+      .map((ep) => {
+        const harvest = child.harvests.find(
+          (h) => h.quarter === ep.quarter && h.year === ep.year
+        );
+        return {
+          childName:
+            child.name.charAt(0).toUpperCase() + child.name.slice(1),
+          season: harvest?.season
+            ? harvest.season.charAt(0).toUpperCase() + harvest.season.slice(1)
+            : "",
+          harvestId: harvest?.id,
+          printStatus: ep.print_status,
+        };
+      })
+  );
+
   // Check if any child has episodes in progress (draft / story_review / illustration_review)
   const hasInProgressEpisodes = children.some((child) =>
     child.episodes.some((ep) =>
@@ -190,6 +215,50 @@ export default async function DashboardPage({
                 </div>
               )}
           </>
+        )}
+
+        {/* Post-approval banner — approved books stay visible until delivery */}
+        {approvedEpisodes.map(
+          (ep) =>
+            ep.harvestId && (
+              <div
+                key={ep.harvestId}
+                className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-6"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="font-serif text-lg font-semibold text-navy">
+                      {subscriptionType === "digital_only"
+                        ? `${ep.childName}’s ${ep.season} book is yours!`
+                        : ep.printStatus === "submitted" ||
+                            ep.printStatus === "printing"
+                          ? `${ep.childName}’s ${ep.season} book is being printed!`
+                          : ep.printStatus === "shipped"
+                            ? `${ep.childName}’s ${ep.season} book is on its way!`
+                            : `${ep.childName}’s ${ep.season} book is confirmed!`}
+                    </p>
+                    <p className="mt-1 font-sans text-sm text-navy/60">
+                      {subscriptionType === "digital_only"
+                        ? "Read it anytime."
+                        : ep.printStatus === "submitted" ||
+                            ep.printStatus === "printing"
+                          ? "We’ll let you know the moment it ships."
+                          : ep.printStatus === "shipped"
+                            ? "Keep an eye on the mailbox."
+                            : "We’re getting it ready for print."}
+                    </p>
+                  </div>
+                  <Link
+                    href={`/dashboard/preview/${ep.harvestId}`}
+                    className="flex-shrink-0 rounded-full bg-gold px-6 py-3 font-sans text-sm font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg"
+                  >
+                    {subscriptionType === "digital_only"
+                      ? "Read now →"
+                      : "View book →"}
+                  </Link>
+                </div>
+              </div>
+            )
         )}
 
         {/* Upgrade upsell for digital-only subscribers */}

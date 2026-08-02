@@ -843,9 +843,10 @@ export default function PreviewClient({
     );
   }
 
-  /* ─── Physical subscriber — existing approve/flag UI ─────────────────────── */
+  /* ─── Physical subscriber — approve/flag review UI (book_ready ONLY) ────── */
 
-  return (
+  if (status === "book_ready") {
+    return (
     <div
       style={{
         minHeight: "100vh",
@@ -1003,6 +1004,89 @@ export default function PreviewClient({
           </div>
         )}
       </div>
+    </div>
+    );
+  }
+
+  /* ─── Post-review states — book + one status line ────────────────────────── */
+
+  if (["printing", "shipped", "delivered"].includes(status)) {
+    const statusLine =
+      status === "printing"
+        ? `${childName}’s book is being printed!`
+        : status === "shipped"
+          ? `${childName}’s book is on its way!`
+          : `${childName}’s book has been delivered!`;
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          backgroundColor: CREAM,
+        }}
+      >
+        <Header />
+        {pdfUrl && <PdfViewer />}
+        <div
+          style={{
+            padding: "20px 24px",
+            backgroundColor: "#fff",
+            borderTop: "1px solid #E8E4DF",
+            textAlign: "center",
+          }}
+        >
+          <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: NAVY }}>
+            {statusLine}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  /* ─── Fallback: draft + any unknown/future status — never the review UI ──── */
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: CREAM,
+        padding: 24,
+        textAlign: "center",
+      }}
+    >
+      <p
+        style={{
+          margin: "0 0 8px",
+          fontSize: 20,
+          fontWeight: 700,
+          color: NAVY,
+          fontFamily: "Georgia, serif",
+        }}
+      >
+        {childName}’s book is still being made.
+      </p>
+      <p style={{ margin: 0, fontSize: 15, color: "#6B7280" }}>
+        We’ll email you the moment it’s ready to preview.
+      </p>
+      <button
+        onClick={() => router.push("/dashboard")}
+        style={{
+          marginTop: 20,
+          background: "none",
+          border: "none",
+          color: "#9CA3AF",
+          fontSize: 13,
+          textDecoration: "underline",
+          cursor: "pointer",
+        }}
+      >
+        Back to dashboard
+      </button>
     </div>
   );
 }

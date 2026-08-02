@@ -27,6 +27,7 @@ export interface EpisodeData {
   quarter: number;
   year: number;
   status: string;
+  print_status: string;
   tracking_number: string | null;
   delivered_at: string | null;
 }
@@ -102,7 +103,7 @@ export async function getChildrenWithHarvests(): Promise<ChildWithHarvests[]> {
   const { data: episodes } = await supabase
     .from("episodes")
     .select(
-      "id, child_id, quarter, year, status, tracking_number, delivered_at"
+      "id, child_id, quarter, year, status, print_status, tracking_number, delivered_at"
     )
     .in("child_id", childIds)
     .eq("year", currentYear)
@@ -142,7 +143,7 @@ export async function getCurrentQuarter(): Promise<{
 
 export async function approveBookPreview(
   harvestId: string
-): Promise<{ success: true } | { error: string }> {
+): Promise<{ success: true; message?: string } | { error: string }> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -161,8 +162,20 @@ export async function approveBookPreview(
 
   const ep = episodeRaw as unknown as { id: string; status: string };
 
+  // Idempotent replay — approval already happened (this action, digital
+  // choice, cron auto-approve, or Stripe webhook).
+  if (ep.status === "parent_approved") {
+    return { success: true, message: "Your book is confirmed." };
+  }
+
   if (ep.status !== "book_ready") {
-    return { error: `Book is not awaiting review (status: ${ep.status}).` };
+    logEvent({
+      event_type: "book.approve",
+      status: "info",
+      harvest_id: harvestId,
+      message: `Approve rejected — episode status '${ep.status}'`,
+    });
+    return { error: "This book isn't ready yet — we'll email you the moment it is." };
   }
 
   const { error: updateErr } = await supabase
@@ -178,7 +191,7 @@ export async function approveBookPreview(
 export async function flagBookIssue(
   harvestId: string,
   message: string
-): Promise<{ success: true } | { error: string }> {
+): Promise<{ success: true; message?: string } | { error: string }> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -195,18 +208,64 @@ export async function flagBookIssue(
 
   const { data: episodeRaw } = await supabase
     .from("episodes")
-    .select("id, status")
+    .select("id, status, print_status")
     .eq("harvest_id", harvestId)
     .single();
 
   if (!episodeRaw) return { error: "No episode found for this harvest." };
 
-  const ep = episodeRaw as unknown as { id: string; status: string };
+  const ep = episodeRaw as unknown as {
+    id: string;
+    status: string;
+    print_status: string;
+  };
 
-  if (ep.status !== "book_ready") {
-    return { error: `Book is not awaiting review (status: ${ep.status}).` };
+  // Post-approval flag with a print order in flight: capture the message
+  // WITHOUT moving the state machine backward — reprint vs intercept is an
+  // admin decision (mirrors the Prodigi-cancelled ruling).
+  if (ep.status === "parent_approved" && ep.print_status !== "pending") {
+    const { error: msgErr } = await supabase
+      .from("episodes")
+      .update({ parent_flag_message: message })
+      .eq("id", ep.id);
+
+    if (msgErr) {
+      return { error: "Something went wrong saving your note. Please try again." };
+    }
+
+    const { data: orderRow } = await getAdmin()
+      .from("print_orders")
+      .select("prodigi_order_id")
+      .eq("episode_id", ep.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    logEvent({
+      event_type: "book.flag",
+      status: "warn",
+      harvest_id: harvestId,
+      message: `Parent flagged AFTER approval with print order in flight (print_status=${ep.print_status}, prodigi_order_id=${(orderRow as { prodigi_order_id: string | null } | null)?.prodigi_order_id ?? "none"}): ${message}`,
+    });
+
+    return {
+      success: true,
+      message: "We've received this — a human will take a look right away.",
+    };
   }
 
+  if (ep.status !== "book_ready" && ep.status !== "parent_approved") {
+    logEvent({
+      event_type: "book.flag",
+      status: "info",
+      harvest_id: harvestId,
+      message: `Flag rejected — episode status '${ep.status}'`,
+    });
+    return { error: "This book isn't ready yet — we'll email you the moment it is." };
+  }
+
+  // book_ready, or parent_approved with no print order in flight — normal
+  // flag flow (backward move is safe pre-print).
   const { error: updateErr } = await supabase
     .from("episodes")
     .update({
@@ -232,7 +291,7 @@ function getAdmin() {
 
 export async function chooseDigitalOnly(
   harvestId: string
-): Promise<{ success: true } | { error: string }> {
+): Promise<{ success: true; message?: string } | { error: string }> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -255,8 +314,49 @@ export async function chooseDigitalOnly(
     child_id: string;
   };
 
+  // Idempotent replay — the transition already happened (this action's own
+  // prior success, cron auto-approve, or Stripe). No re-writes, no email.
+  if (ep.status === "parent_approved") {
+    const { data: parentRow } = await supabase
+      .from("parents")
+      .select("family_id")
+      .eq("id", user.id)
+      .single();
+
+    if (parentRow) {
+      const familyId = (parentRow as { family_id: string }).family_id;
+      const { data: family } = await getAdmin()
+        .from("families")
+        .select("subscription_type")
+        .eq("id", familyId)
+        .single();
+
+      if (
+        (family as { subscription_type: string } | null)?.subscription_type ===
+        "digital_only"
+      ) {
+        logEvent({
+          event_type: "subscription.digital_chosen",
+          status: "info",
+          family_id: familyId,
+          child_id: ep.child_id,
+          message: "Noop — digital-only already chosen; parent re-confirmed",
+        });
+        return { success: true };
+      }
+    }
+    return { success: true, message: "Your book is already confirmed." };
+  }
+
   if (ep.status !== "book_ready") {
-    return { error: `Book is not ready for review (status: ${ep.status}).` };
+    logEvent({
+      event_type: "subscription.digital_chosen",
+      status: "info",
+      harvest_id: harvestId,
+      child_id: ep.child_id,
+      message: `Rejected — episode status '${ep.status}'`,
+    });
+    return { error: "This book isn't ready yet — we'll email you the moment it is." };
   }
 
   // Fetch parent's family
