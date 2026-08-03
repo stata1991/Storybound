@@ -306,6 +306,32 @@ export function digitalBookReady(params: DigitalBookReadyParams) {
   return { subject, html };
 }
 
+/* ─── Template: Payment Received (one-time physical book) ─────────────────── */
+
+interface PaymentReceivedParams {
+  childName: string;
+}
+
+export function paymentReceived(params: PaymentReceivedParams) {
+  const name = capitalize(params.childName);
+
+  const subject = `We've got it — ${name}'s book is headed to print!`;
+
+  const html = layout(`
+    <h1 style="margin:0 0 16px 0;font-size:22px;font-weight:700;color:${NAVY};font-family:Georgia,serif;line-height:1.3;">
+      We've got it.
+    </h1>
+    <p style="margin:0 0 16px 0;font-size:15px;color:${NAVY};line-height:1.6;">
+      ${name}'s book is headed to print. We'll email tracking when it ships.
+    </p>
+    <p style="margin:0;font-size:14px;color:${GOLD};font-weight:600;line-height:1.5;">
+      Thank you for making ${name}'s story something they can hold.
+    </p>
+  `);
+
+  return { subject, html };
+}
+
 /* ─── Template: Book Shipped ──────────────────────────────────────────────── */
 
 interface BookShippedParams {

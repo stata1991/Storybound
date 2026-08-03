@@ -3,7 +3,9 @@ import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { logEvent } from "@/lib/audit";
 import { sendEmail } from "@/lib/email/resend";
-import { physicalSubscriptionConfirmed } from "@/lib/email/templates";
+import { physicalSubscriptionConfirmed, paymentReceived } from "@/lib/email/templates";
+import { placePrintOrder } from "@/lib/print-orders";
+import type { OrderRecipient } from "@/lib/prodigi";
 
 /* ─── Stripe client (lazy init — avoids build-time error when key is absent) ── */
 
@@ -37,9 +39,11 @@ const PRICE_AMOUNTS: Record<string, number> = {
   gift: 89.0,
 };
 
-function resolvePriceId(priceId: string | null): string {
+function resolvePriceId(priceId: string | null): string | null {
   if (priceId && PRICE_ID_MAP[priceId]) return PRICE_ID_MAP[priceId];
-  return "founding";
+  // Unknown price: never default to a subscription plan — a $35 one-time
+  // book payment must not be misread as "founding".
+  return null;
 }
 
 /* ─── Email helpers (inline — matches lib/email/templates.ts brand) ───────── */
@@ -87,6 +91,198 @@ function emailCta(text: string, url: string): string {
   </table>`;
 }
 
+/* ─── One-time physical book payment ───────────────────────────────────────── */
+// API-version note (2026-02-25.clover, verified against the real paid session
+// cs_test_a1FhaBs…): collected shipping lives at
+// session.collected_information.shipping_details {name, address{line1, line2,
+// city, state, postal_code, country}} — a top-level shipping_details field is
+// absent in this version. Email + phone live on customer_details.
+
+type CollectedShipping = {
+  name?: string | null;
+  address?: {
+    line1?: string | null;
+    line2?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postal_code?: string | null;
+    country?: string | null;
+  } | null;
+} | null;
+
+function extractShipping(s: Stripe.Checkout.Session): CollectedShipping {
+  return (
+    (s as unknown as {
+      collected_information?: { shipping_details?: CollectedShipping };
+    }).collected_information?.shipping_details ?? null
+  );
+}
+
+async function handlePhysicalBookPayment(
+  session: Stripe.Checkout.Session,
+  admin: ReturnType<typeof getAdmin>
+) {
+  const episodeId =
+    session.metadata?.episode_id ?? session.client_reference_id ?? null;
+  const harvestId = session.metadata?.harvest_id ?? undefined;
+
+  if (!episodeId) {
+    logEvent({
+      event_type: "print.order",
+      status: "error",
+      message: `physical_book payment ${session.id} carries no episode_id — manual resolution required`,
+      metadata: { source: "stripe_webhook" },
+    });
+    return NextResponse.json({ received: true, note: "No episode id" });
+  }
+
+  // Cheap idempotency guard. Retries are already safe by construction
+  // (pending-row reuse → same Prodigi idempotencyKey); this just skips the
+  // work when an order is verifiably placed.
+  const { data: existingRaw } = await admin
+    .from("print_orders")
+    .select("id, status, prodigi_order_id")
+    .eq("episode_id", episodeId)
+    .not("prodigi_order_id", "is", null)
+    .neq("status", "pending")
+    .limit(1)
+    .maybeSingle();
+
+  if (existingRaw) {
+    logEvent({
+      event_type: "print.order",
+      status: "info",
+      harvest_id: harvestId,
+      message: `physical_book payment ${session.id}: order ${(existingRaw as { prodigi_order_id: string }).prodigi_order_id} already placed — retry ignored`,
+      metadata: { source: "stripe_webhook" },
+    });
+    return NextResponse.json({ received: true, note: "Already placed" });
+  }
+
+  // Recipient from Stripe-collected shipping (event snapshots can be sparse —
+  // re-fetch the session if absent).
+  let shipping = extractShipping(session);
+  if (!shipping) {
+    try {
+      shipping = extractShipping(
+        await getStripe().checkout.sessions.retrieve(session.id)
+      );
+    } catch {
+      // fall through to the completeness guard
+    }
+  }
+
+  const cd = session.customer_details;
+  const name = shipping?.name?.trim() || cd?.name?.trim() || "";
+  const a = shipping?.address;
+
+  if (!name || !a?.line1 || !a?.postal_code || !a?.city || !a?.country) {
+    logEvent({
+      event_type: "print.order",
+      status: "error",
+      harvest_id: harvestId,
+      message: `physical_book payment ${session.id}: incomplete shipping details — admin must place the order manually`,
+      metadata: { source: "stripe_webhook" },
+    });
+    return NextResponse.json({ received: true, note: "Incomplete shipping details" });
+  }
+
+  const recipient: OrderRecipient = {
+    name,
+    email: cd?.email ?? undefined,
+    phoneNumber: cd?.phone ?? undefined,
+    address: {
+      line1: a.line1,
+      line2: a.line2 ?? undefined,
+      postalOrZipCode: a.postal_code,
+      countryCode: a.country,
+      townOrCity: a.city,
+      stateOrCounty: a.state ?? undefined,
+    },
+  };
+
+  const { data: epRaw } = await admin
+    .from("episodes")
+    .select("id, status, child_id, harvest_id")
+    .eq("id", episodeId)
+    .single();
+
+  if (!epRaw) {
+    logEvent({
+      event_type: "print.order",
+      status: "error",
+      message: `physical_book payment ${session.id}: episode ${episodeId} not found`,
+      metadata: { source: "stripe_webhook" },
+    });
+    return NextResponse.json({ received: true, note: "Episode not found" });
+  }
+  const ep = epRaw as {
+    id: string;
+    status: string;
+    child_id: string;
+    harvest_id: string;
+  };
+
+  // Payment IS approval — a parent who paid from book_ready approved by paying
+  // (mirrors approveBookPreview's write).
+  if (ep.status === "book_ready") {
+    await admin
+      .from("episodes")
+      .update({ status: "parent_approved" })
+      .eq("id", ep.id);
+  } else if (ep.status !== "parent_approved") {
+    logEvent({
+      event_type: "print.order",
+      status: "error",
+      harvest_id: ep.harvest_id,
+      message: `physical_book payment ${session.id}: episode status '${ep.status}' — not placing automatically, admin recovery required`,
+      metadata: { source: "stripe_webhook" },
+    });
+    return NextResponse.json({ received: true, note: "Episode not in orderable status" });
+  }
+
+  const result = await placePrintOrder({
+    supa: admin,
+    episodeId: ep.id,
+    recipient,
+    shippingMethod: "Budget",
+    source: "stripe_webhook",
+  });
+
+  if ("error" in result) {
+    // 200 — Stripe must not retry into a double-charge-shaped hole; the
+    // pending row is the retry ticket and the admin button the recovery path.
+    logEvent({
+      event_type: "print.order",
+      status: "error",
+      harvest_id: ep.harvest_id,
+      message: `physical_book payment ${session.id}: order placement failed after payment — ${result.error}`,
+      metadata: { source: "stripe_webhook" },
+    });
+    return NextResponse.json({ received: true, note: "Order placement failed — logged" });
+  }
+
+  if (cd?.email) {
+    const { data: childRaw } = await admin
+      .from("children")
+      .select("name")
+      .eq("id", ep.child_id)
+      .single();
+    if (childRaw) {
+      const email = paymentReceived({
+        childName: (childRaw as { name: string }).name,
+      });
+      await sendEmail({
+        to: cd.email,
+        subject: email.subject,
+        html: email.html,
+      }).catch((err) => console.error("[email] payment received:", err));
+    }
+  }
+
+  return NextResponse.json({ received: true, order: result.prodigiOrderId });
+}
+
 /* ─── POST handler ─────────────────────────────────────────────────────────── */
 
 export async function POST(request: Request) {
@@ -127,6 +323,14 @@ export async function POST(request: Request) {
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
+
+    // ── One-time physical book purchase ──────────────────────────────────
+    // Fully separate from subscription handling — must NEVER touch the
+    // families subscription fields. Branch BEFORE any PRICE_ID_MAP logic.
+    if (session.metadata?.kind === "physical_book") {
+      return handlePhysicalBookPayment(session, admin);
+    }
+
     const customerId = session.customer as string | null;
     const customerEmail = session.customer_details?.email;
 
@@ -143,6 +347,16 @@ export async function POST(request: Request) {
     }
 
     const subscriptionType = resolvePriceId(priceId);
+    if (!subscriptionType) {
+      logEvent({
+        event_type: "stripe.checkout",
+        status: "warn",
+        message:
+          "Unknown price id on checkout.session.completed with no physical_book metadata — no writes",
+        metadata: { price_id: priceId, session_id: session.id },
+      });
+      return NextResponse.json({ received: true, note: "Unknown price id" });
+    }
     const isFounding = subscriptionType === "founding";
 
     if (!customerEmail) {
