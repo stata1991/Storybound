@@ -16,9 +16,13 @@ const serverSchema = z.object({
   // ── Stripe ────────────────────────────────────────────
   STRIPE_SECRET_KEY: z.string().min(1),
   STRIPE_WEBHOOK_SECRET: z.string().min(1),
-  STRIPE_PRICE_FOUNDING_PHYSICAL: z.string().min(1),
-  STRIPE_PRICE_GIFT_PHYSICAL: z.string().min(1),
-  STRIPE_PRICE_ONETIME_PHYSICAL: z.string().min(1),
+  STRIPE_PRICE_PHYSICAL_BOOK: z.string().min(1),
+  // Subscription-era price vars — consumers still reference them (checkout
+  // + webhook PRICE_ID_MAP); removal is C4's sweep. Optional so Vercel env
+  // cleanup can precede that without a boot failure.
+  STRIPE_PRICE_FOUNDING_PHYSICAL: z.string().min(1).optional(),
+  STRIPE_PRICE_GIFT_PHYSICAL: z.string().min(1).optional(),
+  STRIPE_PRICE_ONETIME_PHYSICAL: z.string().min(1).optional(),
 
   // ── Prodigi ───────────────────────────────────────────
   PRODIGI_API_KEY: z.string().min(1),
