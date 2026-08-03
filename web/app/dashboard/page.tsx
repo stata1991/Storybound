@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import {
   getParentData,
   getChildrenWithHarvests,
@@ -84,6 +85,7 @@ export default async function DashboardPage({
           (h) => h.quarter === ep.quarter && h.year === ep.year
         );
         return {
+          episodeId: ep.id,
           childName:
             child.name.charAt(0).toUpperCase() + child.name.slice(1),
           season: harvest?.season
@@ -94,6 +96,33 @@ export default async function DashboardPage({
         };
       })
   );
+
+  // Tracking URLs live on print_orders (service-role only). The admin client
+  // widens what this server component can FETCH — keyed strictly by episode
+  // ids the RLS-scoped query above already surfaced as shipped — and never
+  // widens what the page SHOWS.
+  const trackingUrlByEpisode = new Map<string, string>();
+  const shippedEpisodeIds = approvedEpisodes
+    .filter((ep) => ep.printStatus === "shipped")
+    .map((ep) => ep.episodeId);
+  if (shippedEpisodeIds.length > 0) {
+    const admin = createAdminClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+    const { data: orderRows } = await admin
+      .from("print_orders")
+      .select("episode_id, tracking_url")
+      .in("episode_id", shippedEpisodeIds)
+      .not("tracking_url", "is", null);
+    for (const row of (orderRows ?? []) as {
+      episode_id: string;
+      tracking_url: string;
+    }[]) {
+      trackingUrlByEpisode.set(row.episode_id, row.tracking_url);
+    }
+  }
 
   // Check if any child has episodes in progress (draft / story_review / illustration_review)
   const hasInProgressEpisodes = children.some((child) =>
@@ -243,6 +272,20 @@ export default async function DashboardPage({
                           : subscriptionType === "digital_only"
                             ? "Read it anytime."
                             : "We’re getting it ready for print."}
+                      {ep.printStatus === "shipped" &&
+                        trackingUrlByEpisode.has(ep.episodeId) && (
+                          <>
+                            {" "}
+                            <a
+                              href={trackingUrlByEpisode.get(ep.episodeId)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-gold underline underline-offset-2 hover:text-gold-light"
+                            >
+                              Track it →
+                            </a>
+                          </>
+                        )}
                     </p>
                   </div>
                   <Link

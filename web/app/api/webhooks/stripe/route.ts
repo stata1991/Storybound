@@ -243,6 +243,14 @@ async function handlePhysicalBookPayment(
       .from("episodes")
       .update({ status: "parent_approved" })
       .eq("id", ep.id);
+    logEvent({
+      event_type: "book.approve",
+      status: "success",
+      harvest_id: ep.harvest_id,
+      child_id: ep.child_id,
+      message: `Payment ${session.id} auto-approved episode (payment-is-approval)`,
+      metadata: { source: "stripe_webhook" },
+    });
   } else if (ep.status !== "parent_approved") {
     logEvent({
       event_type: "print.order",
