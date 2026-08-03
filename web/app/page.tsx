@@ -227,40 +227,43 @@ function Pricing() {
           </div>
         </div>
 
-        {/* Coming Soon tiers */}
+        {/* Print (live) + gift (coming soon) tiers */}
         <div className="mt-8 grid gap-6 md:grid-cols-3">
-          {/* Print Add-on */}
-          <div className="relative overflow-hidden rounded-2xl border border-navy/10 bg-white p-6">
-            <div className="absolute right-0 top-0 rounded-bl-lg bg-navy/10 px-3 py-1 font-sans text-xs font-medium uppercase tracking-wider text-navy/40">
-              Coming Soon
+          {/* Printed Book — live */}
+          <div className="relative overflow-hidden rounded-2xl border border-gold/40 bg-white p-6">
+            <div className="absolute right-0 top-0 rounded-bl-lg bg-gold px-3 py-1 font-sans text-xs font-bold uppercase tracking-wider text-white">
+              Available now
             </div>
-            <p className="font-sans text-xs font-medium uppercase tracking-widest text-navy/40">
-              Print Add-on
+            <p className="font-sans text-xs font-medium uppercase tracking-widest text-gold">
+              Printed Book
             </p>
             <div className="mt-3 flex items-baseline gap-1">
-              <span className="font-serif text-3xl font-bold text-navy/50">
-                $89
+              <span className="font-serif text-3xl font-bold text-navy">
+                $35
               </span>
-              <span className="font-sans text-sm text-navy/40">/year</span>
+              <span className="font-sans text-sm text-navy/50">per book</span>
             </div>
-            <p className="mt-2 font-sans text-sm text-navy/50">
-              Beautifully printed and shipped to your door.
+            <p className="mt-2 font-sans text-sm text-navy/60">
+              Hardcover, shipping included.
             </p>
-            <span className="mt-6 block rounded-full border border-navy/10 py-3 text-center font-sans text-sm text-navy/30 cursor-default">
-              Coming soon
-            </span>
+            <a
+              href="/auth"
+              className="mt-6 block rounded-full bg-gold py-3 text-center font-sans text-sm font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg"
+            >
+              Print your book &rarr;
+            </a>
             <ul className="mt-6 space-y-2">
               {[
                 "Everything in Digital, plus:",
-                "4 hardcover books shipped per year",
-                "Print quality matched to keepsake standards",
-                "Cancel anytime",
+                "Hardcover 21×21cm, keepsake quality",
+                "Shipping included",
+                "Per book — no subscription",
               ].map((item) => (
                 <li
                   key={item}
-                  className="flex items-start gap-2 font-sans text-xs text-navy/50"
+                  className="flex items-start gap-2 font-sans text-xs text-navy/70"
                 >
-                  <CheckIcon className="text-navy/25" />
+                  <CheckIcon className="text-gold" />
                   {item}
                 </li>
               ))}
@@ -289,7 +292,7 @@ function Pricing() {
             </span>
             <ul className="mt-6 space-y-2">
               {[
-                "Same as Print Add-on, gifted",
+                "A year of printed books, gifted",
                 "Recipient claims with their own link",
                 "Perfect for grandparents",
               ].map((item) => (
@@ -383,23 +386,23 @@ const FAQS = [
   },
   {
     q: "When does the first book arrive?",
-    a: "Digital books are ready in ~24 hours. Physical print is coming soon.",
+    a: "Digital books are ready in ~24 hours. Printed hardcovers are printed and dispatched within about a week.",
   },
   {
     q: "How does the gift subscription work?",
-    a: "Gift subscriptions are coming soon along with print. We\u2019ll let you know when ready.",
+    a: "Gift subscriptions are coming soon. We\u2019ll let you know when they\u2019re ready.",
   },
   {
     q: "Is it really free? What\u2019s the catch?",
-    a: "No catch. Digital storybooks are unlimited and always free \u2014 you can sign up, submit memories, and read your child\u2019s books without paying anything. Paid options are for physical printed books, which are coming soon.",
+    a: "No catch. Digital storybooks are unlimited and always free \u2014 you can sign up, submit memories, and read your child\u2019s books without paying anything. If you want a printed hardcover, it\u2019s $35 per book, shipping included.",
   },
   {
-    q: "When will print be available?",
-    a: "We\u2019re finalizing our print partner now. We\u2019ll notify subscribers as soon as it\u2019s ready. In the meantime, all books are fully available digitally.",
+    q: "How does printing work?",
+    a: "Preview your child\u2019s book, then order a printed hardcover for $35 \u2014 shipping included. It arrives at your door within a couple of weeks.",
   },
   {
     q: "What\u2019s coming next?",
-    a: "Books starring brothers, sisters, parents, grandparents, and friends together \u2014 and stories in more languages. A print option is also in the works. We\u2019ll share more soon.",
+    a: "Books starring brothers, sisters, parents, grandparents, and friends together \u2014 and stories in more languages. Printed hardcovers are here now ($35, shipped). We\u2019ll share more soon.",
   },
 ];
 
