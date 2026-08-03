@@ -752,19 +752,24 @@ export function PrintFlowButtons({
               "Order from Prodigi"
             )}
           </button>
-          <button
-            onClick={handleOpenPrintModal}
-            disabled={printLoading}
-            className="inline-flex items-center gap-2 rounded-md bg-teal-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-600 disabled:opacity-60"
-          >
-            {printLoading && !showPrintModal ? (
-              <>
-                <Spinner /> Loading...
-              </>
-            ) : (
-              "Send to print"
-            )}
-          </button>
+          <details className="ml-1">
+            <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600">
+              Manual fallback
+            </summary>
+            <button
+              onClick={handleOpenPrintModal}
+              disabled={printLoading}
+              className="mt-2 inline-flex items-center gap-2 rounded-md bg-teal-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-600 disabled:opacity-60"
+            >
+              {printLoading && !showPrintModal ? (
+                <>
+                  <Spinner /> Loading...
+                </>
+              ) : (
+                "Send to print"
+              )}
+            </button>
+          </details>
         </div>
       )}
 

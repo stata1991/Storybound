@@ -35,7 +35,7 @@ export default async function AdminPage() {
       ? statsResult
       : {
           totalFamilies: 0,
-          activeSubscriptions: 0,
+          booksOrdered: 0,
           harvestsSubmitted: 0,
           booksInProduction: 0,
           booksShipped: 0,
@@ -72,7 +72,7 @@ export default async function AdminPage() {
         {/* ── Section A: Stats ────────────────────────────────────────────── */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
           <StatCard label="Total families" value={stats.totalFamilies} />
-          <StatCard label="Active subs" value={stats.activeSubscriptions} />
+          <StatCard label="Books ordered" value={stats.booksOrdered} />
           <StatCard
             label="Harvests submitted"
             value={stats.harvestsSubmitted}

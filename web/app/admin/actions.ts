@@ -14,7 +14,7 @@ import { placePrintOrder } from "@/lib/print-orders";
 
 export interface AdminStats {
   totalFamilies: number;
-  activeSubscriptions: number;
+  booksOrdered: number;
   harvestsSubmitted: number;
   booksInProduction: number;
   booksShipped: number;
@@ -143,7 +143,7 @@ export async function getAdminStats(): Promise<AdminStats | { error: string }> {
 
   const [
     familiesRes,
-    activeRes,
+    orderedRes,
     harvestsRes,
     productionRes,
     shippedRes,
@@ -151,9 +151,9 @@ export async function getAdminStats(): Promise<AdminStats | { error: string }> {
   ] = await Promise.all([
     admin.from("families").select("id", { count: "exact", head: true }),
     admin
-      .from("families")
+      .from("print_orders")
       .select("id", { count: "exact", head: true })
-      .eq("subscription_status", "active"),
+      .in("status", ["submitted", "printing", "shipped", "delivered"]),
     admin
       .from("harvests")
       .select("id", { count: "exact", head: true })
@@ -174,7 +174,7 @@ export async function getAdminStats(): Promise<AdminStats | { error: string }> {
 
   return {
     totalFamilies: familiesRes.count ?? 0,
-    activeSubscriptions: activeRes.count ?? 0,
+    booksOrdered: orderedRes.count ?? 0,
     harvestsSubmitted: harvestsRes.count ?? 0,
     booksInProduction: productionRes.count ?? 0,
     booksShipped: shippedRes.count ?? 0,
