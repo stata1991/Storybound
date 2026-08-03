@@ -6,8 +6,6 @@ import {
   approveBookPreview,
   flagBookIssue,
   chooseDigitalOnly,
-  saveShippingAddress,
-  createPhysicalCheckoutSession,
   createPrintCheckout,
 } from "../../actions";
 
@@ -21,7 +19,6 @@ interface PreviewClientProps {
   pdfUrl: string | null;
   previewDeadline: string | null;
   subscriptionType: string;
-  hasShippingAddress: boolean;
 }
 
 const NAVY = "#1B2A4A";
@@ -38,7 +35,6 @@ export default function PreviewClient({
   pdfUrl,
   previewDeadline,
   subscriptionType,
-  hasShippingAddress,
 }: PreviewClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -49,16 +45,6 @@ export default function PreviewClient({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [subType, setSubType] = useState(subscriptionType);
-  const [showAddressForm, setShowAddressForm] = useState(false);
-  const [addressData, setAddressData] = useState({
-    shippingName: "",
-    addressLine1: "",
-    addressLine2: "",
-    city: "",
-    state: "",
-    zip: "",
-    country: "US",
-  });
   const processingRef = useRef(false);
 
   // Print already underway — suppress every buy button, show status instead.
@@ -175,53 +161,6 @@ export default function PreviewClient({
     setLoading(true);
     setError(null);
     const result = await createPrintCheckout(harvestId);
-    if ("error" in result) {
-      setError(result.error);
-      setLoading(false);
-      processingRef.current = false;
-    } else {
-      window.location.href = result.url;
-    }
-  }
-
-  async function handleSubscribePrint() {
-    if (processingRef.current) return;
-    processingRef.current = true;
-
-    if (!hasShippingAddress && !showAddressForm) {
-      setShowAddressForm(true);
-      processingRef.current = false;
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-
-    // Save address first if form was shown
-    if (showAddressForm) {
-      if (
-        !addressData.shippingName ||
-        !addressData.addressLine1 ||
-        !addressData.city ||
-        !addressData.state ||
-        !addressData.zip
-      ) {
-        setError("Please fill in all required address fields.");
-        setLoading(false);
-        processingRef.current = false;
-        return;
-      }
-      const addrResult = await saveShippingAddress(addressData);
-      if ("error" in addrResult) {
-        setError(addrResult.error);
-        setLoading(false);
-        processingRef.current = false;
-        return;
-      }
-    }
-
-    // Create checkout session and redirect
-    const result = await createPhysicalCheckoutSession(harvestId);
     if ("error" in result) {
       setError(result.error);
       setLoading(false);
@@ -875,106 +814,6 @@ export default function PreviewClient({
             </div>
           </div>
 
-          {/* Inline address form — hidden until Gelato integration is ready */}
-          {false && showAddressForm && (
-            <div
-              style={{
-                maxWidth: 480,
-                margin: "24px auto 0",
-                padding: 24,
-                border: "1px solid #E5E7EB",
-                borderRadius: 16,
-              }}
-            >
-              <p
-                style={{
-                  margin: "0 0 16px",
-                  fontSize: 15,
-                  fontWeight: 600,
-                  color: NAVY,
-                }}
-              >
-                Shipping address
-              </p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <input
-                  type="text"
-                  placeholder="Full name (recipient)"
-                  value={addressData.shippingName}
-                  onChange={(e) =>
-                    setAddressData((d) => ({ ...d, shippingName: e.target.value }))
-                  }
-                  style={inputStyle}
-                />
-                <input
-                  type="text"
-                  placeholder="Address line 1"
-                  value={addressData.addressLine1}
-                  onChange={(e) =>
-                    setAddressData((d) => ({ ...d, addressLine1: e.target.value }))
-                  }
-                  style={inputStyle}
-                />
-                <input
-                  type="text"
-                  placeholder="Address line 2 (optional)"
-                  value={addressData.addressLine2}
-                  onChange={(e) =>
-                    setAddressData((d) => ({ ...d, addressLine2: e.target.value }))
-                  }
-                  style={inputStyle}
-                />
-                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
-                  <input
-                    type="text"
-                    placeholder="City"
-                    value={addressData.city}
-                    onChange={(e) =>
-                      setAddressData((d) => ({ ...d, city: e.target.value }))
-                    }
-                    style={inputStyle}
-                  />
-                  <input
-                    type="text"
-                    placeholder="State"
-                    value={addressData.state}
-                    onChange={(e) =>
-                      setAddressData((d) => ({ ...d, state: e.target.value }))
-                    }
-                    style={inputStyle}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Zip"
-                    value={addressData.zip}
-                    onChange={(e) =>
-                      setAddressData((d) => ({ ...d, zip: e.target.value }))
-                    }
-                    style={inputStyle}
-                  />
-                </div>
-                <button
-                  onClick={handleSubscribePrint}
-                  disabled={loading}
-                  style={{
-                    marginTop: 4,
-                    padding: "12px 24px",
-                    backgroundColor: GOLD,
-                    color: "#fff",
-                    fontSize: 15,
-                    fontWeight: 600,
-                    border: "none",
-                    borderRadius: 9999,
-                    cursor: loading ? "not-allowed" : "pointer",
-                    opacity: loading ? 0.6 : 1,
-                  }}
-                >
-                  {loading ? "Processing..." : "Continue to payment"}
-                </button>
-              </div>
-            </div>
-          )}
-
           <FlagLink />
         </div>
       </div>
@@ -1226,12 +1065,3 @@ export default function PreviewClient({
   );
 }
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 14px",
-  fontSize: 14,
-  border: "1px solid #D1D5DB",
-  borderRadius: 8,
-  fontFamily: "inherit",
-  boxSizing: "border-box",
-};

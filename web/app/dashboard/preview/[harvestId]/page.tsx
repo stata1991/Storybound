@@ -76,16 +76,14 @@ export default async function PreviewPage({ params }: Props) {
     .single();
 
   let subscriptionType = "none";
-  let hasShippingAddress = false;
 
   if (parentRecord?.family_id) {
     const { data: familyRecord } = await admin
       .from("families")
-      .select("subscription_type, address_line1")
+      .select("subscription_type")
       .eq("id", parentRecord.family_id)
       .single();
     subscriptionType = (familyRecord?.subscription_type as string) ?? "none";
-    hasShippingAddress = Boolean(familyRecord?.address_line1);
   }
 
   // Authenticated — fetch episode via RLS-scoped client
@@ -152,7 +150,6 @@ export default async function PreviewPage({ params }: Props) {
       pdfUrl={pdfUrl}
       previewDeadline={episode.preview_deadline}
       subscriptionType={subscriptionType}
-      hasShippingAddress={hasShippingAddress}
     />
   );
 }

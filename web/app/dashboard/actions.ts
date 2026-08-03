@@ -469,53 +469,6 @@ export async function chooseDigitalOnly(
   return { success: true };
 }
 
-export async function saveShippingAddress(data: {
-  shippingName: string;
-  addressLine1: string;
-  addressLine2?: string;
-  city: string;
-  state: string;
-  zip: string;
-  country?: string;
-}): Promise<{ success: true } | { error: string }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) return { error: "Not authenticated." };
-
-  if (!data.shippingName || !data.addressLine1 || !data.city || !data.state || !data.zip) {
-    return { error: "Please fill in all required address fields." };
-  }
-
-  const { data: parent } = await supabase
-    .from("parents")
-    .select("family_id")
-    .eq("id", user.id)
-    .single();
-
-  if (!parent) return { error: "Parent record not found." };
-
-  const admin = getAdmin();
-
-  const { error: updateErr } = await admin
-    .from("families")
-    .update({
-      shipping_name: data.shippingName,
-      address_line1: data.addressLine1,
-      address_line2: data.addressLine2 || null,
-      city: data.city,
-      state: data.state,
-      zip: data.zip,
-      country: data.country || "US",
-    })
-    .eq("id", parent.family_id);
-
-  if (updateErr) return { error: "Failed to save address." };
-
-  return { success: true };
-}
 
 export async function createPrintCheckout(
   harvestId: string
@@ -608,84 +561,6 @@ export async function createPrintCheckout(
   }
 }
 
-export async function createPhysicalCheckoutSession(
-  harvestId: string
-): Promise<{ url: string } | { error: string }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) return { error: "Not authenticated." };
-
-  const { data: parent } = await supabase
-    .from("parents")
-    .select("family_id, email")
-    .eq("id", user.id)
-    .single();
-
-  if (!parent) return { error: "Parent record not found." };
-
-  // Verify the harvest belongs to this family
-  const admin = getAdmin();
-  const { data: harvest } = await admin
-    .from("harvests")
-    .select("id, child_id")
-    .eq("id", harvestId)
-    .single();
-
-  if (!harvest) return { error: "Harvest not found." };
-
-  const { data: child } = await admin
-    .from("children")
-    .select("family_id")
-    .eq("id", harvest.child_id)
-    .single();
-
-  if (!child || child.family_id !== parent.family_id) {
-    return { error: "Not authorized." };
-  }
-
-  try {
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-      apiVersion: "2026-02-25.clover",
-    });
-
-    const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://storybound.co";
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      line_items: [
-        {
-          price: process.env.STRIPE_PRICE_FOUNDING_PHYSICAL!,
-          quantity: 1,
-        },
-      ],
-      client_reference_id: parent.family_id,
-      customer_email: parent.email,
-      metadata: {
-        harvestId,
-        familyId: parent.family_id,
-      },
-      success_url: `${APP_URL}/dashboard?subscribed=true`,
-      cancel_url: `${APP_URL}/dashboard/preview/${harvestId}`,
-    });
-
-    if (!session.url) return { error: "Failed to create checkout session." };
-
-    return { url: session.url };
-  } catch (err) {
-    await logEvent({
-      event_type: "checkout.stripe_error",
-      status: "error",
-      family_id: parent.family_id,
-      harvest_id: harvestId,
-      message: err instanceof Error ? err.message : "Unknown Stripe error",
-    });
-
-    return { error: "Couldn't start checkout. Please try again." };
-  }
-}
 
 /* ─── Memory photo upload (signed-URL pattern) ────────────────────────────── */
 
