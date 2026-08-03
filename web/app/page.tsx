@@ -36,7 +36,7 @@ function Hero() {
             Start free &rarr;
           </a>
           <span className="font-sans text-sm text-navy/40">
-            Print add-on &mdash; coming soon
+            Printed hardcovers &mdash; $35, shipped
           </span>
         </div>
       </div>
@@ -151,8 +151,9 @@ function MoreMagic() {
           More magic coming
         </h2>
         <p className="mt-4 font-sans text-base leading-relaxed text-navy/60">
-          We&rsquo;re building the next chapter &mdash; bedtime audio, animated
-          story videos, and more on the way.
+          We&rsquo;re building the next chapter &mdash; books starring
+          brothers, sisters, parents, grandparents, and friends together, and
+          stories in more languages.
         </p>
       </div>
     </section>
@@ -228,7 +229,7 @@ function Pricing() {
         </div>
 
         {/* Print (live) + gift (coming soon) tiers */}
-        <div className="mt-8 grid gap-6 md:grid-cols-3">
+        <div className="mx-auto mt-8 grid max-w-3xl gap-6 md:grid-cols-2">
           {/* Printed Book — live */}
           <div className="relative overflow-hidden rounded-2xl border border-gold/40 bg-white p-6">
             <div className="absolute right-0 top-0 rounded-bl-lg bg-gold px-3 py-1 font-sans text-xs font-bold uppercase tracking-wider text-white">
@@ -307,42 +308,6 @@ function Pricing() {
             </ul>
           </div>
 
-          {/* Single Book */}
-          <div className="relative overflow-hidden rounded-2xl border border-navy/10 bg-white p-6">
-            <div className="absolute right-0 top-0 rounded-bl-lg bg-navy/10 px-3 py-1 font-sans text-xs font-medium uppercase tracking-wider text-navy/40">
-              Coming Soon
-            </div>
-            <p className="font-sans text-xs font-medium uppercase tracking-widest text-navy/40">
-              Single Book
-            </p>
-            <div className="mt-3 flex items-baseline gap-1">
-              <span className="font-serif text-3xl font-bold text-navy/50">
-                $29
-              </span>
-              <span className="font-sans text-sm text-navy/40">one-time</span>
-            </div>
-            <p className="mt-2 font-sans text-sm text-navy/50">
-              No subscription required.
-            </p>
-            <span className="mt-6 block rounded-full border border-navy/10 py-3 text-center font-sans text-sm text-navy/30 cursor-default">
-              Coming soon
-            </span>
-            <ul className="mt-6 space-y-2">
-              {[
-                "One standalone illustrated book",
-                "Child is the hero",
-                "Love it? Continue free with digital",
-              ].map((item) => (
-                <li
-                  key={item}
-                  className="flex items-start gap-2 font-sans text-xs text-navy/50"
-                >
-                  <CheckIcon className="text-navy/25" />
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
         </div>
       </div>
     </section>
