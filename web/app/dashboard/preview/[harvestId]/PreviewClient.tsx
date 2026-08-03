@@ -646,9 +646,10 @@ export default function PreviewClient({
     );
   }
 
-  /* ─── Conversion UI (subscription_type === 'none', status === 'book_ready') ─ */
+  /* ─── Conversion UI — default book_ready experience for none AND
+         digital_only families (physical_digital keeps the review UI) ──────── */
 
-  if (subType === "none" && status === "book_ready") {
+  if (status === "book_ready" && subType !== "physical_digital") {
     return (
       <div
         style={{
@@ -785,9 +786,18 @@ export default function PreviewClient({
                   lineHeight: 1.8,
                 }}
               >
-                <li>Digital access free forever</li>
-                <li>New book each season</li>
-                <li>Free</li>
+                {subType === "digital_only" ? (
+                  <>
+                    <li>Free, as always</li>
+                    <li>New book each season</li>
+                  </>
+                ) : (
+                  <>
+                    <li>Digital access free forever</li>
+                    <li>New book each season</li>
+                    <li>Free</li>
+                  </>
+                )}
               </ul>
               <button
                 onClick={handleChooseDigital}
@@ -805,7 +815,11 @@ export default function PreviewClient({
                   opacity: loading ? 0.6 : 1,
                 }}
               >
-                {loading ? "Saving..." : "Continue Free"}
+                {loading
+                  ? "Saving..."
+                  : subType === "digital_only"
+                    ? "Keep it digital"
+                    : "Continue Free"}
               </button>
             </div>
           </div>
@@ -962,24 +976,21 @@ export default function PreviewClient({
           >
             <button
               onClick={handleApprove}
-              disabled
+              disabled={loading}
               style={{
                 padding: "14px 32px",
-                backgroundColor: "#D1D5DB",
+                backgroundColor: GOLD,
                 color: "#fff",
                 fontSize: 16,
                 fontWeight: 600,
                 border: "none",
                 borderRadius: 9999,
-                cursor: "not-allowed",
-                opacity: 0.6,
+                cursor: loading ? "wait" : "pointer",
+                opacity: loading ? 0.6 : 1,
               }}
             >
-              Print Coming Soon
+              {loading ? "Saving..." : "Looks perfect — send to print"}
             </button>
-            <p style={{ margin: "6px 0 0", fontSize: 12, color: "#9CA3AF" }}>
-              Physical books arriving soon &mdash; we&rsquo;ll notify you when available.
-            </p>
             <button
               onClick={() => setShowFlagForm(true)}
               disabled={loading}
