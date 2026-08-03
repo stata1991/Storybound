@@ -16,6 +16,8 @@ interface PreviewClientProps {
   childName: string;
   season: string;
   episodeStatus: string;
+  printStatus: string;
+  trackingNumber: string | null;
   pdfUrl: string | null;
   previewDeadline: string | null;
   subscriptionType: string;
@@ -31,6 +33,8 @@ export default function PreviewClient({
   childName,
   season,
   episodeStatus,
+  printStatus,
+  trackingNumber,
   pdfUrl,
   previewDeadline,
   subscriptionType,
@@ -56,6 +60,13 @@ export default function PreviewClient({
     country: "US",
   });
   const processingRef = useRef(false);
+
+  // Print already underway — suppress every buy button, show status instead.
+  const printUnderway = printStatus !== "pending";
+  const printStatusLine =
+    printStatus === "shipped"
+      ? `On its way!${trackingNumber ? ` Tracking: ${trackingNumber}` : ""}`
+      : "Headed to print!";
 
   // Post-checkout return banner (?print=success | ?print=cancelled)
   const printBanner =
@@ -410,27 +421,42 @@ export default function PreviewClient({
           }}
         >
           {printBanner}
-          <p style={{ margin: "0 0 8px", fontSize: 15, color: NAVY }}>
-            Loving {childName}&rsquo;s book? Get a printed hardcover shipped
-            to you.
-          </p>
-          <button
-            onClick={handlePrintCheckout}
-            disabled={loading}
-            style={{
-              padding: "12px 28px",
-              backgroundColor: GOLD,
-              color: "#fff",
-              fontSize: 15,
-              fontWeight: 600,
-              border: "none",
-              borderRadius: 9999,
-              cursor: loading ? "wait" : "pointer",
-              opacity: loading ? 0.6 : 1,
-            }}
-          >
-            {loading ? "Starting checkout..." : "Print This Book — $35, shipped"}
-          </button>
+          {printUnderway ? (
+            <p
+              style={{
+                margin: 0,
+                fontSize: 15,
+                fontWeight: 600,
+                color: NAVY,
+              }}
+            >
+              {printStatusLine}
+            </p>
+          ) : (
+            <>
+              <p style={{ margin: "0 0 8px", fontSize: 15, color: NAVY }}>
+                Loving {childName}&rsquo;s book? Get a printed hardcover
+                shipped to you.
+              </p>
+              <button
+                onClick={handlePrintCheckout}
+                disabled={loading}
+                style={{
+                  padding: "12px 28px",
+                  backgroundColor: GOLD,
+                  color: "#fff",
+                  fontSize: 15,
+                  fontWeight: 600,
+                  border: "none",
+                  borderRadius: 9999,
+                  cursor: loading ? "wait" : "pointer",
+                  opacity: loading ? 0.6 : 1,
+                }}
+              >
+                {loading ? "Starting checkout..." : "Print This Book — $35, shipped"}
+              </button>
+            </>
+          )}
           {error && (
             <p style={{ margin: "8px 0 0", fontSize: 13, color: "#DC2626" }}>
               {error}
@@ -516,26 +542,38 @@ export default function PreviewClient({
             {error}
           </p>
         )}
-        {subType !== "physical_digital" && (
-          <button
-            onClick={handlePrintCheckout}
-            disabled={loading}
-            style={{
-              padding: "14px 32px",
-              backgroundColor: GOLD,
-              color: "#fff",
-              fontSize: 16,
-              fontWeight: 600,
-              border: "none",
-              borderRadius: 9999,
-              cursor: loading ? "wait" : "pointer",
-              opacity: loading ? 0.6 : 1,
-              marginBottom: 12,
-            }}
-          >
-            {loading ? "Starting checkout..." : "Print This Book \u2014 $35, shipped"}
-          </button>
-        )}
+        {subType !== "physical_digital" &&
+          (printUnderway ? (
+            <p
+              style={{
+                margin: "0 0 16px",
+                fontSize: 16,
+                fontWeight: 600,
+                color: NAVY,
+              }}
+            >
+              {printStatusLine}
+            </p>
+          ) : (
+            <button
+              onClick={handlePrintCheckout}
+              disabled={loading}
+              style={{
+                padding: "14px 32px",
+                backgroundColor: GOLD,
+                color: "#fff",
+                fontSize: 16,
+                fontWeight: 600,
+                border: "none",
+                borderRadius: 9999,
+                cursor: loading ? "wait" : "pointer",
+                opacity: loading ? 0.6 : 1,
+                marginBottom: 12,
+              }}
+            >
+              {loading ? "Starting checkout..." : "Print This Book \u2014 $35, shipped"}
+            </button>
+          ))}
         <button
           onClick={() => router.push("/dashboard")}
           style={{
@@ -737,24 +775,37 @@ export default function PreviewClient({
               >
                 Printed hardcover, shipped to you &middot; $35
               </p>
-              <button
-                onClick={handlePrintCheckout}
-                disabled={loading}
-                style={{
-                  width: "100%",
-                  padding: "12px 16px",
-                  backgroundColor: GOLD,
-                  color: "#fff",
-                  fontSize: 15,
-                  fontWeight: 600,
-                  border: "none",
-                  borderRadius: 9999,
-                  cursor: loading ? "wait" : "pointer",
-                  opacity: loading ? 0.6 : 1,
-                }}
-              >
-                {loading ? "Starting checkout..." : "Print This Book"}
-              </button>
+              {printParam === "success" || printUnderway ? (
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: NAVY,
+                  }}
+                >
+                  {printUnderway ? printStatusLine : "Headed to print!"}
+                </p>
+              ) : (
+                <button
+                  onClick={handlePrintCheckout}
+                  disabled={loading}
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    backgroundColor: GOLD,
+                    color: "#fff",
+                    fontSize: 15,
+                    fontWeight: 600,
+                    border: "none",
+                    borderRadius: 9999,
+                    cursor: loading ? "wait" : "pointer",
+                    opacity: loading ? 0.6 : 1,
+                  }}
+                >
+                  {loading ? "Starting checkout..." : "Print This Book"}
+                </button>
+              )}
             </div>
 
             {/* Digital card */}

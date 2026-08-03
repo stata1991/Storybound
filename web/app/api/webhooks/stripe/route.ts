@@ -141,7 +141,7 @@ async function handlePhysicalBookPayment(
   // work when an order is verifiably placed.
   const { data: existingRaw } = await admin
     .from("print_orders")
-    .select("id, status, prodigi_order_id")
+    .select("id, status, prodigi_order_id, created_at")
     .eq("episode_id", episodeId)
     .not("prodigi_order_id", "is", null)
     .neq("status", "pending")
@@ -149,12 +149,25 @@ async function handlePhysicalBookPayment(
     .maybeSingle();
 
   if (existingRaw) {
+    const existing = existingRaw as {
+      prodigi_order_id: string;
+      created_at: string;
+    };
+    // Distinguish a webhook retry of the original session (session created
+    // before/around the order row) from a genuinely NEW checkout for an
+    // already-ordered episode — the latter means someone paid twice.
+    const freshPayment =
+      session.created * 1000 >
+      new Date(existing.created_at).getTime() + 60_000;
+
     logEvent({
       event_type: "print.order",
-      status: "info",
+      status: freshPayment ? "warn" : "info",
       harvest_id: harvestId,
-      message: `physical_book payment ${session.id}: order ${(existingRaw as { prodigi_order_id: string }).prodigi_order_id} already placed — retry ignored`,
-      metadata: { source: "stripe_webhook" },
+      message: freshPayment
+        ? `POSSIBLE DOUBLE PAYMENT: fresh checkout ${session.id} completed for episode ${episodeId} which already has order ${existing.prodigi_order_id} — manual refund likely required`
+        : `physical_book payment ${session.id}: order ${existing.prodigi_order_id} already placed — retry ignored`,
+      metadata: { source: "stripe_webhook", session_id: session.id },
     });
     return NextResponse.json({ received: true, note: "Already placed" });
   }

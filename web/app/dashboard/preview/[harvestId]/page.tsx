@@ -91,7 +91,7 @@ export default async function PreviewPage({ params }: Props) {
   // Authenticated — fetch episode via RLS-scoped client
   const { data: episodeRaw } = await supabase
     .from("episodes")
-    .select("id, status, print_file_path, parent_flag_message, preview_deadline")
+    .select("id, status, print_status, tracking_number, print_file_path, parent_flag_message, preview_deadline")
     .eq("harvest_id", harvestId)
     .single();
 
@@ -125,6 +125,8 @@ export default async function PreviewPage({ params }: Props) {
   const episode = episodeRaw as unknown as {
     id: string;
     status: string;
+    print_status: string;
+    tracking_number: string | null;
     print_file_path: string | null;
     parent_flag_message: string | null;
     preview_deadline: string | null;
@@ -145,6 +147,8 @@ export default async function PreviewPage({ params }: Props) {
       childName={childName}
       season={harvest.season}
       episodeStatus={episode.status}
+      printStatus={episode.print_status}
+      trackingNumber={episode.tracking_number}
       pdfUrl={pdfUrl}
       previewDeadline={episode.preview_deadline}
       subscriptionType={subscriptionType}

@@ -538,7 +538,7 @@ export async function createPrintCheckout(
   // RLS-scoped — only the owning family's episode is visible.
   const { data: episodeRaw } = await supabase
     .from("episodes")
-    .select("id, status, print_file_path")
+    .select("id, status, print_status, print_file_path")
     .eq("harvest_id", harvestId)
     .single();
 
@@ -546,6 +546,7 @@ export async function createPrintCheckout(
   const ep = episodeRaw as unknown as {
     id: string;
     status: string;
+    print_status: string;
     print_file_path: string | null;
   };
 
@@ -556,6 +557,13 @@ export async function createPrintCheckout(
     return {
       error: "This book isn't ready to print yet — we'll email you the moment it is.",
     };
+  }
+
+  // Double-purchase guard: an order already submitted/printing/shipped means
+  // no new checkout. A pending-only attempt does NOT block — the recovery
+  // flow owns that.
+  if (ep.print_status !== "pending") {
+    return { error: "This book is already on its way to print!" };
   }
 
   try {
