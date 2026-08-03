@@ -146,12 +146,9 @@ export default async function DashboardPage({
           <DashboardToast message="Profile updated \u2713" />
         )}
 
-        {/* Status banners for free (none) subscribers */}
-        {subscriptionType === "none" && children.length > 0 && (
-          <>
-            {/* Book ready — amber banner with preview link */}
-            {bookReadyEpisodes.length > 0 &&
-              bookReadyEpisodes.map(
+        {/* Book ready — amber banner with preview link (all subscription types) */}
+        {bookReadyEpisodes.length > 0 &&
+          bookReadyEpisodes.map(
                 (ep) =>
                   ep.harvestId && (
                     <div
@@ -179,11 +176,13 @@ export default async function DashboardPage({
                       </div>
                     </div>
                   )
-              )}
+          )}
 
-            {/* No episodes or in progress — preparation message */}
-            {bookReadyEpisodes.length === 0 &&
-              (hasNoEpisodes || hasInProgressEpisodes) && (
+        {/* No episodes or in progress — preparation message (free families) */}
+        {subscriptionType === "none" &&
+          children.length > 0 &&
+          bookReadyEpisodes.length === 0 &&
+          (hasNoEpisodes || hasInProgressEpisodes) && (
                 <div className="mb-6 rounded-2xl border border-navy/10 bg-white p-6 shadow-warm">
                   <div className="flex items-center gap-4">
                     <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gold/10">
@@ -213,9 +212,7 @@ export default async function DashboardPage({
                     </div>
                   </div>
                 </div>
-              )}
-          </>
-        )}
+          )}
 
         {/* Post-approval banner — approved books stay visible until delivery */}
         {approvedEpisodes.map(
@@ -228,23 +225,23 @@ export default async function DashboardPage({
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="font-serif text-lg font-semibold text-navy">
-                      {subscriptionType === "digital_only"
-                        ? `${ep.childName}’s ${ep.season} book is yours!`
-                        : ep.printStatus === "submitted" ||
-                            ep.printStatus === "printing"
-                          ? `${ep.childName}’s ${ep.season} book is being printed!`
-                          : ep.printStatus === "shipped"
-                            ? `${ep.childName}’s ${ep.season} book is on its way!`
+                      {ep.printStatus === "submitted" ||
+                      ep.printStatus === "printing"
+                        ? `${ep.childName}’s ${ep.season} book is being printed!`
+                        : ep.printStatus === "shipped"
+                          ? `${ep.childName}’s ${ep.season} book is on its way!`
+                          : subscriptionType === "digital_only"
+                            ? `${ep.childName}’s ${ep.season} book is yours!`
                             : `${ep.childName}’s ${ep.season} book is confirmed!`}
                     </p>
                     <p className="mt-1 font-sans text-sm text-navy/60">
-                      {subscriptionType === "digital_only"
-                        ? "Read it anytime."
-                        : ep.printStatus === "submitted" ||
-                            ep.printStatus === "printing"
-                          ? "We’ll let you know the moment it ships."
-                          : ep.printStatus === "shipped"
-                            ? "Keep an eye on the mailbox."
+                      {ep.printStatus === "submitted" ||
+                      ep.printStatus === "printing"
+                        ? "We’ll let you know the moment it ships."
+                        : ep.printStatus === "shipped"
+                          ? "Keep an eye on the mailbox."
+                          : subscriptionType === "digital_only"
+                            ? "Read it anytime."
                             : "We’re getting it ready for print."}
                     </p>
                   </div>
@@ -252,7 +249,8 @@ export default async function DashboardPage({
                     href={`/dashboard/preview/${ep.harvestId}`}
                     className="flex-shrink-0 rounded-full bg-gold px-6 py-3 font-sans text-sm font-semibold text-white shadow-warm transition-all hover:bg-gold-light hover:shadow-warm-lg"
                   >
-                    {subscriptionType === "digital_only"
+                    {subscriptionType === "digital_only" &&
+                    ep.printStatus === "pending"
                       ? "Read now →"
                       : "View book →"}
                   </Link>
@@ -261,29 +259,6 @@ export default async function DashboardPage({
             )
         )}
 
-        {/* Upgrade upsell for digital-only subscribers */}
-        {subscriptionType === "digital_only" && children.length > 0 && (
-          <div className="mb-6 rounded-2xl border border-gold/20 bg-gold/5 p-6">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="font-sans text-sm font-medium text-gold">
-                  Loving your book?
-                </p>
-                <p className="mt-0.5 font-sans text-sm text-navy/60">
-                  Get it printed + 3 more books this year.
-                </p>
-              </div>
-              <span
-                className="flex-shrink-0 rounded-full border border-navy/15 px-5 py-2.5 font-sans text-sm font-semibold text-navy/30 cursor-not-allowed"
-              >
-                Print Coming Soon
-              </span>
-              <p className="mt-1 font-sans text-xs text-navy/30">
-                Physical books arriving soon &mdash; we&rsquo;ll notify you when available.
-              </p>
-            </div>
-          </div>
-        )}
 
         {/* Empty state */}
         {children.length === 0 && (
