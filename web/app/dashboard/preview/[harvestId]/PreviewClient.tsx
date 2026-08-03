@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   approveBookPreview,
   flagBookIssue,
   chooseDigitalOnly,
   saveShippingAddress,
   createPhysicalCheckoutSession,
+  createPrintCheckout,
 } from "../../actions";
 
 interface PreviewClientProps {
@@ -36,6 +37,8 @@ export default function PreviewClient({
   hasShippingAddress,
 }: PreviewClientProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const printParam = searchParams.get("print");
   const [status, setStatus] = useState(episodeStatus);
   const [showFlagForm, setShowFlagForm] = useState(false);
   const [flagText, setFlagText] = useState("");
@@ -53,6 +56,39 @@ export default function PreviewClient({
     country: "US",
   });
   const processingRef = useRef(false);
+
+  // Post-checkout return banner (?print=success | ?print=cancelled)
+  const printBanner =
+    printParam === "success" ? (
+      <p
+        style={{
+          margin: "0 auto 16px",
+          maxWidth: 480,
+          padding: "12px 16px",
+          backgroundColor: "#D1FAE5",
+          color: "#065F46",
+          borderRadius: 12,
+          fontSize: 14,
+          textAlign: "center",
+        }}
+      >
+        Payment received &mdash; your book is headed to print! We&rsquo;ll
+        email you when it ships.
+      </p>
+    ) : printParam === "cancelled" ? (
+      <p
+        style={{
+          margin: "0 auto 16px",
+          maxWidth: 480,
+          fontSize: 13,
+          color: "#9CA3AF",
+          textAlign: "center",
+        }}
+      >
+        Checkout cancelled &mdash; your book is still here whenever
+        you&rsquo;re ready.
+      </p>
+    ) : null;
 
   const capitalize = (s: string) =>
     s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
@@ -119,6 +155,21 @@ export default function PreviewClient({
       setStatus("parent_approved");
       setLoading(false);
       processingRef.current = false;
+    }
+  }
+
+  async function handlePrintCheckout() {
+    if (processingRef.current) return;
+    processingRef.current = true;
+    setLoading(true);
+    setError(null);
+    const result = await createPrintCheckout(harvestId);
+    if ("error" in result) {
+      setError(result.error);
+      setLoading(false);
+      processingRef.current = false;
+    } else {
+      window.location.href = result.url;
     }
   }
 
@@ -358,28 +409,28 @@ export default function PreviewClient({
             textAlign: "center",
           }}
         >
+          {printBanner}
           <p style={{ margin: "0 0 8px", fontSize: 15, color: NAVY }}>
-            Loving {childName}&rsquo;s book? Get it printed + 3 more this year.
+            Loving {childName}&rsquo;s book? Get a printed hardcover shipped
+            to you.
           </p>
           <button
-            disabled
+            onClick={handlePrintCheckout}
+            disabled={loading}
             style={{
               padding: "12px 28px",
-              backgroundColor: "transparent",
-              color: "#9CA3AF",
+              backgroundColor: GOLD,
+              color: "#fff",
               fontSize: 15,
               fontWeight: 600,
-              border: "2px solid #D1D5DB",
+              border: "none",
               borderRadius: 9999,
-              cursor: "not-allowed",
-              opacity: 0.6,
+              cursor: loading ? "wait" : "pointer",
+              opacity: loading ? 0.6 : 1,
             }}
           >
-            Print Coming Soon
+            {loading ? "Starting checkout..." : "Print This Book — $35, shipped"}
           </button>
-          <p style={{ margin: "6px 0 0", fontSize: 12, color: "#9CA3AF" }}>
-            Physical books arriving soon &mdash; we&rsquo;ll notify you when available.
-          </p>
           {error && (
             <p style={{ margin: "8px 0 0", fontSize: 13, color: "#DC2626" }}>
               {error}
@@ -459,15 +510,41 @@ export default function PreviewClient({
             ? "Thank you for reviewing. We\u2019ll send you a shipping notification once it\u2019s on its way."
             : "Your digital book is ready to read anytime from your dashboard."}
         </p>
+        {printBanner}
+        {error && (
+          <p style={{ margin: "0 0 16px", fontSize: 13, color: "#DC2626" }}>
+            {error}
+          </p>
+        )}
+        {subType !== "physical_digital" && (
+          <button
+            onClick={handlePrintCheckout}
+            disabled={loading}
+            style={{
+              padding: "14px 32px",
+              backgroundColor: GOLD,
+              color: "#fff",
+              fontSize: 16,
+              fontWeight: 600,
+              border: "none",
+              borderRadius: 9999,
+              cursor: loading ? "wait" : "pointer",
+              opacity: loading ? 0.6 : 1,
+              marginBottom: 12,
+            }}
+          >
+            {loading ? "Starting checkout..." : "Print This Book \u2014 $35, shipped"}
+          </button>
+        )}
         <button
           onClick={() => router.push("/dashboard")}
           style={{
             padding: "14px 32px",
-            backgroundColor: GOLD,
-            color: "#fff",
+            backgroundColor: subType === "physical_digital" ? GOLD : "transparent",
+            color: subType === "physical_digital" ? "#fff" : "#6B7280",
             fontSize: 16,
             fontWeight: 600,
-            border: "none",
+            border: subType === "physical_digital" ? "none" : "1px solid #D1D5DB",
             borderRadius: 9999,
             cursor: "pointer",
           }}
@@ -605,6 +682,8 @@ export default function PreviewClient({
             {capitalize(childName)}&rsquo;s {capitalize(season)} book is ready!
           </h2>
 
+          {printBanner}
+
           {error && (
             <p
               style={{
@@ -647,40 +726,34 @@ export default function PreviewClient({
               >
                 Print This Book
               </p>
-              <ul
+              <p
                 style={{
                   margin: "0 0 16px",
-                  padding: 0,
-                  listStyle: "none",
                   fontSize: 13,
                   color: "#6B7280",
                   lineHeight: 1.8,
                 }}
               >
-                <li>Physical + digital access</li>
-                <li>4 books per year</li>
-                <li>$89/year</li>
-              </ul>
+                Printed hardcover, shipped to you &middot; $35
+              </p>
               <button
-                disabled
+                onClick={handlePrintCheckout}
+                disabled={loading}
                 style={{
                   width: "100%",
                   padding: "12px 16px",
-                  backgroundColor: "#D1D5DB",
+                  backgroundColor: GOLD,
                   color: "#fff",
                   fontSize: 15,
                   fontWeight: 600,
                   border: "none",
                   borderRadius: 9999,
-                  cursor: "not-allowed",
-                  opacity: 0.6,
+                  cursor: loading ? "wait" : "pointer",
+                  opacity: loading ? 0.6 : 1,
                 }}
               >
-                Print Coming Soon
+                {loading ? "Starting checkout..." : "Print This Book"}
               </button>
-              <p style={{ margin: "6px 0 0", fontSize: 11, color: "#9CA3AF" }}>
-                Physical books arriving soon &mdash; we&rsquo;ll notify you when available.
-              </p>
             </div>
 
             {/* Digital card */}

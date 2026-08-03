@@ -7,6 +7,7 @@ import { dispatchPhotoValidator, type PhotoSource } from "@/lib/photo-validator"
 import { sendEmail } from "@/lib/email/resend";
 import { digitalBookReady } from "@/lib/email/templates";
 import Stripe from "stripe";
+import { PHYSICAL_BOOK_PRICE_ID, SHIPPING_COUNTRIES } from "@/lib/pricing";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 
@@ -514,6 +515,89 @@ export async function saveShippingAddress(data: {
   if (updateErr) return { error: "Failed to save address." };
 
   return { success: true };
+}
+
+export async function createPrintCheckout(
+  harvestId: string
+): Promise<{ url: string } | { error: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return { error: "Not authenticated." };
+
+  const { data: parent } = await supabase
+    .from("parents")
+    .select("family_id, email")
+    .eq("id", user.id)
+    .single();
+
+  if (!parent) return { error: "Parent record not found." };
+
+  // RLS-scoped — only the owning family's episode is visible.
+  const { data: episodeRaw } = await supabase
+    .from("episodes")
+    .select("id, status, print_file_path")
+    .eq("harvest_id", harvestId)
+    .single();
+
+  if (!episodeRaw) return { error: "No book found for this harvest." };
+  const ep = episodeRaw as unknown as {
+    id: string;
+    status: string;
+    print_file_path: string | null;
+  };
+
+  if (
+    (ep.status !== "book_ready" && ep.status !== "parent_approved") ||
+    !ep.print_file_path
+  ) {
+    return {
+      error: "This book isn't ready to print yet — we'll email you the moment it is.",
+    };
+  }
+
+  try {
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+      apiVersion: "2026-02-25.clover",
+    });
+
+    const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://storybound.co";
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      line_items: [{ price: PHYSICAL_BOOK_PRICE_ID(), quantity: 1 }],
+      shipping_address_collection: {
+        allowed_countries:
+          SHIPPING_COUNTRIES as Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry[],
+      },
+      phone_number_collection: { enabled: true },
+      client_reference_id: ep.id,
+      customer_email: parent.email,
+      metadata: {
+        episode_id: ep.id,
+        harvest_id: harvestId,
+        kind: "physical_book",
+      },
+      success_url: `${APP_URL}/dashboard/preview/${harvestId}?print=success`,
+      cancel_url: `${APP_URL}/dashboard/preview/${harvestId}?print=cancelled`,
+    });
+
+    if (!session.url) return { error: "Couldn't start checkout. Please try again." };
+
+    return { url: session.url };
+  } catch (err) {
+    await logEvent({
+      event_type: "checkout.stripe_error",
+      status: "error",
+      family_id: parent.family_id,
+      harvest_id: harvestId,
+      message: err instanceof Error ? err.message : "Unknown Stripe error",
+    });
+
+    return { error: "Couldn't start checkout. Please try again." };
+  }
 }
 
 export async function createPhysicalCheckoutSession(
