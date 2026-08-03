@@ -760,7 +760,7 @@ export default async function HarvestDetailPage({
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
-                    Digital approved &mdash; no print needed
+                    Digital approved
                   </div>
                 )}
               </div>
@@ -785,9 +785,9 @@ export default async function HarvestDetailPage({
               )}
           </PipelineStep>
 
-          {/* ── STEP 5: Print & ship (physical only) ────────────────── */}
-          {isPhysical && (
-            <PipelineStep
+          {/* ── STEP 5: Print & ship (all subscription types — an admin can
+                 order a print for any parent-approved episode) ──────────── */}
+          <PipelineStep
               number={5}
               title="Print &amp; ship"
               active={
@@ -877,7 +877,6 @@ export default async function HarvestDetailPage({
                 </div>
               )}
             </PipelineStep>
-          )}
         </div>
 
         {/* ── Processing metadata ─────────────────────────────────────── */}
