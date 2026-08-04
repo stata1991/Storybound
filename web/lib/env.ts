@@ -56,10 +56,6 @@ const serverSchema = z.object({
 
   // ── Client-side (also readable server-side) ───────────
   NEXT_PUBLIC_APP_URL: z.string().url(),
-  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
-  NEXT_PUBLIC_STRIPE_FOUNDING_PHYSICAL_LINK: z.string().url().optional(),
-  NEXT_PUBLIC_STRIPE_GIFT_PHYSICAL_LINK: z.string().url().optional(),
-  NEXT_PUBLIC_STRIPE_ONETIME_PHYSICAL_LINK: z.string().url().optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverSchema>;
