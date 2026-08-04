@@ -524,7 +524,8 @@ export async function createPrintCheckout(
       apiVersion: "2026-02-25.clover",
     });
 
-    const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://storybound.co";
+    const APP_URL =
+      process.env.NEXT_PUBLIC_APP_URL ?? "https://www.thestoryboundapp.com";
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",

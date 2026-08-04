@@ -1,6 +1,7 @@
 /* ─── Storybound Email Templates ───────────────────────────────────────────── */
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://storybound.co";
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL ?? "https://www.thestoryboundapp.com";
 
 /* ─── Brand constants ──────────────────────────────────────────────────────── */
 

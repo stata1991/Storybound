@@ -49,7 +49,8 @@ function resolvePriceId(priceId: string | null): string | null {
 
 /* ─── Email helpers (inline — matches lib/email/templates.ts brand) ───────── */
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://storybound.co";
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL ?? "https://www.thestoryboundapp.com";
 const NAVY = "#1B2A4A";
 const GOLD = "#C8963E";
 const CREAM = "#FDF8F0";

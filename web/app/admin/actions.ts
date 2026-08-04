@@ -3229,7 +3229,7 @@ export async function markShipped(
   <p style="margin:0 0 24px 0;font-size:15px;color:#444;line-height:1.6;">
     Every page was crafted from the memories you shared \u2014 this is truly ${child.name}\u2019s story, and no other copy exists in the world.
   </p>
-  <a href="${process.env.NEXT_PUBLIC_APP_URL ?? "https://storybound.co"}/dashboard"
+  <a href="${process.env.NEXT_PUBLIC_APP_URL ?? "https://www.thestoryboundapp.com"}/dashboard"
      style="display:inline-block;padding:14px 32px;background-color:${GOLD};color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;border-radius:50px;">
     View your dashboard
   </a>
