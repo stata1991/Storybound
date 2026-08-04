@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 
 interface LogEventParams {
@@ -41,13 +42,21 @@ export function logEvent(params: LogEventParams): Promise<void> {
       .then(({ error }) => {
         if (error) {
           console.error("audit_log insert failed:", error.message);
+          // No flush — logEvent is fire-and-forget and must stay
+          // latency-neutral.
+          Sentry.captureMessage(`audit_log insert failed: ${error.message}`, {
+            level: "error",
+            extra: { event_type: params.event_type },
+          });
         }
       })
       .catch((err) => {
         console.error("audit_log insert failed:", err);
+        Sentry.captureException(err);
       });
   } catch (err) {
     console.error("audit_log setup failed:", err);
+    Sentry.captureException(err);
     return Promise.resolve();
   }
 }

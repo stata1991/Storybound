@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
@@ -169,6 +170,13 @@ async function handlePhysicalBookPayment(
         : `physical_book payment ${session.id}: order ${existing.prodigi_order_id} already placed — retry ignored`,
       metadata: { source: "stripe_webhook", session_id: session.id },
     });
+    if (freshPayment) {
+      Sentry.captureMessage("POSSIBLE DOUBLE PAYMENT", {
+        level: "warning",
+        extra: { sessionId: session.id, episodeId },
+      });
+      await Sentry.flush(2000).catch(() => {});
+    }
     return NextResponse.json({ received: true, note: "Already placed" });
   }
 
@@ -280,6 +288,11 @@ async function handlePhysicalBookPayment(
       message: `physical_book payment ${session.id}: order placement failed after payment — ${result.error}`,
       metadata: { source: "stripe_webhook" },
     });
+    Sentry.captureMessage("payment taken but print order failed", {
+      level: "error",
+      extra: { episodeId: ep.id, error: result.error },
+    });
+    await Sentry.flush(2000).catch(() => {});
     return NextResponse.json({ received: true, note: "Order placement failed — logged" });
   }
 
@@ -307,6 +320,18 @@ async function handlePhysicalBookPayment(
 /* ─── POST handler ─────────────────────────────────────────────────────────── */
 
 export async function POST(request: Request) {
+  // Unexpected throws still become a 500 (Stripe retries); Sentry just sees
+  // them first.
+  try {
+    return await handleStripeEvent(request);
+  } catch (err) {
+    Sentry.captureException(err);
+    await Sentry.flush(2000).catch(() => {});
+    throw err;
+  }
+}
+
+async function handleStripeEvent(request: Request) {
   const body = await request.text();
   const signature = request.headers.get("stripe-signature");
 
@@ -324,6 +349,9 @@ export async function POST(request: Request) {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    // Rotated secret or forged signature — must not stay invisible.
+    Sentry.captureException(err);
+    await Sentry.flush(2000).catch(() => {});
     return NextResponse.json(
       { error: `Webhook signature verification failed: ${message}` },
       { status: 400 }

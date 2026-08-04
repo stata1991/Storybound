@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { logEvent } from "@/lib/audit";
@@ -5,6 +6,18 @@ import { logEvent } from "@/lib/audit";
 export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
+  // Unexpected throws (incl. malformed JSON from Modal) still become a 500;
+  // Sentry just sees them first.
+  try {
+    return await handleIllustrationsComplete(req);
+  } catch (err) {
+    Sentry.captureException(err);
+    await Sentry.flush(2000).catch(() => {});
+    throw err;
+  }
+}
+
+async function handleIllustrationsComplete(req: NextRequest) {
   // Verify webhook secret
   const secret = req.headers.get("x-webhook-secret");
   if (secret !== process.env.MODAL_WEBHOOK_SECRET) {
@@ -60,6 +73,8 @@ export async function POST(req: NextRequest) {
 
   if (error) {
     console.error("Failed to update harvest:", error);
+    Sentry.captureException(error);
+    await Sentry.flush(2000).catch(() => {});
     return NextResponse.json(
       { error: "DB update failed" },
       { status: 500 }
@@ -103,6 +118,15 @@ export async function POST(req: NextRequest) {
             `[illustrations-complete] harvest-photos count mismatch for ${harvest_id}: ` +
             `removed ${removedCount} vs expected ${expectedCount}`
           );
+          Sentry.captureMessage("partial photo deletion — retention risk", {
+            level: "error",
+            extra: {
+              expected: expectedCount,
+              removed: removedCount,
+              harvestId: harvest_id,
+            },
+          });
+          await Sentry.flush(2000).catch(() => {});
         } else {
           console.log(
             `[illustrations-complete] Deleted ${removedCount} harvest photos for ${harvest_id}`
@@ -128,6 +152,8 @@ export async function POST(req: NextRequest) {
         `[illustrations-complete] harvest-photos cleanup threw for ${harvest_id}:`,
         e
       );
+      Sentry.captureException(e);
+      await Sentry.flush(2000).catch(() => {});
     }
   }
 

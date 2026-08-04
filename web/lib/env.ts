@@ -6,6 +6,8 @@ import { z } from "zod";
  * Validated once at startup via instrumentation.ts.
  * Call sites still use process.env directly — this file
  * exists only to fail fast on missing / malformed vars.
+ *
+ * SENTRY_DSN is intentionally excluded — see instrumentation.ts.
  */
 const serverSchema = z.object({
   // ── Supabase ──────────────────────────────────────────
